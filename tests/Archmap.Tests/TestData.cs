@@ -45,7 +45,8 @@ internal static class TestData
         IEnumerable<RawDependency>? extraDependencies = null,
         IEnumerable<SourceFile>? extraFiles = null,
         IEnumerable<ExternalReference>? extraExternals = null,
-        IEnumerable<PartialType>? partials = null)
+        IEnumerable<PartialType>? partials = null,
+        IEnumerable<GeneratedFile>? generated = null)
     {
         var files = new List<SourceFile>
         {
@@ -65,6 +66,7 @@ internal static class TestData
         return new AnalysisResult
         {
             Files = files,
+            GeneratedFiles = generated?.ToList() ?? [],
             Dependencies = deps,
             ExternalReferences = externals,
             Unresolvable = [],

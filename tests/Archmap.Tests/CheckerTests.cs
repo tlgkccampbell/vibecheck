@@ -235,6 +235,53 @@ public class CheckerTests
         Assert.Contains(facts.Warnings, w => w.Contains("ghost"));
     }
 
+    private const string Gen = "src/A/Generated/Gen.Assembly/Gen.Assembly.Generator/X1.g.cs";
+    private static readonly GeneratedFile GenFile = new(Gen, "hg", "A", "Gen.Assembly.Generator");
+
+    [Fact]
+    public void UnboundGeneratedFileIsNotSource()
+    {
+        var analysis = TestData.Analysis(
+            [new RawDependency(TestData.B1, Gen, "calls", "A.X.Thing.Generated", "Thing", 9), new RawDependency(Gen, TestData.S1, "references", "Shared.Result", "Result", 1)],
+            generated: [GenFile]);
+        var facts = Run(analysis: analysis);
+        Assert.Empty(facts.Violations);
+        Assert.Empty(facts.Warnings);
+        Assert.DoesNotContain(facts.Files, f => f.Path == Gen);
+        var u = Assert.Single(facts.Unresolvable);
+        Assert.Equal((TestData.B1, "Gen.Assembly.Generator", 9), (u.From, u.Generator, u.Line));
+        Assert.DoesNotContain(facts.Dependencies, d => d.From == Gen);
+    }
+
+    [Fact]
+    public void BoundGeneratedFileIsSourceAndItsReferencesLift()
+    {
+        var map = TestData.Map();
+        map.Nodes["a.x"] = map.Nodes["a.x"] with { Bind = ["src/A/X/**/*.cs", "src/A/Generated/**/*.cs"] };
+        map.Edges.Add(new EdgeSpec { From = "b", To = "a" });
+        var analysis = TestData.Analysis(
+            [new RawDependency(TestData.B1, Gen, "calls", "A.X.Thing.Generated", "Thing", 9), new RawDependency(Gen, TestData.S1, "references", "Shared.Result", "Result", 1)],
+            generated: [GenFile]);
+        var facts = Run(map, analysis);
+        Assert.Empty(facts.Violations);
+        Assert.Empty(facts.Unresolvable);
+        var file = Assert.Single(facts.Files, f => f.Path == Gen);
+        Assert.Equal(("a.x", "Gen.Assembly.Generator"), (file.Leaf, file.Generator));
+        Assert.Contains(facts.Dependencies, d => d.To == Gen && d.Edge is ["b", "a"]);
+        Assert.Contains(facts.Dependencies, d => d.From == Gen && d.Edge is ["a", "shared"]);
+    }
+
+    [Fact]
+    public void GeneratedPartsCountForCohesionOnlyWhenBound()
+    {
+        var analysis = TestData.Analysis(partials: [new PartialType("A.X.Ctx", [TestData.X1, Gen])], generated: [GenFile]);
+        Assert.Empty(Run(analysis: analysis).Violations);
+        var map = TestData.Map();
+        map.Nodes["a.y"] = map.Nodes["a.y"] with { Bind = ["src/A/Y/**/*.cs", "src/A/Generated/**/*.cs"] };
+        var v = Single(Run(map, analysis), "cohesion");
+        Assert.Contains("A.X.Ctx", v.Message);
+    }
+
     [Fact]
     public void ExternalRefsAreAggregatedPerFileAndAssembly()
     {

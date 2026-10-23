@@ -12,7 +12,7 @@
     "billing.core.payments": { "name": "Payments", "purpose": "Capture of card payments.", "bind": ["src/Orchard.Billing/Core/Payments/**/*.cs"] },
     "billing.core.self": { "name": "Payment service", "purpose": "The orchestrating service, declared directly in Core.", "bind": ["src/Orchard.Billing/Core/*.cs"] },
     "billing.integrations": { "name": "Integrations", "purpose": "Adapters to payment providers." },
-    "billing.integrations.stripe": { "name": "Stripe", "purpose": "Stand-in for the Stripe SDK.", "bind": ["src/Orchard.Billing/Integrations/Stripe/**/*.cs"] },
+    "billing.integrations.stripe": { "name": "Stripe", "purpose": "Stand-in for the Stripe SDK, with the generated half of its serializer context.", "bind": ["src/Orchard.Billing/Generated/**/*.cs", "src/Orchard.Billing/Integrations/Stripe/**/*.cs"] },
     "billing.ledger": { "name": "Ledger", "purpose": "Double-entry ledger.", "bind": ["src/Orchard.Billing/Ledger/**/*.cs"] },
     "notifications": { "name": "Notifications", "purpose": "Outbound messages raised by events." },
     "notifications.dispatch": { "name": "Dispatch", "purpose": "Routes events to the bus.", "bind": ["src/Orchard.Notifications/Dispatch/**/*.cs"] },

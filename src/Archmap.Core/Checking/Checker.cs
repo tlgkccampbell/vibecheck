@@ -51,11 +51,13 @@ public static class Checker
         var leafOf = Partition(map, analysis, violations);
         CheckCohesion(map, analysis, leafOf, violations);
 
-        var listed = analysis.Files.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var generators = analysis.GeneratedFiles.ToDictionary(g => g.Path, g => g.Generator, StringComparer.Ordinal);
+        var listed = analysis.Files.Select(f => f.Path).Concat(generators.Keys).ToHashSet(StringComparer.Ordinal);
         var unlisted = analysis.Dependencies.Count(d => !listed.Contains(d.FromFile) || !listed.Contains(d.ToFile));
         if (unlisted > 0) warnings.Add($"analysis bug: {unlisted} dependencies reference files the analysis did not list and were ignored");
 
-        var dependencies = Lift(map, analysis, leafOf);
+        var unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromFile, u.Symbol, u.Generator, u.Line)).ToList();
+        var dependencies = Lift(map, analysis, leafOf, generators, unresolvable);
         var externalRefs = ResolveExternals(map, analysis, leafOf);
 
         // Lifted groups: (level, from, to) -> evidence, one entry per reference. External
@@ -83,10 +85,12 @@ public static class Checker
         {
             Commit = options.Commit,
             Map = map,
-            Files = analysis.Files.Select(f => new FileFact(f.Path, leafOf.GetValueOrDefault(f.Path), f.Hash)).ToList(),
+            Files = analysis.Files.Select(f => new FileFact(f.Path, leafOf.GetValueOrDefault(f.Path), f.Hash))
+                .Concat(analysis.GeneratedFiles.Where(g => leafOf.ContainsKey(g.Path)).Select(g => new FileFact(g.Path, leafOf[g.Path], g.Hash, g.Generator)))
+                .OrderBy(f => f.Path, StringComparer.Ordinal).ToList(),
             Dependencies = dependencies,
             ExternalRefs = Aggregate(externalRefs),
-            Unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromFile, u.Symbol, u.Generator, u.Line)).ToList(),
+            Unresolvable = unresolvable.OrderBy(u => u.From, StringComparer.Ordinal).ThenBy(u => u.Line).ToList(),
             Metrics = ComputeMetrics(map, dependencies, externalRefs, groups, leafOf),
             Violations = violations.OrderBy(v => RuleOrder(v.Rule)).ThenBy(v => v.Message, StringComparer.Ordinal).ToList(),
             Warnings = warnings,
@@ -193,6 +197,21 @@ public static class Checker
                     new { file = file.Path, leaves = hits }, null));
             }
         }
+        // A generated file is source only when a leaf binds it. One that nothing binds
+        // is left out without complaint; one that two leaves bind is as ambiguous as any file.
+        foreach (var file in analysis.GeneratedFiles)
+        {
+            var hits = matchers.Where(m => m.Matcher.Match(file.Path).HasMatches).Select(m => m.Id).ToList();
+            if (hits.Count == 1)
+            {
+                leafOf[file.Path] = hits[0];
+            }
+            else if (hits.Count > 1)
+            {
+                violations.Add(new ViolationFact("partition", $"{file.Path} is ambiguous: bound by {string.Join(", ", hits)}",
+                    new { file = file.Path, leaves = hits }, null));
+            }
+        }
         return leafOf;
     }
 
@@ -237,6 +256,7 @@ public static class Checker
 
     // ---------- Rule 2: cohesion ----------
 
+    /// <summary>Checks that every partitioned part of a partial type binds to one leaf. Parts in unbound generated files are not source and do not count.</summary>
     private static void CheckCohesion(ArchMap map, AnalysisResult analysis, Dictionary<string, string> leafOf, List<ViolationFact> violations)
     {
         foreach (var partial in analysis.PartialTypes)
@@ -253,11 +273,22 @@ public static class Checker
 
     // ---------- Lifting ----------
 
-    private static List<DependencyFact> Lift(ArchMap map, AnalysisResult analysis, Dictionary<string, string> leafOf)
+    /// <summary>
+    /// Lifts each dependency to the level where it is checked. A dependency from an
+    /// unbound generated file is dropped, since that file is not source. A dependency
+    /// into an unbound generated file is reported as unresolvable, naming the generator,
+    /// since the symbol exists only in code the map does not count.
+    /// </summary>
+    private static List<DependencyFact> Lift(ArchMap map, AnalysisResult analysis, Dictionary<string, string> leafOf, Dictionary<string, string> generators, List<UnresolvableFact> unresolvable)
     {
         var result = new List<DependencyFact>();
         foreach (var d in analysis.Dependencies)
         {
+            if (!leafOf.ContainsKey(d.ToFile) && generators.TryGetValue(d.ToFile, out var generator) && leafOf.ContainsKey(d.FromFile))
+            {
+                unresolvable.Add(new UnresolvableFact(d.FromFile, d.Symbol, generator, d.Line));
+                continue;
+            }
             if (!leafOf.TryGetValue(d.FromFile, out var from) || !leafOf.TryGetValue(d.ToFile, out var to)) continue;
             if (from == to)
             {

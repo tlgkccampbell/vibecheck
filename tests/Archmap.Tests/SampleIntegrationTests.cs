@@ -9,26 +9,46 @@ namespace Archmap.Tests;
 [Collection("sample")]
 public class SampleIntegrationTests(SampleFixture sample)
 {
+    private const string Stripe = "src/Orchard.Billing/Integrations/Stripe/StripeClient.cs";
+
     [Fact]
-    public void AnalysisSeesEveryCompiledFileAndNoGeneratedOnes()
+    public void AnalysisListsSourceAndGeneratedFilesSeparately()
     {
         Assert.Equal(15, sample.Analysis.Files.Count);
         Assert.All(sample.Analysis.Files, f => Assert.StartsWith("src/Orchard.", f.Path));
         Assert.DoesNotContain(sample.Analysis.Files, f => f.Path.Contains("/Generated/"));
+        Assert.Contains(sample.Analysis.GeneratedFiles, g => g.Path.StartsWith("src/Orchard.Billing/Generated/") && g.Generator.Contains("JsonSourceGenerator"));
         Assert.Empty(sample.Analysis.Warnings);
+        var listed = sample.Analysis.Files.Select(f => f.Path).Concat(sample.Analysis.GeneratedFiles.Select(g => g.Path)).ToHashSet();
+        Assert.All(sample.Analysis.Dependencies, d => { Assert.Contains(d.FromFile, listed); Assert.Contains(d.ToFile, listed); });
     }
 
     [Fact]
-    public void GeneratedCodeOnDiskIsGeneratedNotSource()
+    public void GeneratedCodeIsSourceWhenALeafBindsIt()
     {
-        // Billing writes generator output under Generated/. A reference to a symbol that
-        // exists only there is unresolvable and names the generator; a reference to a
-        // partial type with a source declaration resolves to that declaration.
-        var listed = sample.Analysis.Files.Select(f => f.Path).ToHashSet();
-        Assert.All(sample.Analysis.Dependencies, d => Assert.Contains(d.ToFile, listed));
-        var u = Assert.Single(sample.Analysis.Unresolvable, u => u.Symbol.EndsWith("StripeJsonContext.Default"));
+        // The curated map folds Billing's generated output into the Stripe leaf, so the
+        // generated half of StripeJsonContext is source: references into it lift, and
+        // the partial type stays cohesive.
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        Assert.Empty(facts.Violations);
+        Assert.Empty(facts.Unresolvable);
+        var generated = facts.Files.Where(f => f.Generator is not null).ToList();
+        Assert.NotEmpty(generated);
+        Assert.All(generated, f => Assert.Equal("billing.integrations.stripe", f.Leaf));
+        Assert.Contains(facts.Dependencies, d => d.From == Stripe && d.Symbol.EndsWith("StripeJsonContext.Default") && d.Level == "billing.integrations.stripe");
+    }
+
+    [Fact]
+    public void GeneratedCodeIsUnresolvableWhenNothingBindsIt()
+    {
+        var map = sample.Map.Clone();
+        map.Nodes["billing.integrations.stripe"] = map.Nodes["billing.integrations.stripe"] with { Bind = ["src/Orchard.Billing/Integrations/Stripe/**/*.cs"] };
+        var facts = Checker.Run(map, sample.Analysis);
+        Assert.DoesNotContain(facts.Violations, v => v.Rule == "partition");
+        Assert.DoesNotContain(facts.Files, f => f.Generator is not null);
+        var u = Assert.Single(facts.Unresolvable, u => u.Symbol.EndsWith("StripeJsonContext.Default"));
         Assert.Contains("JsonSourceGenerator", u.Generator);
-        Assert.Equal("src/Orchard.Billing/Integrations/Stripe/StripeClient.cs", u.FromFile);
+        Assert.Equal(Stripe, u.From);
     }
 
     [Fact]
@@ -51,11 +71,11 @@ public class SampleIntegrationTests(SampleFixture sample)
     }
 
     [Fact]
-    public void DetectsPartialTypeAcrossFilesButNotAcrossGeneratedParts()
+    public void DetectsPartialTypesAcrossSourceAndGeneratedFiles()
     {
-        var partial = Assert.Single(sample.Analysis.PartialTypes);
-        Assert.Equal("Orchard.Billing.Core.PaymentService", partial.Name);
-        Assert.Equal(2, partial.Files.Count);
+        Assert.Equal(["Orchard.Billing.Core.PaymentService", "Orchard.Billing.Integrations.Stripe.StripeJsonContext"], sample.Analysis.PartialTypes.Select(p => p.Name));
+        Assert.Equal(2, sample.Analysis.PartialTypes[0].Files.Count);
+        Assert.Contains(sample.Analysis.PartialTypes[1].Files, f => f.Contains("/Generated/"));
     }
 
     [Fact]

@@ -25,8 +25,8 @@ public sealed record Facts
     public bool Passed => Violations.Count == 0;
 }
 
-/// <summary>A compiled file and the leaf it binds to, which is absent when the partition rule failed for it.</summary>
-public sealed record FileFact(string Path, string? Leaf, string Hash);
+/// <summary>A compiled file and the leaf it binds to, which is absent when the partition rule failed for it. A generated file names its generator.</summary>
+public sealed record FileFact(string Path, string? Leaf, string Hash, string? Generator = null);
 
 /// <summary>
 /// An observed dependency lifted to the level where it is checked and drawn. For a

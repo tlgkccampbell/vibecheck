@@ -103,9 +103,11 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
 
         // A symbol declared in several places, such as a partial type or a partial
         // method with a generated implementation, resolves to its first compiled source
-        // declaration. A symbol declared only in generated code is unresolvable.
+        // declaration, then to its first generated declaration. The checker decides
+        // whether a generated file counts, so the dependency is recorded either way.
         var paths = target.DeclaringSyntaxReferences.Select(r => r.SyntaxTree.FilePath).ToList();
-        var file = paths.Select(resolver.SourceOf).Where(p => p is not null).OrderBy(p => p, StringComparer.Ordinal).FirstOrDefault();
+        var file = paths.Select(resolver.SourceOf).Where(p => p is not null).OrderBy(p => p, StringComparer.Ordinal).FirstOrDefault()
+            ?? paths.Select(resolver.GeneratedOf).Where(p => p is not null).OrderBy(p => p, StringComparer.Ordinal).FirstOrDefault();
         if (file is null)
         {
             Unresolvable.Add(new UnresolvableReference(currentFile, display, resolver.ReasonFor(paths.FirstOrDefault()), line));

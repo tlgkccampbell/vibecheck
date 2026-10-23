@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
@@ -52,31 +53,47 @@ public static class RoslynAnalyzer
         // document identity rather than by path.
         var resolver = new SourceResolver(repoRoot);
         var compilations = new Dictionary<ProjectId, Compilation>();
+        var generatedDocuments = new Dictionary<ProjectId, List<(SourceGeneratedDocument Document, string Path, string Generator)>>();
         foreach (var project in projects)
         {
             progress?.Report($"compiling {project.Name}");
             var compilation = await project.GetCompilationAsync(ct);
             if (compilation is null) { warnings.Add($"{project.Name}: no compilation"); continue; }
             compilations[project.Id] = compilation;
+            var projectDir = ProjectDirectory(repoRoot, project);
             foreach (var document in project.Documents) resolver.AddDocument(document.FilePath);
+            var list = generatedDocuments[project.Id] = [];
             foreach (var generatedDocument in await project.GetSourceGeneratedDocumentsAsync(ct))
             {
-                resolver.AddGenerated(generatedDocument.FilePath, GeneratorNameOf(generatedDocument.FilePath, generatedDocument.HintName));
+                var generator = GeneratorNameOf(generatedDocument.FilePath, generatedDocument.HintName);
+                list.Add((generatedDocument, resolver.AddGenerated(generatedDocument.FilePath, generator, projectDir), generator));
             }
         }
 
         var files = new Dictionary<string, SourceFile>(StringComparer.Ordinal);
+        var generatedFiles = new Dictionary<string, GeneratedFile>(StringComparer.Ordinal);
         var deps = new List<RawDependency>();
         var externals = new List<ExternalReference>();
         var unresolvable = new List<UnresolvableReference>();
         var partials = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         var projectInfos = new List<ProjectInfo>();
 
+        async Task WalkAsync(Compilation compilation, Document document, string path)
+        {
+            var tree = await document.GetSyntaxTreeAsync(ct);
+            if (tree is null) return;
+            var model = compilation.GetSemanticModel(tree);
+            var walker = new DependencyWalker(model, compilation, resolver, path);
+            walker.Visit(await tree.GetRootAsync(ct));
+            deps.AddRange(walker.Dependencies);
+            externals.AddRange(walker.ExternalReferences);
+            unresolvable.AddRange(walker.Unresolvable);
+        }
+
         foreach (var project in projects)
         {
             if (!compilations.TryGetValue(project.Id, out var compilation)) continue;
             progress?.Report($"walking {project.Name}");
-            var projectDir = project.FilePath is null ? "" : Path.GetRelativePath(repoRoot, Path.GetDirectoryName(project.FilePath)!).Replace('\\', '/');
             var projectFiles = new List<string>();
 
             foreach (var document in project.Documents)
@@ -85,23 +102,22 @@ public static class RoslynAnalyzer
                 if (rel is null) continue;
                 projectFiles.Add(rel);
                 if (files.ContainsKey(rel)) continue;
-                files[rel] = new SourceFile(rel, HashOf(document.FilePath!), project.Name);
-
-                var tree = await document.GetSyntaxTreeAsync(ct);
-                if (tree is null) continue;
-                var model = compilation.GetSemanticModel(tree);
-                var walker = new DependencyWalker(model, compilation, resolver, rel);
-                walker.Visit(await tree.GetRootAsync(ct));
-                deps.AddRange(walker.Dependencies);
-                externals.AddRange(walker.ExternalReferences);
-                unresolvable.AddRange(walker.Unresolvable);
+                files[rel] = new SourceFile(rel, HashOf(File.ReadAllBytes(document.FilePath!)), project.Name);
+                await WalkAsync(compilation, document, rel);
             }
-            projectInfos.Add(new ProjectInfo(project.Name, projectDir, projectFiles.OrderBy(f => f, StringComparer.Ordinal).ToList()));
+            foreach (var (document, path, generator) in generatedDocuments[project.Id])
+            {
+                if (generatedFiles.ContainsKey(path)) continue;
+                var text = await document.GetTextAsync(ct);
+                generatedFiles[path] = new GeneratedFile(path, HashOf(Encoding.UTF8.GetBytes(text.ToString())), project.Name, generator);
+                await WalkAsync(compilation, document, path);
+            }
+            projectInfos.Add(new ProjectInfo(project.Name, ProjectDirectory(repoRoot, project), projectFiles.OrderBy(f => f, StringComparer.Ordinal).ToList()));
 
             foreach (var type in AllTypes(compilation.SourceModule.GlobalNamespace))
             {
                 var declFiles = type.DeclaringSyntaxReferences
-                    .Select(r => resolver.SourceOf(r.SyntaxTree.FilePath))
+                    .Select(r => resolver.SourceOf(r.SyntaxTree.FilePath) ?? resolver.GeneratedOf(r.SyntaxTree.FilePath))
                     .Where(p => p is not null)
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
@@ -116,12 +132,13 @@ public static class RoslynAnalyzer
 
         // Every dependency must join two listed files. The walker guarantees this by
         // construction; the check turns a future regression into a warning, not a silent hole.
-        var dropped = deps.Count(d => !files.ContainsKey(d.FromFile) || !files.ContainsKey(d.ToFile));
+        var dropped = deps.Count(d => !(files.ContainsKey(d.FromFile) || generatedFiles.ContainsKey(d.FromFile)) || !(files.ContainsKey(d.ToFile) || generatedFiles.ContainsKey(d.ToFile)));
         if (dropped > 0) warnings.Add($"analysis bug: {dropped} dependencies reference files that are not listed");
 
         return new AnalysisResult
         {
             Files = files.Values.OrderBy(f => f.Path, StringComparer.Ordinal).ToList(),
+            GeneratedFiles = generatedFiles.Values.OrderBy(f => f.Path, StringComparer.Ordinal).ToList(),
             Dependencies = deps.OrderBy(d => d.FromFile, StringComparer.Ordinal).ThenBy(d => d.Line).ThenBy(d => d.ToFile, StringComparer.Ordinal).ToList(),
             ExternalReferences = externals.OrderBy(e => e.FromFile, StringComparer.Ordinal).ThenBy(e => e.Line).ToList(),
             Unresolvable = unresolvable.OrderBy(u => u.FromFile, StringComparer.Ordinal).ThenBy(u => u.Line).ToList(),
@@ -130,6 +147,9 @@ public static class RoslynAnalyzer
             Warnings = warnings,
         };
     }
+
+    private static string ProjectDirectory(string repoRoot, Project project) =>
+        project.FilePath is null ? "" : Path.GetRelativePath(repoRoot, Path.GetDirectoryName(project.FilePath)!).Replace('\\', '/');
 
     private static IEnumerable<INamedTypeSymbol> AllTypes(INamespaceSymbol ns)
     {
@@ -172,9 +192,5 @@ public static class RoslynAnalyzer
         return segments.Length > 0 ? segments[^1] : "generator of " + hintName;
     }
 
-    private static string HashOf(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexStringLower(SHA256.HashData(stream))[..16];
-    }
+    private static string HashOf(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes))[..16];
 }

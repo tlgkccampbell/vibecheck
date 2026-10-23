@@ -193,11 +193,20 @@ Resolution details that matter in C#:
   solution's documents, never from a path: a generator's output is generated even
   when the project writes it to disk, and a file under `obj/` is build output even
   when the project compiles it.
+- A generated document counts as source only when a leaf binds its path. The path
+  is the file's repository-relative path when the project writes generated files to
+  disk, and otherwise the project directory, `.generated`, and the generator's own
+  path for the document. Generated code is often the other half of hand-written
+  partial types, and a leaf's bind list may name generated paths so that both halves
+  bind to the same leaf. A generated document nothing binds is left out of the
+  partition without complaint.
 - A symbol declared in several places, such as a partial type or a partial method
   with a generated implementation, resolves to its first compiled source
-  declaration. A symbol declared only in generated code or build output is reported
-  as `unresolvable` with the generator's name or the output location, and does not
-  create an edge.
+  declaration, then to its first bound generated declaration. A symbol declared
+  only in generated code nothing binds, or in build output, is reported as
+  `unresolvable` with the generator's name or the output location, and creates no
+  edge. A dependency from an unbound generated document is dropped, since that
+  document is not source.
 - Files excluded from compilation by the project file are not documents and are
   not partitioned.
 - `using` directives are not dependencies. A namespace import creates no edge.
@@ -220,12 +229,14 @@ where rules 4 and 5 check it and where the viewer draws it.
 The checker fails on any violation. Each rule names what it checks so that a
 failure message can cite it.
 
-1. **Partition.** Every compiled file on disk matches exactly one leaf binding. A
+1. **Partition.** Every compiled source file matches exactly one leaf binding. A
    file that matches none is `unmapped`. A file that matches more than one is
-   `ambiguous`. Both are failures.
-2. **Cohesion.** All parts of a partial type bind to the same leaf. Without this,
-   the edges of a type would depend on which part a reference happens to resolve
-   to.
+   `ambiguous`. Both are failures. A generated document that matches none is not
+   source and is not a failure; one that matches more than one is ambiguous.
+2. **Cohesion.** All partitioned parts of a partial type bind to the same leaf.
+   Without this, the edges of a type would depend on which part a reference happens
+   to resolve to. Parts in generated documents nothing binds are not partitioned
+   and do not count.
 3. **Well-formedness.** The file is canonical and valid against the schema. Every
    node's parent exists. Every container has a child. Edges join siblings. Every
    identifier an edge or policy mentions exists. Bindings compile as globs.
@@ -359,7 +370,10 @@ the contract between the checker and the viewer.
 {
   "commit": "…",
   "map": { /* archmap.json, canonical */ },
-  "files": [ { "path": "src/Billing/Core/Invoice.cs", "leaf": "billing.core" } ],
+  "files": [
+    { "path": "src/Billing/Core/Invoice.cs", "leaf": "billing.core", "hash": "…" },
+    { "path": "src/Billing/Generated/…/Ctx.g.cs", "leaf": "billing.core", "hash": "…", "generator": "System.Text.Json.SourceGeneration.JsonSourceGenerator" }
+  ],
   "dependencies": [
     { "from": "src/Billing/Core/Payment.cs", "to": "src/Auth/Session.cs",
       "kind": "calls", "symbol": "Auth.Session.Require", "line": 42,
