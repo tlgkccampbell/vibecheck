@@ -70,7 +70,7 @@ records added and removed, never as text.
     { "from": "billing", "to": "shared" },
     { "from": "billing.api", "to": "billing.core" },
     { "from": "billing.core", "to": "billing.ledger" },
-    { "from": "billing.core", "to": "stripe", "label": "Charges cards", "payload": "ChargeRequest" }
+    { "from": "billing", "to": "stripe", "label": "Charges cards", "payload": "ChargeRequest" }
   ],
   "policies": {
     "root": { "edges": "declared", "externals": "observed" },
@@ -135,6 +135,8 @@ injection, message buses and anything that crosses a process boundary.
 ### 2.4 Externals
 
 An external is a node bound by assembly name patterns rather than file paths.
+Externals are top-level nodes, so an edge to an external is declared at the root
+level from a top-level node, and inside that node the edge appears as a port.
 References to metadata symbols resolve to the external whose pattern matches the
 containing assembly. The root `externals` policy is `observed` by default, which
 means references to unbound assemblies are reported but not failures. Setting it to
