@@ -1,0 +1,50 @@
+{
+  "version": 0,
+  "solution": "Orchard.slnx",
+  "nodes": {
+    "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "edges": "declared" },
+    "auth.sessions": { "name": "Sessions", "purpose": "Session lookup and scope checks.", "bind": ["src/Orchard.Auth/Sessions/**/*.cs"] },
+    "auth.tokens": { "name": "Tokens", "purpose": "Bearer token issuance.", "bind": ["src/Orchard.Auth/Tokens/**/*.cs"] },
+    "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger.", "edges": "declared" },
+    "billing.api": { "name": "API", "purpose": "Billing endpoints.", "bind": ["src/Orchard.Billing/Api/**/*.cs"] },
+    "billing.core": { "name": "Core", "purpose": "Payment orchestration and invoicing.", "edges": "declared" },
+    "billing.core.invoices": { "name": "Invoices", "purpose": "Invoice numbering and ledger postings.", "bind": ["src/Orchard.Billing/Core/Invoices/**/*.cs"] },
+    "billing.core.payments": { "name": "Payments", "purpose": "Capture of card payments.", "bind": ["src/Orchard.Billing/Core/Payments/**/*.cs"] },
+    "billing.core.self": { "name": "Payment service", "purpose": "The orchestrating service, declared directly in Core.", "bind": ["src/Orchard.Billing/Core/*.cs"] },
+    "billing.integrations": { "name": "Integrations", "purpose": "Adapters to payment providers." },
+    "billing.integrations.stripe": { "name": "Stripe", "purpose": "Stand-in for the Stripe SDK.", "bind": ["src/Orchard.Billing/Integrations/Stripe/**/*.cs"] },
+    "billing.ledger": { "name": "Ledger", "purpose": "Double-entry ledger.", "bind": ["src/Orchard.Billing/Ledger/**/*.cs"] },
+    "notifications": { "name": "Notifications", "purpose": "Outbound messages raised by events." },
+    "notifications.dispatch": { "name": "Dispatch", "purpose": "Routes events to the bus.", "bind": ["src/Orchard.Notifications/Dispatch/**/*.cs"] },
+    "notifications.templates": { "name": "Templates", "purpose": "Message templates per event.", "bind": ["src/Orchard.Notifications/Templates/**/*.cs"] },
+    "shared": { "name": "Shared", "purpose": "Primitives with no business meaning.", "edges": "declared" },
+    "shared.kernel": { "name": "Kernel", "purpose": "Result type and identifiers.", "bind": ["src/Orchard.Shared/Kernel/**/*.cs"] },
+    "shared.messaging": { "name": "Messaging", "purpose": "In-process event bus.", "bind": ["src/Orchard.Shared/Messaging/**/*.cs"] }
+  },
+  "externals": {
+    "bcl": { "name": "Base class library", "purpose": "Framework assemblies other than the core library.", "bind": ["System.*"] },
+    "json": { "name": "System.Text.Json", "bind": ["System.Text.Json"] }
+  },
+  "edges": [
+    { "from": "auth", "to": "shared" },
+    { "from": "auth.tokens", "to": "auth.sessions" },
+    { "from": "billing", "to": "auth", "label": "Authorizes payment operations" },
+    { "from": "billing", "to": "bcl" },
+    { "from": "billing", "to": "json", "label": "Serializes charge requests" },
+    { "from": "billing", "to": "notifications", "payload": "PaymentEvent" },
+    { "from": "billing", "to": "shared" },
+    { "from": "billing.api", "to": "billing.core" },
+    { "from": "billing.core", "to": "billing.integrations", "label": "Charges via adapter" },
+    { "from": "billing.core", "to": "billing.ledger" },
+    { "from": "billing.core.self", "to": "billing.core.invoices" },
+    { "from": "billing.core.self", "to": "billing.core.payments" },
+    { "from": "notifications", "to": "shared" },
+    { "from": "shared", "to": "bcl" },
+    { "from": "shared.messaging", "to": "shared.kernel" }
+  ],
+  "policies": {
+    "root": { "edges": "declared", "externals": "declared" },
+    "forbid": [ { "from": "shared", "to": "auth" }, { "from": "shared", "to": "billing" }, { "from": "shared", "to": "notifications" } ],
+    "acyclic": ["billing", "root"]
+  }
+}

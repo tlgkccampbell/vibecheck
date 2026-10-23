@@ -1,0 +1,6 @@
+bin/
+obj/
+.vs/
+*.user
+archmap.facts.json
+TestResults/

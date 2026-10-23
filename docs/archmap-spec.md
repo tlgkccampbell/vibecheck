@@ -138,7 +138,9 @@ An external is a node bound by assembly name patterns rather than file paths.
 Externals are top-level nodes, so an edge to an external is declared at the root
 level from a top-level node, and inside that node the edge appears as a port.
 References to metadata symbols resolve to the external whose pattern matches the
-containing assembly. The root `externals` policy is `observed` by default, which
+containing assembly. When several patterns match, the pattern with the longest
+literal part wins, so that `System.Text.Json` is bound by an external declaring
+that name rather than by one declaring `System.*`. The root `externals` policy is `observed` by default, which
 means references to unbound assemblies are reported but not failures. Setting it to
 `declared` makes an unbound external assembly a failure.
 
@@ -194,6 +196,11 @@ Resolution details that matter in C#:
 - `using` directives are not dependencies. A namespace import creates no edge.
 - References within one file are not dependencies.
 - Symbols with no source in the solution resolve to an external by assembly name.
+  References to the core library, meaning the assembly that defines `System.Object`
+  in the compilation, are never recorded, since every file would carry them. Other
+  framework assemblies are recorded and can be bound like any external.
+- The left side of a member access that names a type or namespace is not recorded,
+  since the member reference it qualifies already carries the dependency.
 
 Observed leaf-to-leaf dependencies are lifted to the hierarchy by lowest common
 ancestor. For a dependency from file `x` to file `y` with leaves `X` and `Y` and
@@ -240,8 +247,12 @@ rather than authoring records.
 |---|---|
 | Permission | Add the missing edge, with no label. |
 | Realization | Remove the dead edge. |
-| Partition, unmapped | Add a leaf bound to the file's directory under the nearest node whose bindings cover a sibling directory, or widen the nearest leaf's glob. |
+| Partition, unmapped | Add a leaf bound to the file's directory, beside the existing leaf whose bindings share the longest directory prefix with it, or at the top level when no leaf shares more than every leaf does. |
 | Partition, ambiguous | None. The message lists the competing leaves. |
+
+A file that is unmapped or ambiguous binds to no leaf, so the references it makes
+realize nothing. A partition failure can therefore be accompanied by realization
+failures that disappear once the file is bound.
 | Cohesion | None. The message lists the parts and their leaves. |
 | Policy | None. A policy violation is a problem in the code or a decision about the policy, and the tool proposes neither. |
 
@@ -294,8 +305,10 @@ clean derivation is preferred to a clever one.
    for that directory. The curator usually folds it into a sibling or renames it,
    and the metrics show when it is too small to stand alone.
 
-Two sibling names that normalize to the same identifier receive a numeric suffix
-and a warning. The display name is the original project or directory name.
+Two sibling names that normalize to the same identifier receive a numeric suffix.
+The display name is the original project or directory name. Files a project compiles
+from outside its own directory, such as linked files, go in a leaf named `linked`
+bound to those paths explicitly.
 
 Alongside the map, `init` emits the facts document for the current tree with a
 `metrics` section: for each node, the count of dependencies that stay inside it and
@@ -369,18 +382,22 @@ run.
 
 | Command | Purpose |
 |---|---|
-| `archmap init` | Emits the deterministic skeleton and the facts document with metrics. See section 5. |
-| `archmap check` | Runs rules 1 through 6 against the working tree. Exit code 1 on any violation. `--propose <path>` writes the map with proposed edits applied. |
-| `archmap fmt` | Rewrites both files in canonical form. |
-| `archmap facts` | Emits the facts document for a commit. |
-| `archmap diff` | Emits the changeset document for a base and head, including minimality findings. |
+| `archmap init --solution <sln>` | Emits the deterministic skeleton as `archmap.json` beside the solution, and the facts document with metrics as `archmap.facts.json`. Refuses to overwrite an existing map. See section 5. |
+| `archmap check` | Runs rules 1 through 6 against the working tree. Exit code 1 on any violation. `--propose <path>` writes the map with proposed edits applied. `--facts <path>` also writes the facts document. |
+| `archmap fmt` | Rewrites both files in canonical form. `--check` reports without writing. |
+| `archmap facts` | Emits the facts document for the working tree, recording the HEAD commit, suffixed `+dirty` when the tree has changes. |
+| `archmap diff <base> <head>` | Combines two facts documents into the changeset document, including minimality findings. With `--repo`, attaches hunks from `git diff` between the two commits. |
+
+Every command takes `--map <path>`; the default is `./archmap.json`, and the
+repository root is the map's directory.
 
 ### 7.1 Turnaround
 
 Opening a solution with Roslyn costs a full compilation, which is tens of seconds on
-a large solution. `check` and `facts` cache the facts document keyed by commit so
-that `diff` on a reviewed range costs one compilation per unseen commit. Incremental
-analysis is out of scope for v0.
+a large solution. The intended shape is for `check` and `facts` to cache the facts
+document keyed by commit so that `diff` on a reviewed range costs one compilation per
+unseen commit. v0 does not cache; `facts --out` is the manual equivalent. Incremental
+analysis is out of scope.
 
 ## 8. Out of scope for v0
 

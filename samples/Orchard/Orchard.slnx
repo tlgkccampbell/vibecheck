@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Orchard.Auth/Orchard.Auth.csproj" />
+    <Project Path="src/Orchard.Billing/Orchard.Billing.csproj" />
+    <Project Path="src/Orchard.Notifications/Orchard.Notifications.csproj" />
+    <Project Path="src/Orchard.Shared/Orchard.Shared.csproj" />
+  </Folder>
+</Solution>
