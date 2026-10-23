@@ -1,0 +1,287 @@
+<title>Archmap Viewer Mock</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a top bar, then three columns (changes | schematic | details) that stack at phone width.
+     The schematic is an IC-style block diagram: square blocks, pins on the frame, orthogonal traces. */
+  :root {
+    --bg: #f4f6f4;
+    --surface: #ffffff;
+    --fg: #1c2320;
+    --muted: #68726d;
+    --line: #c5ccc8;
+    --line-strong: #8b948f;
+    --grid: #d9dfdb;
+    --accent: #2b6c8c;
+    --added: #2a8a55;
+    --removed: #bf3b2b;
+    --modified: #b8841a;
+    --undeclared: #8a3fb0;
+    --added-bg: #e3f3e9;
+    --removed-bg: #f9e4e0;
+    --modified-bg: #f7eedb;
+    --undeclared-bg: #efe3f6;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #13181b; --surface: #1b2125; --fg: #dde4e1; --muted: #8d9893; --line: #363f45; --line-strong: #5c676e; --grid: #1f272c;
+      --accent: #6fb6d6; --added: #5ccf8a; --removed: #f07763; --modified: #e6b54e; --undeclared: #cf93ea;
+      --added-bg: #16301f; --removed-bg: #3a1c17; --modified-bg: #352b12; --undeclared-bg: #2d1c38;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #13181b; --surface: #1b2125; --fg: #dde4e1; --muted: #8d9893; --line: #363f45; --line-strong: #5c676e; --grid: #1f272c;
+    --accent: #6fb6d6; --added: #5ccf8a; --removed: #f07763; --modified: #e6b54e; --undeclared: #cf93ea;
+    --added-bg: #16301f; --removed-bg: #3a1c17; --modified-bg: #352b12; --undeclared-bg: #2d1c38;
+    color-scheme: dark;
+  }
+
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.45;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0;
+    display: flex; flex-direction: column; min-height: 100%;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  button { font: inherit; color: inherit; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  h3 { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+
+  /* Top bar */
+  .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-block: 10px; border-bottom: 1px solid var(--line); }
+  .brand { font-family: var(--mono); font-weight: 600; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
+  .pr { color: var(--muted); font-size: 13px; }
+  .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .crumb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
+  .crumb:hover:not(:disabled) { border-color: var(--line); background: var(--surface); }
+  .crumb.current { font-weight: 600; cursor: default; }
+  .crumb-sep { color: var(--muted); }
+  .spacer { flex: 1; }
+  .policy { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .btn { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 3px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:focus-visible, .crumb:focus-visible, .chg-row:focus-visible, .struct-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* Main grid */
+  .main { display: grid; grid-template-columns: 250px minmax(0, 1fr) 300px; gap: 16px; padding-block: 14px; flex: 1; align-items: start; }
+  @media (max-width: 1000px) { .main { grid-template-columns: 1fr; } }
+  aside { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 12px; min-width: 0; }
+  aside h2.panel-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .canvas { min-width: 0; }
+  .stage-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  svg#stage { display: block; width: 100%; height: auto; max-width: 100%; font-family: var(--mono); }
+  svg#stage.zooming .level { pointer-events: none; }
+
+  /* Legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-block: 8px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 14px; height: 10px; border: 1.5px solid var(--line-strong); background: var(--surface); display: inline-block; }
+  .sw.added { border-color: var(--added); background: var(--added-bg); }
+  .sw.removed { border-color: var(--removed); border-style: dashed; background: transparent; }
+  .sw.modified { border-color: var(--modified); background: var(--modified-bg); }
+  .sw.children { border-left: 4px solid var(--modified); }
+  .sw.undeclared { border-color: var(--undeclared); background: var(--undeclared-bg); }
+  .sw.observed { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line) 3px 4px); }
+  .sw.asserted { border: none; border-top: 2px dashed var(--line-strong); height: 0; }
+
+  /* Schematic styles */
+  .grid-dot { fill: var(--grid); }
+  .frame { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+  .frame-observed { fill: url(#hatch); stroke-dasharray: 6 4; }
+  .frame-title { font-size: 12px; font-weight: 600; letter-spacing: .12em; fill: var(--muted); }
+  .frame-policy { font-size: 10.5px; letter-spacing: .1em; fill: var(--muted); }
+  .frame-policy-observed { fill: var(--modified); font-weight: 600; }
+  .hatch-line { stroke: var(--grid); stroke-width: 1; }
+
+  .node { cursor: pointer; }
+  .node:focus { outline: none; }
+  .node .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+  .node:hover .box, .node:focus .box { stroke: var(--accent); }
+  .node.selected .box { stroke: var(--accent); stroke-width: 2.5; }
+  .node .stripe { fill: transparent; }
+  .node .title { font-size: 12px; font-weight: 600; letter-spacing: .1em; fill: var(--fg); }
+  .node .meta { font-size: 10.5px; fill: var(--muted); }
+  .node .enter-glyph { font-size: 13px; fill: var(--muted); }
+  .node.observed .box { stroke-dasharray: 5 3; }
+  .node.st-children .stripe { fill: var(--modified); }
+  .node.st-modified .box { stroke: var(--modified); fill: var(--modified-bg); }
+  .node.st-modified .stripe { fill: var(--modified); }
+  .node.st-added .box { stroke: var(--added); fill: var(--added-bg); }
+  .node.st-added .stripe { fill: var(--added); }
+  .node.st-removed .box { stroke: var(--removed); stroke-dasharray: 5 3; fill: none; }
+  .node.st-removed .title, .node.st-removed .meta { fill: var(--removed); }
+  .node.st-removed .stripe { fill: var(--removed); }
+  .node.external .box { stroke-dasharray: none; }
+  .ext-outline { fill: none; stroke: var(--line-strong); stroke-width: 1; }
+
+  .mini { fill: none; stroke: var(--line); stroke-width: 1; }
+  .mini.st-children { stroke: var(--modified); }
+  .mini.st-modified { stroke: var(--modified); fill: var(--modified-bg); }
+  .mini.st-added { stroke: var(--added); fill: var(--added-bg); }
+  .mini.st-removed { stroke: var(--removed); stroke-dasharray: 2 2; }
+  .mini-ext { stroke-dasharray: 2 2; }
+  .mini-file { fill: var(--line); }
+  .mini-file-changed { fill: var(--modified); }
+  .node.st-removed .mini-file-changed { fill: var(--removed); }
+  .node.st-added .mini-file-changed { fill: var(--added); }
+
+  .edge { cursor: pointer; }
+  .edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
+  .edge-line { fill: none; stroke: var(--line-strong); }
+  .edge:hover .edge-line { stroke: var(--accent); }
+  .edge.selected .edge-line { stroke: var(--accent); }
+  .edge.st-added .edge-line { stroke: var(--added); }
+  .edge.st-removed .edge-line { stroke: var(--removed); stroke-dasharray: 6 4; }
+  .edge.st-modified .edge-line { stroke: var(--modified); }
+  .edge.st-undeclared .edge-line { stroke: var(--undeclared); }
+  .edge.asserted .edge-line { stroke-dasharray: 2 4; }
+  .arrow { fill: var(--line-strong); }
+  .arrow-added { fill: var(--added); }
+  .arrow-removed { fill: var(--removed); }
+  .arrow-modified { fill: var(--modified); }
+  .arrow-undeclared { fill: var(--undeclared); }
+  .arrow-selected { fill: var(--accent); }
+
+  .edge-label { cursor: pointer; }
+  .lbl-bg { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .lbl-payload { font-size: 11px; font-weight: 500; fill: var(--fg); }
+  .lbl-text { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+  .lbl-delta { font-size: 11px; font-weight: 600; fill: var(--modified); }
+  .edge-label.st-added .lbl-delta { fill: var(--added); }
+  .edge-label.st-removed .lbl-delta { fill: var(--removed); }
+  .edge-label.st-added .lbl-bg { stroke: var(--added); }
+  .edge-label.st-removed .lbl-bg { stroke: var(--removed); stroke-dasharray: 3 2; }
+  .edge-label.st-modified .lbl-bg { stroke: var(--modified); }
+  .lbl-undeclared { font-size: 10px; font-weight: 600; letter-spacing: .08em; fill: var(--undeclared); }
+
+  .port { fill: var(--surface); stroke: var(--fg); stroke-width: 1.5; }
+  .port-changed { stroke: var(--modified); stroke-width: 2; }
+  .port-label { font-size: 10.5px; fill: var(--muted); letter-spacing: .04em; }
+
+  /* Dim unchanged */
+  body.dim .node:not(.st-added):not(.st-removed):not(.st-modified):not(.st-children):not(.selected) { opacity: .28; }
+  body.dim .edge:not(.st-added):not(.st-removed):not(.st-modified):not(.selected),
+  body.dim .edge-label:not(.st-added):not(.st-removed):not(.st-modified) { opacity: .18; }
+
+  /* Changes panel */
+  .chg-tree, .chg-tree ul, .struct-list { list-style: none; margin: 0; padding: 0; }
+  .chg-tree ul { padding-left: 14px; border-left: 1px solid var(--line); margin-left: 5px; }
+  .chg-row, .struct-row { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 4px 6px; border-radius: 3px; cursor: pointer; text-align: left; font-size: 13px; }
+  .chg-row:hover, .struct-row:hover { background: var(--bg); }
+  .chg-dot { width: 8px; height: 8px; border-radius: 1px; background: var(--modified); flex: none; }
+  .st-added .chg-dot { background: var(--added); }
+  .st-removed .chg-dot { background: var(--removed); }
+  .st-children .chg-dot { background: transparent; border: 1.5px solid var(--modified); }
+  .chg-name { font-weight: 500; }
+  .chg-meta { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+  .struct-row > span:nth-child(2) { font-family: var(--mono); font-size: 12px; }
+
+  /* Details panel */
+  .ident { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin: 0 0 8px; word-break: break-all; }
+  .purpose { margin: 0 0 10px; }
+  .kv { display: flex; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .kv .k { color: var(--muted); flex: 0 0 110px; }
+  .kv .v { font-family: var(--mono); font-size: 12px; min-width: 0; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  .warn { background: var(--undeclared-bg); border-left: 3px solid var(--undeclared); padding: 6px 8px; font-size: 12.5px; margin: 0 0 8px; }
+  .evidence { margin: 0; padding-left: 18px; font-family: var(--mono); font-size: 11.5px; }
+  .evidence li { margin: 2px 0; }
+  .evidence li.st-added { color: var(--added); }
+  .evidence li.st-removed { color: var(--removed); }
+  #details .btn { margin-top: 12px; }
+
+  /* Leaf view */
+  .leaf { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 14px; display: grid; gap: 14px; }
+  .leaf-title { font-family: var(--mono); font-weight: 600; letter-spacing: .1em; font-size: 13px; }
+  .leaf-sub { color: var(--muted); }
+  .file { border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+  .file-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--bg); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; min-width: 0; }
+  .file-path { overflow-wrap: anywhere; }
+  .file-unchanged .file-head { border-bottom: 0; color: var(--muted); }
+  .chip { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--line-strong); color: var(--muted); flex: none; }
+  .chip-added { border-color: var(--added); color: var(--added); }
+  .chip-removed { border-color: var(--removed); color: var(--removed); }
+  .chip-modified { border-color: var(--modified); color: var(--modified); }
+  .diff-scroll { overflow-x: auto; }
+  table.diff { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+  table.diff caption { text-align: left; padding: 3px 10px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
+  table.diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
+  table.diff td.ln { text-align: right; color: var(--muted); width: 1%; user-select: none; border-right: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  table.diff td.code { width: 50%; }
+  table.diff td.del { background: var(--removed-bg); }
+  table.diff td.add { background: var(--added-bg); }
+  table.diff td.empty { background: var(--grid); }
+  table.diff td.code.ctx + td.ln { border-left: 1px solid var(--line); }
+  table.diff td:nth-child(3) { border-left: 2px solid var(--line); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="topbar">
+  <span class="brand">archmap</span>
+  <span class="pr">Orchard · PR #412 · Move payment retry into Billing core, add refunds, emit payment events</span>
+  <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
+  <button class="btn" id="up" title="Go up one level (Esc)">↑ Up</button>
+  <span class="spacer"></span>
+  <span class="policy" id="policy-count"></span>
+  <label class="toggle"><input type="checkbox" id="dim"> Dim unchanged</label>
+</div>
+
+<div class="main">
+  <aside>
+    <h2 class="panel-title">Changes</h2>
+    <div id="changes"></div>
+  </aside>
+
+  <div class="canvas">
+    <div class="stage-wrap">
+      <svg id="stage" viewBox="0 0 1200 800" role="img" aria-label="Schematic of the current level with changes marked">
+        <defs>
+          <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="1" class="grid-dot"></circle>
+          </pattern>
+          <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="8" class="hatch-line"></line>
+          </pattern>
+          <marker id="arrow-unchanged" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker>
+          <marker id="arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow arrow-added"></path></marker>
+          <marker id="arrow-removed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow arrow-removed"></path></marker>
+          <marker id="arrow-modified" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow arrow-modified"></path></marker>
+          <marker id="arrow-undeclared" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow arrow-undeclared"></path></marker>
+          <marker id="arrow-selected" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow arrow-selected"></path></marker>
+        </defs>
+        <rect x="0" y="0" width="1200" height="800" fill="url(#dots)"></rect>
+      </svg>
+    </div>
+    <div id="leafview" hidden></div>
+    <div class="legend" id="legend">
+      <span><i class="sw added"></i> added</span>
+      <span><i class="sw removed"></i> removed</span>
+      <span><i class="sw modified"></i> modified</span>
+      <span><i class="sw children"></i> contains changes</span>
+      <span><i class="sw undeclared"></i> undeclared edge</span>
+      <span><i class="sw observed"></i> observed level</span>
+      <span><i class="sw asserted"></i> asserted edge</span>
+      <span>trace width ∝ log references</span>
+    </div>
+  </div>
+
+  <aside>
+    <h2 class="panel-title">Selected</h2>
+    <div id="details"></div>
+  </aside>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
