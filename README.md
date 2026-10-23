@@ -28,9 +28,9 @@ dotnet build
 dotnet test
 ```
 
-The unit tests run in well under a second. The integration suite opens the sample
-solution with Roslyn once per run, which costs a few seconds. For the edit loop, run
-the unit tests alone:
+The unit tests run in well under a second. The integration suite builds the sample
+solution and opens it with Roslyn once per run, which costs several seconds. For the
+edit loop, run the unit tests alone:
 
 ```
 dotnet test --filter "FullyQualifiedName!~Sample"

@@ -35,8 +35,12 @@ public sealed record FileFact(string Path, string? Leaf, string Hash);
 /// </summary>
 public sealed record DependencyFact(string From, string To, string Kind, string Symbol, string Type, int Line, string Level, string[]? Edge);
 
-/// <summary>A reference to an external assembly, resolved to the external it binds to, if any, and lifted to the top-level node of the referencing file.</summary>
-public sealed record ExternalRefFact(string From, string Assembly, string Symbol, int Line, string? External, string TopLevel);
+/// <summary>
+/// The references one file makes to one external assembly, resolved to the external
+/// the assembly binds to, if any, and lifted to the top-level node of the file. The
+/// symbol and line are the first reference; the count covers all of them.
+/// </summary>
+public sealed record ExternalRefFact(string From, string Assembly, string Symbol, int Line, int Count, string? External, string TopLevel);
 
 public sealed record UnresolvableFact(string From, string Symbol, string Generator, int Line);
 
@@ -52,11 +56,12 @@ public sealed record ProposalFact(string Op, string? From = null, string? To = n
 /// <summary>Reads and writes facts and changeset documents as JSON.</summary>
 public static class FactsJson
 {
+    /// <summary>Compact output. A facts document for a large solution carries tens of thousands of dependencies, and indentation would double its size.</summary>
     public static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = true,
+        WriteIndented = false,
     };
 
     public static string Serialize<T>(T value) => JsonSerializer.Serialize(value, Options) + "\n";

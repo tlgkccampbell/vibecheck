@@ -39,8 +39,37 @@ public static class Skeleton
                 map.Nodes[id + ".linked"] = new NodeSpec { Name = "linked", Purpose = "Files compiled from outside the project directory.", Bind = linked };
             }
         }
+        AddExternals(map, analysis);
         return map;
     }
+
+    /// <summary>The assembly name patterns that the skeleton binds to one <c>framework</c> external.</summary>
+    internal static readonly string[] FrameworkPatterns = ["System.*", "Microsoft.Win32.*", "Microsoft.VisualBasic*", "netstandard", "mscorlib", "WindowsBase"];
+
+    /// <summary>
+    /// Binds every referenced assembly so that the root externals policy can be set to
+    /// declared at once: framework assemblies under one external, and one external per
+    /// other assembly, named after it.
+    /// </summary>
+    private static void AddExternals(ArchMap map, AnalysisResult analysis)
+    {
+        var assemblies = analysis.ExternalReferences.Select(e => e.Assembly).Distinct(StringComparer.Ordinal).OrderBy(a => a, StringComparer.Ordinal).ToList();
+        if (assemblies.Count == 0) return;
+        var framework = assemblies.Where(IsFramework).ToList();
+        if (framework.Count > 0)
+        {
+            map.Externals["framework"] = new ExternalSpec { Name = "Framework", Purpose = "Framework assemblies other than the core library.", Bind = FrameworkPatterns };
+        }
+        var used = new HashSet<string>(StringComparer.Ordinal) { "framework" };
+        foreach (var assembly in assemblies.Where(a => !IsFramework(a)))
+        {
+            var id = Unique(Identifiers.NormalizeSegment(assembly), used);
+            map.Externals[id] = new ExternalSpec { Name = assembly, Bind = [assembly] };
+        }
+    }
+
+    private static bool IsFramework(string assembly) =>
+        FrameworkPatterns.Any(p => p.EndsWith('*') ? assembly.StartsWith(p[..^1], StringComparison.Ordinal) : assembly == p);
 
     private static void Emit(ArchMap map, Dir dir, string id, string name, string path, bool forceContainer = false)
     {

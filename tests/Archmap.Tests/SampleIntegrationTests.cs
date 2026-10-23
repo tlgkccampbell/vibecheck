@@ -14,8 +14,21 @@ public class SampleIntegrationTests(SampleFixture sample)
     {
         Assert.Equal(15, sample.Analysis.Files.Count);
         Assert.All(sample.Analysis.Files, f => Assert.StartsWith("src/Orchard.", f.Path));
-        Assert.Empty(sample.Analysis.Unresolvable);
+        Assert.DoesNotContain(sample.Analysis.Files, f => f.Path.Contains("/Generated/"));
         Assert.Empty(sample.Analysis.Warnings);
+    }
+
+    [Fact]
+    public void GeneratedCodeOnDiskIsGeneratedNotSource()
+    {
+        // Billing writes generator output under Generated/. A reference to a symbol that
+        // exists only there is unresolvable and names the generator; a reference to a
+        // partial type with a source declaration resolves to that declaration.
+        var listed = sample.Analysis.Files.Select(f => f.Path).ToHashSet();
+        Assert.All(sample.Analysis.Dependencies, d => Assert.Contains(d.ToFile, listed));
+        var u = Assert.Single(sample.Analysis.Unresolvable, u => u.Symbol.EndsWith("StripeJsonContext.Default"));
+        Assert.Contains("JsonSourceGenerator", u.Generator);
+        Assert.Equal("src/Orchard.Billing/Integrations/Stripe/StripeClient.cs", u.FromFile);
     }
 
     [Fact]
@@ -38,7 +51,7 @@ public class SampleIntegrationTests(SampleFixture sample)
     }
 
     [Fact]
-    public void DetectsPartialTypeAcrossFiles()
+    public void DetectsPartialTypeAcrossFilesButNotAcrossGeneratedParts()
     {
         var partial = Assert.Single(sample.Analysis.PartialTypes);
         Assert.Equal("Orchard.Billing.Core.PaymentService", partial.Name);
@@ -85,12 +98,14 @@ public class SampleIntegrationTests(SampleFixture sample)
     }
 
     [Fact]
-    public void SkeletonFromTheSamplePasses()
+    public void SkeletonFromTheSamplePassesAndBindsEveryAssembly()
     {
         var skeleton = Skeleton.Build(sample.Analysis, "Orchard.slnx");
         Assert.Contains("billing.core.self", skeleton.Nodes.Keys);
         Assert.Equal("Orchard.Billing", skeleton.Nodes["billing"].Name);
+        Assert.Contains("framework", skeleton.Externals.Keys);
         var facts = Checker.Run(skeleton, sample.Analysis);
         Assert.Empty(facts.Violations);
+        Assert.DoesNotContain(facts.ExternalRefs, e => e.External is null);
     }
 }

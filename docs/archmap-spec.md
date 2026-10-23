@@ -188,11 +188,18 @@ Resolution details that matter in C#:
 - Members are resolved to the file that declares the member, not the file that
   declares the type. A partial type spread across files therefore yields precise
   edges per file.
-- Generated syntax trees that have no file on disk are excluded from the partition.
-  A reference to a generator-produced symbol is reported as `unresolvable` with the
-  generator name, and does not create an edge.
-- Files under `obj/` and `bin/` are excluded. Files excluded from compilation by
-  the project file are not part of the solution and are not partitioned.
+- A compiled source file is a document of a project in the solution that lies
+  inside the repository and outside `obj/` and `bin/`. Identity comes from the
+  solution's documents, never from a path: a generator's output is generated even
+  when the project writes it to disk, and a file under `obj/` is build output even
+  when the project compiles it.
+- A symbol declared in several places, such as a partial type or a partial method
+  with a generated implementation, resolves to its first compiled source
+  declaration. A symbol declared only in generated code or build output is reported
+  as `unresolvable` with the generator's name or the output location, and does not
+  create an edge.
+- Files excluded from compilation by the project file are not documents and are
+  not partitioned.
 - `using` directives are not dependencies. A namespace import creates no edge.
 - References within one file are not dependencies.
 - Symbols with no source in the solution resolve to an external by assembly name.
@@ -286,6 +293,11 @@ chosen: one top-level node per project, one child per directory that contains
 compiled files, nested as the directories nest. Every level is `observed`, no edges
 are declared, and the result passes `check` by construction.
 
+Every referenced assembly is bound, so that the root externals policy can be set to
+`declared` at once: framework assemblies, meaning `System.*`, `Microsoft.Win32.*`,
+`netstandard` and `mscorlib`, under one external named `framework`, and one external
+per other assembly, identified by its normalized name and bound to it exactly.
+
 Identifiers are derived by four deterministic rules. Identifiers are stable once
 committed regardless of how they were derived, and curation renames freely, so a
 clean derivation is preferred to a clever one.
@@ -353,12 +365,19 @@ the contract between the checker and the viewer.
       "kind": "calls", "symbol": "Auth.Session.Require", "line": 42,
       "level": "root", "edge": ["billing", "auth"] }
   ],
-  "externalRefs": [ { "from": "src/Billing/Core/Charge.cs", "assembly": "Stripe", "external": "stripe" } ],
+  "externalRefs": [ { "from": "src/Billing/Core/Charge.cs", "assembly": "Stripe", "symbol": "Stripe.ChargeService.Create", "line": 30, "count": 4, "external": "stripe", "topLevel": "billing" } ],
   "unresolvable": [ { "from": "…", "symbol": "…", "generator": "…" } ],
   "metrics": { "billing": { "internal": 212, "crossing": 9, "cycles": [] } },
   "violations": [ { "rule": "permission", "message": "…", "evidence": { /* dependency */ }, "proposal": { /* edit */ } } ]
 }
 ```
+
+Dependencies are listed per reference, since each one is evidence the viewer can
+show. External references are aggregated per file and assembly, with the first
+symbol and line and a count, since every file references the framework and listing
+each use would dominate the document. The document is written without indentation.
+On a solution of twelve hundred files with eighty thousand dependencies it is
+roughly twenty megabytes.
 
 `archmap diff <base> <head>` combines two facts documents into a changeset document:
 

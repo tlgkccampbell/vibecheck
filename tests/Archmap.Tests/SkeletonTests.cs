@@ -68,6 +68,13 @@ public class SkeletonTests
         Assert.Equal(["src/P/*.cs"], map.Nodes["p.self"].Bind);
     }
 
+    [Theory]
+    [InlineData("C:/repo/src/Core/Generated/Gen.Assembly/Gen.Assembly.SyntaxGenerator/Nodes/Foo.g.cs", "Nodes/Foo.g.cs", "Gen.Assembly.SyntaxGenerator")]
+    [InlineData("System.Text.Json.SourceGeneration\\System.Text.Json.SourceGeneration.JsonSourceGenerator\\Ctx.g.cs", "Ctx.g.cs", "System.Text.Json.SourceGeneration.JsonSourceGenerator")]
+    [InlineData("", "X.g.cs", "unknown generator")]
+    public void GeneratorNameComesFromThePathSegmentBeforeTheHintName(string path, string hint, string expected) =>
+        Assert.Equal(expected, Archmap.Analysis.RoslynAnalyzer.GeneratorNameOf(path, hint));
+
     [Fact]
     public void SkeletonPassesTheChecker()
     {
@@ -76,5 +83,19 @@ public class SkeletonTests
         var facts = Checker.Run(map, analysis);
         Assert.Empty(facts.Violations);
         Assert.All(facts.Files, f => Assert.NotNull(f.Leaf));
+    }
+
+    [Fact]
+    public void SkeletonBindsFrameworkAssembliesTogetherAndOthersByName()
+    {
+        var analysis = TestData.Analysis(extraExternals:
+        [
+            new ExternalReference(TestData.B1, "System.Collections", "System.Collections.Generic.List<T>", 1),
+            new ExternalReference(TestData.B1, "xunit.v3.assert", "Xunit.Assert", 2),
+        ]);
+        var map = Skeleton.Build(analysis, "Example.sln");
+        Assert.Equal(["ext-sdk", "framework", "xunit-v3-assert"], map.Externals.Keys);
+        Assert.Equal(["Ext.Sdk"], map.Externals["ext-sdk"].Bind);
+        Assert.Contains("System.*", map.Externals["framework"].Bind);
     }
 }

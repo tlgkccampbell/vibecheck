@@ -3,7 +3,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Generated code is written to disk, as some repositories do so it can be read, and
+         excluded from compilation because the compiler already has it. The checker must
+         treat it as generated even though it has a path. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>Generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Generated\**" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Orchard.Auth\Orchard.Auth.csproj" />
     <ProjectReference Include="..\Orchard.Notifications\Orchard.Notifications.csproj" />

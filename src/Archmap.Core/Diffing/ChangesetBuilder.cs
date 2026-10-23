@@ -24,27 +24,35 @@ public static class ChangesetBuilder
         };
     }
 
-    /// <summary>Groups a facts document's lifted dependencies and bound external references by (level, from, to).</summary>
-    private static Dictionary<(string Level, string From, string To), List<DependencyFact>> Groups(Facts facts)
+    /// <summary>The references behind one lifted edge: how many there are, and the first few as examples.</summary>
+    private sealed class Group
     {
-        var groups = new Dictionary<(string, string, string), List<DependencyFact>>();
-        void Add((string, string, string) key, DependencyFact d)
+        public int Count;
+        public List<DependencyFact> Examples { get; } = [];
+    }
+
+    /// <summary>Groups a facts document's lifted dependencies and bound external references by (level, from, to). External facts are aggregated, so their counts are summed rather than tallied.</summary>
+    private static Dictionary<(string Level, string From, string To), Group> Groups(Facts facts)
+    {
+        var groups = new Dictionary<(string, string, string), Group>();
+        void Add((string, string, string) key, DependencyFact d, int count)
         {
-            if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
-            list.Add(d);
+            if (!groups.TryGetValue(key, out var g)) groups[key] = g = new Group();
+            g.Count += count;
+            if (g.Examples.Count < 5) g.Examples.Add(d);
         }
-        foreach (var d in facts.Dependencies.Where(d => d.Edge is not null)) Add((d.Level, d.Edge![0], d.Edge[1]), d);
+        foreach (var d in facts.Dependencies.Where(d => d.Edge is not null)) Add((d.Level, d.Edge![0], d.Edge[1]), d, 1);
         foreach (var e in facts.ExternalRefs.Where(e => e.External is not null))
-            Add((Identifiers.Root, e.TopLevel, e.External!), new DependencyFact(e.From, e.Assembly, "references", e.Symbol, Identifiers.LastSegmentOf(e.Symbol), e.Line, Identifiers.Root, [e.TopLevel, e.External!]));
+            Add((Identifiers.Root, e.TopLevel, e.External!), new DependencyFact(e.From, e.Assembly, "references", e.Symbol, Identifiers.LastSegmentOf(e.Symbol), e.Line, Identifiers.Root, [e.TopLevel, e.External!]), e.Count);
         return groups;
     }
 
-    private static List<string> Evidence(List<DependencyFact>? deps) =>
-        (deps ?? []).Take(5).Select(d => $"{d.From}:{d.Line} {d.Kind} {d.Symbol}").ToList();
+    private static List<string> Evidence(Group? g) =>
+        (g?.Examples ?? []).Select(d => $"{d.From}:{d.Line} {d.Kind} {d.Symbol}").ToList();
 
     private static StructuralDiff DiffStructure(Facts baseFacts, Facts headFacts,
-        Dictionary<(string Level, string From, string To), List<DependencyFact>> baseGroups,
-        Dictionary<(string Level, string From, string To), List<DependencyFact>> headGroups)
+        Dictionary<(string Level, string From, string To), Group> baseGroups,
+        Dictionary<(string Level, string From, string To), Group> headGroups)
     {
         var bm = baseFacts.Map;
         var hm = headFacts.Map;
@@ -87,7 +95,7 @@ public static class ChangesetBuilder
             var inHead = hm.Externals.ContainsKey(id);
             if (inHead && !inBase)
             {
-                var refs = headFacts.ExternalRefs.Count(e => e.External == id);
+                var refs = headFacts.ExternalRefs.Where(e => e.External == id).Sum(e => e.Count);
                 nodes.Add(new NodeStructuralChange(id, "added", "external", null, [$"{refs} reference(s) at head"], refs == 0));
             }
             else if (inBase && !inHead)
@@ -176,8 +184,8 @@ public static class ChangesetBuilder
     }
 
     private static List<EdgeChange> DiffEdges(ArchMap headMap,
-        Dictionary<(string Level, string From, string To), List<DependencyFact>> baseGroups,
-        Dictionary<(string Level, string From, string To), List<DependencyFact>> headGroups)
+        Dictionary<(string Level, string From, string To), Group> baseGroups,
+        Dictionary<(string Level, string From, string To), Group> headGroups)
     {
         var result = new List<EdgeChange>();
         foreach (var key in baseGroups.Keys.Union(headGroups.Keys).OrderBy(k => k.Level, StringComparer.Ordinal).ThenBy(k => k.From, StringComparer.Ordinal).ThenBy(k => k.To, StringComparer.Ordinal))

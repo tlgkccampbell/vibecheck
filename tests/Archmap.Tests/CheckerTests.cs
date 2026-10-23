@@ -236,6 +236,26 @@ public class CheckerTests
     }
 
     [Fact]
+    public void ExternalRefsAreAggregatedPerFileAndAssembly()
+    {
+        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.X1, "Ext.Sdk", "Ext.Sdk.Other", 30)]);
+        var facts = Run(analysis: analysis);
+        var e = Assert.Single(facts.ExternalRefs);
+        Assert.Equal(2, e.Count);
+        Assert.Equal(20, e.Line);
+        Assert.Equal(2, facts.Metrics["root"].Crossing);
+    }
+
+    [Fact]
+    public void DependenciesOnUnlistedFilesAreWarnedAboutNotDropped()
+    {
+        var analysis = TestData.Analysis([new RawDependency(TestData.X1, "src/Ghost.cs", "references", "Ghost", "Ghost", 1)]);
+        var facts = Run(analysis: analysis);
+        Assert.Empty(facts.Violations);
+        Assert.Contains(facts.Warnings, w => w.Contains("analysis bug: 1 dependencies"));
+    }
+
+    [Fact]
     public void MetricsCountInternalAndCrossingDependencies()
     {
         var facts = Run();

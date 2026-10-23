@@ -46,26 +46,43 @@ public static class RoslynAnalyzer
         });
         progress?.Report($"opening {solutionPath}");
         var solution = await workspace.OpenSolutionAsync(Path.GetFullPath(solutionPath), cancellationToken: ct);
+        var projects = solution.Projects.Where(p => p.Language == LanguageNames.CSharp).OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
+
+        // Index every document first, so that a reference into any project resolves by
+        // document identity rather than by path.
+        var resolver = new SourceResolver(repoRoot);
+        var compilations = new Dictionary<ProjectId, Compilation>();
+        foreach (var project in projects)
+        {
+            progress?.Report($"compiling {project.Name}");
+            var compilation = await project.GetCompilationAsync(ct);
+            if (compilation is null) { warnings.Add($"{project.Name}: no compilation"); continue; }
+            compilations[project.Id] = compilation;
+            foreach (var document in project.Documents) resolver.AddDocument(document.FilePath);
+            foreach (var generatedDocument in await project.GetSourceGeneratedDocumentsAsync(ct))
+            {
+                resolver.AddGenerated(generatedDocument.FilePath, GeneratorNameOf(generatedDocument.FilePath, generatedDocument.HintName));
+            }
+        }
 
         var files = new Dictionary<string, SourceFile>(StringComparer.Ordinal);
         var deps = new List<RawDependency>();
         var externals = new List<ExternalReference>();
         var unresolvable = new List<UnresolvableReference>();
         var partials = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        var projects = new List<ProjectInfo>();
+        var projectInfos = new List<ProjectInfo>();
 
-        foreach (var project in solution.Projects.OrderBy(p => p.Name, StringComparer.Ordinal))
+        foreach (var project in projects)
         {
-            if (project.Language != LanguageNames.CSharp) continue;
-            progress?.Report($"compiling {project.Name}");
-            var compilation = await project.GetCompilationAsync(ct);
-            if (compilation is null) { warnings.Add($"{project.Name}: no compilation"); continue; }
-            var projectDir = project.FilePath is null ? "" : Relative(repoRoot, Path.GetDirectoryName(project.FilePath)!);
+            if (!compilations.TryGetValue(project.Id, out var compilation)) continue;
+            progress?.Report($"walking {project.Name}");
+            var projectDir = project.FilePath is null ? "" : Path.GetRelativePath(repoRoot, Path.GetDirectoryName(project.FilePath)!).Replace('\\', '/');
             var projectFiles = new List<string>();
 
             foreach (var document in project.Documents)
             {
-                if (!IsOnDisk(repoRoot, document.FilePath, out var rel)) continue;
+                var rel = resolver.SourceOf(document.FilePath);
+                if (rel is null) continue;
                 projectFiles.Add(rel);
                 if (files.ContainsKey(rel)) continue;
                 files[rel] = new SourceFile(rel, HashOf(document.FilePath!), project.Name);
@@ -73,30 +90,34 @@ public static class RoslynAnalyzer
                 var tree = await document.GetSyntaxTreeAsync(ct);
                 if (tree is null) continue;
                 var model = compilation.GetSemanticModel(tree);
-                var walker = new DependencyWalker(model, compilation, repoRoot, rel);
+                var walker = new DependencyWalker(model, compilation, resolver, rel);
                 walker.Visit(await tree.GetRootAsync(ct));
                 deps.AddRange(walker.Dependencies);
                 externals.AddRange(walker.ExternalReferences);
                 unresolvable.AddRange(walker.Unresolvable);
             }
-            projects.Add(new ProjectInfo(project.Name, projectDir, projectFiles.OrderBy(f => f, StringComparer.Ordinal).ToList()));
+            projectInfos.Add(new ProjectInfo(project.Name, projectDir, projectFiles.OrderBy(f => f, StringComparer.Ordinal).ToList()));
 
             foreach (var type in AllTypes(compilation.SourceModule.GlobalNamespace))
             {
                 var declFiles = type.DeclaringSyntaxReferences
-                    .Select(r => r.SyntaxTree.FilePath)
-                    .Where(p => IsOnDisk(repoRoot, p, out _))
-                    .Select(p => Relative(repoRoot, p))
+                    .Select(r => resolver.SourceOf(r.SyntaxTree.FilePath))
+                    .Where(p => p is not null)
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
                 if (declFiles.Count > 1)
                 {
                     var name = type.ToDisplayString();
                     if (!partials.TryGetValue(name, out var set)) partials[name] = set = new SortedSet<string>(StringComparer.Ordinal);
-                    foreach (var f in declFiles) set.Add(f);
+                    foreach (var f in declFiles) set.Add(f!);
                 }
             }
         }
+
+        // Every dependency must join two listed files. The walker guarantees this by
+        // construction; the check turns a future regression into a warning, not a silent hole.
+        var dropped = deps.Count(d => !files.ContainsKey(d.FromFile) || !files.ContainsKey(d.ToFile));
+        if (dropped > 0) warnings.Add($"analysis bug: {dropped} dependencies reference files that are not listed");
 
         return new AnalysisResult
         {
@@ -105,7 +126,7 @@ public static class RoslynAnalyzer
             ExternalReferences = externals.OrderBy(e => e.FromFile, StringComparer.Ordinal).ThenBy(e => e.Line).ToList(),
             Unresolvable = unresolvable.OrderBy(u => u.FromFile, StringComparer.Ordinal).ThenBy(u => u.Line).ToList(),
             PartialTypes = partials.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new PartialType(kv.Key, kv.Value.ToList())).ToList(),
-            Projects = projects,
+            Projects = projectInfos,
             Warnings = warnings,
         };
     }
@@ -136,27 +157,20 @@ public static class RoslynAnalyzer
     }
 
     /// <summary>
-    /// Reports whether a syntax tree path is a compiled source file on disk inside the
-    /// repository and outside <c>obj</c> and <c>bin</c>, and returns its relative path.
-    /// Generated trees have paths that fail this test.
+    /// Returns the generator's type name from a generated document's path. Roslyn lays
+    /// the path out as the generator's assembly name, then its type name, then the hint
+    /// name, whether or not the project writes generated files to disk. The hint name
+    /// may itself contain directories, so it is stripped before the last segment is read.
     /// </summary>
-    internal static bool IsOnDisk(string repoRoot, string? path, out string relative)
+    internal static string GeneratorNameOf(string? path, string hintName)
     {
-        relative = "";
-        if (string.IsNullOrEmpty(path)) return false;
-        string full;
-        try { full = Path.GetFullPath(path); } catch { return false; }
-        if (!full.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase)) return false;
-        if (!File.Exists(full)) return false;
-        relative = Relative(repoRoot, full);
-        if (!relative.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return false;
-        var segments = relative.Split('/');
-        if (segments.Any(s => s.Equals("obj", StringComparison.OrdinalIgnoreCase) || s.Equals("bin", StringComparison.OrdinalIgnoreCase))) return false;
-        return true;
+        if (string.IsNullOrEmpty(path)) return "unknown generator";
+        var normalized = path.Replace('\\', '/');
+        var hint = hintName.Replace('\\', '/');
+        if (normalized.EndsWith(hint, StringComparison.OrdinalIgnoreCase)) normalized = normalized[..^hint.Length];
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > 0 ? segments[^1] : "generator of " + hintName;
     }
-
-    internal static string Relative(string repoRoot, string fullPath) =>
-        Path.GetRelativePath(repoRoot, fullPath).Replace('\\', '/');
 
     private static string HashOf(string path)
     {

@@ -19,7 +19,7 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         memberOptions: SymbolDisplayMemberOptions.IncludeContainingType);
 
     private readonly SemanticModel model;
-    private readonly string repoRoot;
+    private readonly SourceResolver resolver;
     private readonly string currentFile;
     private readonly IAssemblySymbol coreLibrary;
 
@@ -27,10 +27,10 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
     public List<ExternalReference> ExternalReferences { get; } = [];
     public List<UnresolvableReference> Unresolvable { get; } = [];
 
-    public DependencyWalker(SemanticModel model, Compilation compilation, string repoRoot, string currentFile)
+    public DependencyWalker(SemanticModel model, Compilation compilation, SourceResolver resolver, string currentFile)
     {
         this.model = model;
-        this.repoRoot = repoRoot;
+        this.resolver = resolver;
         this.currentFile = currentFile;
         coreLibrary = compilation.ObjectType.ContainingAssembly;
     }
@@ -101,16 +101,14 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
             return;
         }
 
+        // A symbol declared in several places, such as a partial type or a partial
+        // method with a generated implementation, resolves to its first compiled source
+        // declaration. A symbol declared only in generated code is unresolvable.
         var paths = target.DeclaringSyntaxReferences.Select(r => r.SyntaxTree.FilePath).ToList();
-        string? file = null;
-        foreach (var p in paths.OrderBy(p => p, StringComparer.Ordinal))
-        {
-            if (RoslynAnalyzer.IsOnDisk(repoRoot, p, out var rel)) { file = rel; break; }
-        }
+        var file = paths.Select(resolver.SourceOf).Where(p => p is not null).OrderBy(p => p, StringComparer.Ordinal).FirstOrDefault();
         if (file is null)
         {
-            var generator = paths.Select(GeneratorOf).FirstOrDefault() ?? "unknown";
-            Unresolvable.Add(new UnresolvableReference(currentFile, display, generator, line));
+            Unresolvable.Add(new UnresolvableReference(currentFile, display, resolver.ReasonFor(paths.FirstOrDefault()), line));
             return;
         }
         if (file == currentFile) return;
@@ -155,11 +153,4 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         return symbol is IMethodSymbol ? "calls" : "references";
     }
 
-    private static string? GeneratorOf(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return null;
-        var normalized = path.Replace('\\', '/');
-        var i = normalized.IndexOf('/');
-        return i < 0 ? normalized : normalized[..i];
-    }
 }

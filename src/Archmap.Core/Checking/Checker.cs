@@ -51,10 +51,15 @@ public static class Checker
         var leafOf = Partition(map, analysis, violations);
         CheckCohesion(map, analysis, leafOf, violations);
 
+        var listed = analysis.Files.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var unlisted = analysis.Dependencies.Count(d => !listed.Contains(d.FromFile) || !listed.Contains(d.ToFile));
+        if (unlisted > 0) warnings.Add($"analysis bug: {unlisted} dependencies reference files the analysis did not list and were ignored");
+
         var dependencies = Lift(map, analysis, leafOf);
         var externalRefs = ResolveExternals(map, analysis, leafOf);
 
-        // Lifted groups: (level, from, to) -> evidence. External references join the root level.
+        // Lifted groups: (level, from, to) -> evidence, one entry per reference. External
+        // references join the root level.
         var groups = new Dictionary<(string Level, string From, string To), List<DependencyFact>>();
         foreach (var d in dependencies.Where(d => d.Edge is not null))
         {
@@ -80,7 +85,7 @@ public static class Checker
             Map = map,
             Files = analysis.Files.Select(f => new FileFact(f.Path, leafOf.GetValueOrDefault(f.Path), f.Hash)).ToList(),
             Dependencies = dependencies,
-            ExternalRefs = externalRefs,
+            ExternalRefs = Aggregate(externalRefs),
             Unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromFile, u.Symbol, u.Generator, u.Line)).ToList(),
             Metrics = ComputeMetrics(map, dependencies, externalRefs, groups, leafOf),
             Violations = violations.OrderBy(v => RuleOrder(v.Rule)).ThenBy(v => v.Message, StringComparer.Ordinal).ToList(),
@@ -286,10 +291,17 @@ public static class Checker
                 external = patterns.FirstOrDefault(p => p.Regex.IsMatch(e.Assembly)).Id;
                 cache[e.Assembly] = external;
             }
-            result.Add(new ExternalRefFact(e.FromFile, e.Assembly, e.Symbol, e.Line, external, Identifiers.TopLevelOf(leaf)));
+            result.Add(new ExternalRefFact(e.FromFile, e.Assembly, e.Symbol, e.Line, 1, external, Identifiers.TopLevelOf(leaf)));
         }
         return result;
     }
+
+    /// <summary>Collapses per-reference external facts into one entry per file and assembly, keeping the first symbol and line and the total count.</summary>
+    private static List<ExternalRefFact> Aggregate(List<ExternalRefFact> refs) =>
+        refs.GroupBy(e => (e.From, e.Assembly))
+            .Select(g => g.First() with { Count = g.Sum(e => e.Count) })
+            .OrderBy(e => e.From, StringComparer.Ordinal).ThenBy(e => e.Assembly, StringComparer.Ordinal)
+            .ToList();
 
     private static Regex AssemblyPattern(string pattern) =>
         new("^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$", RegexOptions.CultureInvariant);
@@ -372,9 +384,10 @@ public static class Checker
         foreach (var group in externalRefs.Where(e => e.External is null).GroupBy(e => e.Assembly).OrderBy(g => g.Key, StringComparer.Ordinal))
         {
             var first = group.First();
+            var count = group.Sum(e => e.Count);
             violations.Add(new ViolationFact("externals",
-                $"assembly {group.Key} is referenced but no external binds it; first seen at {first.From}:{first.Line} ({first.Symbol}); {group.Count()} reference(s)",
-                new { assembly = group.Key, count = group.Count(), examples = group.Take(5).ToList() }, null));
+                $"assembly {group.Key} is referenced but no external binds it; first seen at {first.From}:{first.Line} ({first.Symbol}); {count} reference(s)",
+                new { assembly = group.Key, count, examples = group.Take(5).ToList() }, null));
         }
     }
 
@@ -439,7 +452,7 @@ public static class Checker
                 if (a && b) internalCount++;
                 else if (a || b) crossing++;
             }
-            crossing += externalRefs.Count(e => Identifiers.IsUnder(leafOf[e.From], level));
+            crossing += externalRefs.Where(e => Identifiers.IsUnder(leafOf[e.From], level)).Sum(e => e.Count);
             metrics[level] = new NodeMetrics(internalCount, crossing, CyclesAmong(map, level, groups));
         }
         return metrics;
