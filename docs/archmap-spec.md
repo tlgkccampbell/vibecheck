@@ -233,10 +233,12 @@ failure message can cite it.
    file that matches none is `unmapped`. A file that matches more than one is
    `ambiguous`. Both are failures. A generated document that matches none is not
    source and is not a failure; one that matches more than one is ambiguous.
-2. **Cohesion.** All partitioned parts of a partial type bind to the same leaf.
-   Without this, the edges of a type would depend on which part a reference happens
-   to resolve to. Parts in generated documents nothing binds are not partitioned
-   and do not count.
+2. **Cohesion.** All source parts of a partial type bind to the same leaf. Without
+   this, the edges of a type would depend on which part a reference happens to
+   resolve to. A bound generated part in another leaf is a warning rather than a
+   failure, since a reference resolves to a source declaration first and one
+   generated file can hold parts of types from several leaves. Parts in generated
+   documents nothing binds are not partitioned and do not count.
 3. **Well-formedness.** The file is canonical and valid against the schema. Every
    node's parent exists. Every container has a child. Edges join siblings. Every
    identifier an edge or policy mentions exists. Bindings compile as globs.

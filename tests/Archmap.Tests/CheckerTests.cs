@@ -272,14 +272,18 @@ public class CheckerTests
     }
 
     [Fact]
-    public void GeneratedPartsCountForCohesionOnlyWhenBound()
+    public void GeneratedPartInAnotherLeafWarnsRatherThanFails()
     {
         var analysis = TestData.Analysis(partials: [new PartialType("A.X.Ctx", [TestData.X1, Gen])], generated: [GenFile]);
-        Assert.Empty(Run(analysis: analysis).Violations);
+        var unbound = Run(analysis: analysis);
+        Assert.Empty(unbound.Violations);
+        Assert.DoesNotContain(unbound.Warnings, w => w.Contains("A.X.Ctx"));
+
         var map = TestData.Map();
         map.Nodes["a.y"] = map.Nodes["a.y"] with { Bind = ["src/A/Y/**/*.cs", "src/A/Generated/**/*.cs"] };
-        var v = Single(Run(map, analysis), "cohesion");
-        Assert.Contains("A.X.Ctx", v.Message);
+        var facts = Run(map, analysis);
+        Assert.Empty(facts.Violations);
+        Assert.Contains(facts.Warnings, w => w.Contains("generated part of A.X.Ctx binds to a.y while its source binds to a.x"));
     }
 
     [Fact]

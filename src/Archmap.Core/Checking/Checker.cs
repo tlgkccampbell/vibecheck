@@ -49,9 +49,9 @@ public static class Checker
         }
 
         var leafOf = Partition(map, analysis, violations);
-        CheckCohesion(map, analysis, leafOf, violations);
-
         var generators = analysis.GeneratedFiles.ToDictionary(g => g.Path, g => g.Generator, StringComparer.Ordinal);
+        CheckCohesion(analysis, leafOf, generators, violations, warnings);
+
         var listed = analysis.Files.Select(f => f.Path).Concat(generators.Keys).ToHashSet(StringComparer.Ordinal);
         var unlisted = analysis.Dependencies.Count(d => !listed.Contains(d.FromFile) || !listed.Contains(d.ToFile));
         if (unlisted > 0) warnings.Add($"analysis bug: {unlisted} dependencies reference files the analysis did not list and were ignored");
@@ -256,17 +256,29 @@ public static class Checker
 
     // ---------- Rule 2: cohesion ----------
 
-    /// <summary>Checks that every partitioned part of a partial type binds to one leaf. Parts in unbound generated files are not source and do not count.</summary>
-    private static void CheckCohesion(ArchMap map, AnalysisResult analysis, Dictionary<string, string> leafOf, List<ViolationFact> violations)
+    /// <summary>
+    /// Checks that the source parts of a partial type bind to one leaf. A bound generated
+    /// part in another leaf is a warning rather than a failure: references resolve to a
+    /// source declaration first, so lifting does not depend on where the generated part
+    /// binds, and one generated file can hold parts of types from several leaves. Parts in
+    /// unbound generated files are not source and do not count.
+    /// </summary>
+    private static void CheckCohesion(AnalysisResult analysis, Dictionary<string, string> leafOf, Dictionary<string, string> generators, List<ViolationFact> violations, List<string> warnings)
     {
         foreach (var partial in analysis.PartialTypes)
         {
-            var leaves = partial.Files.Select(f => leafOf.GetValueOrDefault(f)).Where(l => l is not null).Distinct().ToList();
-            if (leaves.Count > 1)
+            var bound = partial.Files.Where(leafOf.ContainsKey).ToList();
+            var sourceLeaves = bound.Where(f => !generators.ContainsKey(f)).Select(f => leafOf[f]).Distinct().ToList();
+            var allLeaves = bound.Select(f => leafOf[f]).Distinct().ToList();
+            if (sourceLeaves.Count > 1)
             {
                 violations.Add(new ViolationFact("cohesion",
-                    $"partial type {partial.Name} is declared in more than one leaf: {string.Join(", ", leaves)}",
-                    new { type = partial.Name, files = partial.Files, leaves }, null));
+                    $"partial type {partial.Name} is declared in more than one leaf: {string.Join(", ", sourceLeaves)}",
+                    new { type = partial.Name, files = partial.Files, leaves = sourceLeaves }, null));
+            }
+            else if (allLeaves.Count > 1)
+            {
+                warnings.Add($"generated part of {partial.Name} binds to {string.Join(", ", allLeaves.Where(l => !sourceLeaves.Contains(l)))} while its source binds to {sourceLeaves.FirstOrDefault() ?? "nothing"}");
             }
         }
     }
