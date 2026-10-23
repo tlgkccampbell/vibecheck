@@ -5,10 +5,11 @@
   "description": "The checked-in specification of a system's nodes, bindings, edges and policies. See docs/archmap-spec.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "solution", "nodes", "externals", "edges", "policies"],
+  "required": ["version", "solution", "exclude", "nodes", "externals", "edges", "policies"],
   "properties": {
     "version": { "const": 0 },
     "solution": { "type": "string", "description": "The solution file, relative to the repository root." },
+    "exclude": { "type": "array", "items": { "type": "string" }, "description": "Type patterns naming the types that are not part of the system. An excluded type is not partitioned and creates no edges." },
     "nodes": {
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/identifier" },

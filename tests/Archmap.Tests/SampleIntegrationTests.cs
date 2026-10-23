@@ -1,3 +1,4 @@
+using Archmap.Analysis;
 using Archmap.Bootstrap;
 using Archmap.Checking;
 using Archmap.Model;
@@ -16,8 +17,9 @@ public class SampleIntegrationTests(SampleFixture sample)
     [Fact]
     public void AnalysisListsTypesAndFilesIncludingGeneratedOnes()
     {
-        Assert.Equal(29, sample.Analysis.Types.Count);
+        Assert.Equal(31, sample.Analysis.Types.Count);
         Assert.Equal(16, sample.Analysis.Files.Count(f => f.Generator is null));
+        Assert.Equal(2, sample.Analysis.Types.Count(t => t.Name.StartsWith("System.Text.RegularExpressions.Generated.")));
         Assert.Contains(sample.Analysis.Files, f => f.Path.StartsWith("src/Orchard.Billing/Generated/") && f.Generator!.Contains("JsonSourceGenerator"));
         Assert.Empty(sample.Analysis.Warnings);
         Assert.Empty(sample.Analysis.Unresolvable);
@@ -31,6 +33,9 @@ public class SampleIntegrationTests(SampleFixture sample)
         var facts = Checker.Run(sample.Map, sample.Analysis, new CheckOptions { MapText = sample.MapText });
         Assert.Empty(facts.Violations);
         Assert.All(facts.Types, t => Assert.NotNull(t.Leaf));
+        Assert.Equal(new ExcludedCounts(2, 0), facts.Excluded);
+        Assert.Equal(29, facts.Types.Count);
+        Assert.DoesNotContain(facts.Dependencies, d => d.To.StartsWith("System."));
     }
 
     [Fact]

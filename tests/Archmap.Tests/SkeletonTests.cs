@@ -85,13 +85,22 @@ public class SkeletonTests
     }
 
     [Fact]
-    public void GeneratedTypesOutsideTheRootNamespaceDoNotMoveTheRoot()
+    public void GeneratedTypesInSystemNamespacesAreExcludedBeforeTheRootIsDerived()
     {
         var regex = new TypeInfo("System.Text.RegularExpressions.Generated.Utilities", "P", ["src/P/Generated/Regex.g.cs"], Generator: "RegexGenerator");
         var map = Skeleton.Build(Solution([new ProjectInfo("P", "P", "src/P")], [T("P.Core.A", "P"), T("P.Core.B", "P"), regex]), "x.sln");
-        Assert.Equal(["p", "p.self", "p.system", "p.system.text", "p.system.text.regularexpressions", "p.system.text.regularexpressions.generated"], map.Nodes.Keys);
-        Assert.Equal(["P.Core.*"], map.Nodes["p.self"].Bind);
-        Assert.Equal(["System.Text.RegularExpressions.Generated.**"], map.Nodes["p.system.text.regularexpressions.generated"].Bind);
+        Assert.Equal(["p"], map.Nodes.Keys);
+        Assert.Equal(["P.Core.**"], map.Nodes["p"].Bind);
+    }
+
+    [Fact]
+    public void TypesOutsideTheRootNamespaceAreEmittedFromTheTopOfTheirOwnHierarchy()
+    {
+        // Hand-written types in two unrelated namespaces leave the project with no root namespace, so both are emitted in full.
+        var map = Skeleton.Build(Solution([new ProjectInfo("P", "P", "src/P")], [T("P.Core.A", "P"), T("P.Core.B", "P"), T("Other.Place.C", "P")]), "x.sln");
+        Assert.Equal(["p", "p.other", "p.other.place", "p.p", "p.p.core"], map.Nodes.Keys);
+        Assert.Equal(["P.Core.**"], map.Nodes["p.p.core"].Bind);
+        Assert.Equal(["Other.Place.**"], map.Nodes["p.other.place"].Bind);
     }
 
     [Fact]
@@ -136,10 +145,10 @@ public class SkeletonTests
         var analysis = TestData.Analysis(extraExternals:
         [
             new ExternalReference(TestData.Service, "System.Collections", "System.Collections.Generic.List<T>", TestData.B1, 1),
-            new ExternalReference(TestData.Service, "xunit.v3.assert", "Xunit.Assert", TestData.B1, 2),
+            new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", TestData.B1, 2),
         ]);
         var map = Skeleton.Build(analysis, "Example.sln");
-        Assert.Equal(["ext-sdk", "framework", "xunit-v3-assert"], map.Externals.Keys);
+        Assert.Equal(["ext-sdk", "framework", "newtonsoft-json"], map.Externals.Keys);
         Assert.Equal(["Ext.Sdk"], map.Externals["ext-sdk"].Bind);
         Assert.Contains("System.*", map.Externals["framework"].Bind);
     }

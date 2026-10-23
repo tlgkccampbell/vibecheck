@@ -38,6 +38,7 @@ that is not canonical. Canonical form is line-oriented so that every diff hunk i
 one self-contained fact:
 
 - Each node, external, edge and policy entry occupies exactly one line.
+- The exclude list occupies one line, in the order written.
 - Nodes and externals are objects keyed by identifier, sorted by identifier.
 - Edges are sorted by `from`, then `to`.
 - Keys within a record appear in the order the schema lists them.
@@ -57,6 +58,7 @@ records added and removed, never as text.
 {
   "version": 0,
   "solution": "src/Example.sln",
+  "exclude": ["System.**", "Example.Tests::**"],
   "nodes": {
     "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions." },
     "auth.core": { "name": "Core", "bind": ["Example.Auth.**"] },
@@ -219,7 +221,31 @@ external declaring that name rather than by one declaring `System.*`. The root
 assemblies are reported but not failures. Setting it to `declared` makes an unbound
 external assembly a failure.
 
-### 2.8 Rendering of policy levels
+### 2.8 Exclusions
+
+The `exclude` list holds type patterns, in the syntax of section 2.2, naming the
+types that are not part of the system the map describes. An excluded type is not
+partitioned, no leaf holds it, no rule mentions it, and a reference to it or from it
+creates no edge. A file that declares nothing but excluded types is not a file of
+the map, so its changes appear in no changeset. Exclusion is decided before binding,
+so a type that an exclusion matches is excluded whatever `bind` patterns or
+`[Archmap]` attribute say. An attribute on an excluded type earns a warning, since
+someone wrote it for nothing.
+
+Two uses motivate it. Code the repository compiles but does not own lands in
+namespaces it does not own: the regex source generator emits its matchers into
+`System.Text.RegularExpressions.Generated`, and a polyfill declares
+`System.Runtime.CompilerServices.IsExternalInit`. `System.**` removes all of it.
+Test projects consume every component and add no structure of their own, and in a
+solution of twelve hundred types they can account for most of the edges at the
+root. `Example.Tests::**` removes a whole project by its assembly.
+
+The map is a tool for understanding the conceptual change in a system, not an
+archive of the diff. What the map excludes is still in the code diff, and nothing in
+the map claims to be exhaustive. The facts record how many types and files were
+excluded so that the number can be checked against expectations.
+
+### 2.9 Rendering of policy levels
 
 At a `declared` level the picture is a contract. Every edge was written down, and a
 new edge in a changeset arrives with a map diff that someone decided on. At an
@@ -271,6 +297,8 @@ Resolution details that matter in C#:
   project compiles, or in a file outside the repository, is not source. A
   reference to a symbol declared only there is reported as `unresolvable` with the
   location, and creates no edge.
+- A type the map excludes, as section 2.8 says, is removed before anything else
+  is considered. A reference to it or from it creates no edge and is not reported.
 - `using` directives are not dependencies. A namespace import creates no edge.
 - References within one type are not dependencies. References between two types in
   the same file are, and lift to the leaf they share when they share one.
@@ -299,8 +327,9 @@ where rules 3 and 4 check it and where the viewer draws it.
 The checker fails on any violation. Each rule names what it checks so that a
 failure message can cite it.
 
-1. **Partition.** Every top-level type declared in the solution's source binds to
-   exactly one leaf, by attribute or by pattern as section 2.4 says. A type that
+1. **Partition.** Every top-level type declared in the solution's source, other
+   than those the map excludes, binds to exactly one leaf, by attribute or by
+   pattern as section 2.4 says. A type that
    binds to none is `unmapped`. A type that two patterns of equal specificity match
    is `ambiguous`. A type whose attribute names something that is not a leaf, or an
    attribute on a nested type, is `misattributed`. All three are failures.
@@ -374,6 +403,14 @@ chosen: one top-level node per project, and beneath it one node per namespace
 segment beyond the project's root namespace, nested as the namespaces nest. Every
 level is `observed`, no edges are declared, and the result passes `check` by
 construction.
+
+Before any node is derived, the skeleton writes `System.**` into `exclude`, and
+`Assembly::**` for every project whose types reference a test framework, meaning an
+assembly named `xunit*`, `nunit.framework`,
+`Microsoft.VisualStudio.TestPlatform.TestFramework` or `TUnit.Core`. Excluded types
+take no part in the derivation: they do not pull on a project's root namespace, they
+create no node, and their external references bind no external. Curation brings a
+project back by deleting its line.
 
 Every referenced assembly is bound, so that the root externals policy can be set to
 `declared` at once: framework assemblies, meaning `System.*`, `Microsoft.Win32.*`,
@@ -455,6 +492,7 @@ the contract between the checker and the viewer.
 {
   "commit": "…",
   "map": { /* archmap.json, canonical */ },
+  "excluded": { "types": 2, "files": 0 },
   "types": [
     { "name": "Example.Billing.Core.PaymentService", "assembly": "Example.Billing", "leaf": "billing.core", "by": "pattern",
       "files": ["src/Billing/Core/PaymentService.cs", "src/Billing/Core/PaymentService.Refunds.cs"] },
@@ -479,7 +517,8 @@ the contract between the checker and the viewer.
 
 Types are listed with every file that declares them, and files with every leaf
 their types bind to, so that the viewer can descend from a leaf to its types to
-their files to the diff. Dependencies are listed per reference, since each one is
+their files to the diff. Excluded types and the files that declare nothing else are
+absent, and `excluded` counts them. Dependencies are listed per reference, since each one is
 evidence the viewer can show. External references are aggregated per type and
 assembly, with the first symbol, file and line and a count, since every type
 references the framework and listing each use would dominate the document. The

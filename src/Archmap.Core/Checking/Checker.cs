@@ -31,12 +31,18 @@ public static class Checker
         var warnings = new List<string>(analysis.Warnings);
 
         var leaves = CheckWellFormedness(map, options, violations, warnings);
+        var exclusion = ParseExclusion(map, violations);
+        var (included, excluded) = exclusion.Apply(analysis);
+        foreach (var type in analysis.Types.Where(t => t.Attribute is not null && exclusion.Excludes(t)))
+            warnings.Add($"{type.Name} carries [Archmap(\"{type.Attribute}\")] but the map excludes it");
+        analysis = included;
         if (violations.Count > 0)
         {
             return new Facts
             {
                 Commit = options.Commit,
                 Map = map,
+                Excluded = excluded,
                 Types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, null, null, t.Files, t.Generator)).ToList(),
                 Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, [], f.Generator)).ToList(),
                 Dependencies = [],
@@ -83,6 +89,7 @@ public static class Checker
         {
             Commit = options.Commit,
             Map = map,
+            Excluded = excluded,
             Types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, leafOf.GetValueOrDefault(t.Name), boundBy.GetValueOrDefault(t.Name), t.Files, t.Generator)).ToList(),
             Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, leavesOfFile.GetValueOrDefault(f.Path, []), f.Generator)).ToList(),
             Dependencies = dependencies,
@@ -175,6 +182,15 @@ public static class Checker
             }
         }
         return leaves;
+    }
+
+    /// <summary>Parses the map's exclude list, failing well-formedness for each malformed pattern.</summary>
+    private static Exclusion ParseExclusion(ArchMap map, List<ViolationFact> violations)
+    {
+        var errors = new List<string>();
+        var exclusion = Exclusion.Parse(map.Exclude, errors);
+        foreach (var error in errors) violations.Add(new ViolationFact("well-formedness", error, null, null));
+        return exclusion;
     }
 
     // ---------- Rule 1: partition ----------

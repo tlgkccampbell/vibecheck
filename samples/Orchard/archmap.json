@@ -1,6 +1,7 @@
 {
   "version": 0,
   "solution": "Orchard.slnx",
+  "exclude": ["System.**"],
   "nodes": {
     "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "edges": "declared" },
     "auth.sessions": { "name": "Sessions", "purpose": "Session lookup and scope checks.", "bind": ["Orchard.Auth.Sessions.**"] },

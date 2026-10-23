@@ -114,7 +114,7 @@ public static class Program
         var analysis = await AnalyzeAsync(root, solutionPath);
         var map = Skeleton.Build(analysis, Path.GetRelativePath(root, solutionPath));
         File.WriteAllText(mapPath, MapWriter.Write(map));
-        Console.WriteLine($"wrote {mapPath}: {map.Nodes.Count} nodes, every level observed");
+        Console.WriteLine($"wrote {mapPath}: {map.Nodes.Count} nodes, every level observed, excluding {string.Join(", ", map.Exclude)}");
 
         var facts = Checker.Run(map, analysis, new CheckOptions { Commit = DetectCommit(root) });
         var factsPath = options.GetValueOrDefault("facts", Path.Combine(root, "archmap.facts.json"));
@@ -143,7 +143,8 @@ public static class Program
         foreach (var w in facts.Warnings) Console.Error.WriteLine("warning: " + w);
         if (facts.Passed)
         {
-            Console.WriteLine($"ok: {facts.Types.Count} types in {facts.Files.Count} files, {facts.Dependencies.Count} dependencies, {facts.Map.Edges.Count} declared edges");
+            var excluded = facts.Excluded.Types > 0 ? $", {facts.Excluded.Types} types excluded" : "";
+            Console.WriteLine($"ok: {facts.Types.Count} types in {facts.Files.Count} files, {facts.Dependencies.Count} dependencies, {facts.Map.Edges.Count} declared edges{excluded}");
             return 0;
         }
         foreach (var v in facts.Violations)

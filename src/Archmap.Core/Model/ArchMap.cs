@@ -20,6 +20,9 @@ public sealed class ArchMap
     /// <summary>The solution file, relative to the repository root.</summary>
     public required string Solution { get; init; }
 
+    /// <summary>Type patterns naming the types that are not part of the system: not partitioned, not drawn, and creating no edges.</summary>
+    public List<string> Exclude { get; init; } = [];
+
     public SortedDictionary<string, NodeSpec> Nodes { get; init; } = new(StringComparer.Ordinal);
 
     public SortedDictionary<string, ExternalSpec> Externals { get; init; } = new(StringComparer.Ordinal);
@@ -67,6 +70,7 @@ public sealed class ArchMap
         {
             Version = Version,
             Solution = Solution,
+            Exclude = [.. Exclude],
             Policies = new PolicySpec
             {
                 Root = Policies.Root,

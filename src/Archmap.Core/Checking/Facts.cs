@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Archmap.Analysis;
 using Archmap.Model;
 
 namespace Archmap.Checking;
@@ -13,6 +14,9 @@ public sealed record Facts
 {
     public string? Commit { get; init; }
     public required ArchMap Map { get; init; }
+    /// <summary>How many types and files the map's exclude list removed before the rules ran.</summary>
+    public required ExcludedCounts Excluded { get; init; }
+
     public required List<TypeFact> Types { get; init; }
     public required List<FileFact> Files { get; init; }
     public required List<DependencyFact> Dependencies { get; init; }

@@ -7,8 +7,9 @@ namespace Archmap.Format;
 
 /// <summary>
 /// Writes <c>archmap.json</c> in canonical form. Each node, external, edge and policy
-/// entry occupies one line, nodes and externals are sorted by identifier, edges are
-/// sorted by source then target, and keys appear in the schema's order. The output
+/// entry occupies one line, the exclude list occupies one line in the order written,
+/// nodes and externals are sorted by identifier, edges are sorted by source then
+/// target, and keys appear in the schema's order. The output
 /// uses two-space indentation, LF line endings and ends with a newline.
 /// </summary>
 public static class MapWriter
@@ -25,6 +26,7 @@ public static class MapWriter
         sb.Append("{\n");
         sb.Append("  \"version\": ").Append(map.Version).Append(",\n");
         sb.Append("  \"solution\": ").Append(Str(map.Solution)).Append(",\n");
+        sb.Append("  \"exclude\": ").Append(StrList(map.Exclude)).Append(",\n");
 
         sb.Append("  \"nodes\": {");
         AppendRecords(sb, map.Nodes.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv =>

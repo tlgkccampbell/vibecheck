@@ -6,13 +6,17 @@ namespace Archmap.Bootstrap;
 /// <summary>
 /// Builds the deterministic skeleton map of <c>docs/archmap-spec.md</c> section 5.1:
 /// one top-level node per project and one node per namespace segment beyond the
-/// project's root namespace, every level observed, no edges declared.
+/// project's root namespace, every level observed, no edges declared. Types in
+/// <c>System</c> namespaces and every project that references a test framework are
+/// excluded before any node is derived.
 /// </summary>
 public static class Skeleton
 {
     public static ArchMap Build(AnalysisResult analysis, string solutionRelativePath)
     {
-        var map = new ArchMap { Version = 0, Solution = solutionRelativePath.Replace('\\', '/') };
+        var exclude = ExcludePatterns(analysis);
+        var map = new ArchMap { Version = 0, Solution = solutionRelativePath.Replace('\\', '/'), Exclude = exclude };
+        (analysis, _) = Exclusion.Parse(exclude, []).Apply(analysis);
         var prefix = CommonPrefixSegments(analysis.Projects.Select(p => p.Name).ToList());
         var topLevelIds = new HashSet<string>(StringComparer.Ordinal);
         var typesByAssembly = analysis.Types.GroupBy(t => t.Assembly, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -108,6 +112,25 @@ public static class Skeleton
         return string.Join('.', split[0].Take(n));
     }
 
+    /// <summary>The assembly name patterns by which the skeleton recognizes a test project: a project whose types reference any of them.</summary>
+    internal static readonly string[] TestFrameworkPatterns = ["xunit*", "nunit.framework", "Microsoft.VisualStudio.TestPlatform.TestFramework", "TUnit.Core"];
+
+    /// <summary>
+    /// Returns the exclude list the skeleton writes: <c>System.**</c> for generator
+    /// output and polyfills that land in the framework's namespaces, and every type
+    /// of each project that references a test framework, qualified by its assembly.
+    /// </summary>
+    internal static List<string> ExcludePatterns(AnalysisResult analysis)
+    {
+        var assemblyOf = analysis.Types.ToDictionary(t => t.Name, t => t.Assembly, StringComparer.Ordinal);
+        var testAssemblies = analysis.ExternalReferences
+            .Where(e => TestFrameworkPatterns.Any(p => AssemblyMatches(p, e.Assembly)) && assemblyOf.ContainsKey(e.FromType))
+            .Select(e => assemblyOf[e.FromType])
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(a => a, StringComparer.Ordinal);
+        return ["System.**", .. testAssemblies.Select(a => a + "::**")];
+    }
+
     /// <summary>The assembly name patterns that the skeleton binds to one <c>framework</c> external.</summary>
     internal static readonly string[] FrameworkPatterns = ["System.*", "Microsoft.Win32.*", "Microsoft.VisualBasic*", "netstandard", "mscorlib", "WindowsBase"];
 
@@ -132,8 +155,11 @@ public static class Skeleton
         }
     }
 
-    private static bool IsFramework(string assembly) =>
-        FrameworkPatterns.Any(p => p.EndsWith('*') ? assembly.StartsWith(p[..^1], StringComparison.Ordinal) : assembly == p);
+    private static bool IsFramework(string assembly) => FrameworkPatterns.Any(p => AssemblyMatches(p, assembly));
+
+    /// <summary>Matches an assembly name against a pattern whose only wildcard is a trailing <c>*</c>.</summary>
+    private static bool AssemblyMatches(string pattern, string assembly) =>
+        pattern.EndsWith('*') ? assembly.StartsWith(pattern[..^1], StringComparison.Ordinal) : assembly == pattern;
 
     private static string Unique(string id, HashSet<string> used)
     {
