@@ -35,7 +35,7 @@
         "purpose": { "type": "string" },
         "note": { "type": "string" },
         "edges": { "$ref": "#/$defs/policy", "description": "The policy among this node's children. Present on containers only." },
-        "bind": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Path globs relative to the repository root. Present on leaves only." }
+        "bind": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Patterns over fully qualified type names, with * (no dots) and ** (any) wildcards and an optional Assembly:: qualifier. Present on leaves only." }
       },
       "not": { "required": ["edges", "bind"] }
     },

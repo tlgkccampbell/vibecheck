@@ -2,7 +2,6 @@ using System.Text.RegularExpressions;
 using Archmap.Analysis;
 using Archmap.Format;
 using Archmap.Model;
-using Microsoft.Extensions.FileSystemGlobbing;
 
 namespace Archmap.Checking;
 
@@ -31,33 +30,31 @@ public static class Checker
         var violations = new List<ViolationFact>();
         var warnings = new List<string>(analysis.Warnings);
 
-        CheckWellFormedness(map, options, violations, warnings);
+        var leaves = CheckWellFormedness(map, options, violations, warnings);
         if (violations.Count > 0)
         {
             return new Facts
             {
                 Commit = options.Commit,
                 Map = map,
-                Files = analysis.Files.Select(f => new FileFact(f.Path, null, f.Hash)).ToList(),
+                Types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, null, null, t.Files, t.Generator)).ToList(),
+                Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, [], f.Generator)).ToList(),
                 Dependencies = [],
                 ExternalRefs = [],
-                Unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromFile, u.Symbol, u.Generator, u.Line)).ToList(),
+                Unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromType, u.Symbol, u.Reason, u.File, u.Line)).ToList(),
                 Metrics = new SortedDictionary<string, NodeMetrics>(StringComparer.Ordinal),
                 Violations = violations,
                 Warnings = warnings,
             };
         }
 
-        var leafOf = Partition(map, analysis, violations);
-        var generators = analysis.GeneratedFiles.ToDictionary(g => g.Path, g => g.Generator, StringComparer.Ordinal);
-        CheckCohesion(analysis, leafOf, generators, violations, warnings);
+        var (leafOf, boundBy) = Partition(map, leaves, analysis, violations);
 
-        var listed = analysis.Files.Select(f => f.Path).Concat(generators.Keys).ToHashSet(StringComparer.Ordinal);
-        var unlisted = analysis.Dependencies.Count(d => !listed.Contains(d.FromFile) || !listed.Contains(d.ToFile));
-        if (unlisted > 0) warnings.Add($"analysis bug: {unlisted} dependencies reference files the analysis did not list and were ignored");
+        var known = analysis.Types.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+        var unlisted = analysis.Dependencies.Count(d => !known.Contains(d.FromType) || !known.Contains(d.ToType));
+        if (unlisted > 0) warnings.Add($"analysis bug: {unlisted} dependencies reference types the analysis did not list and were ignored");
 
-        var unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromFile, u.Symbol, u.Generator, u.Line)).ToList();
-        var dependencies = Lift(map, analysis, leafOf, generators, unresolvable);
+        var dependencies = Lift(analysis, leafOf);
         var externalRefs = ResolveExternals(map, analysis, leafOf);
 
         // Lifted groups: (level, from, to) -> evidence, one entry per reference. External
@@ -73,7 +70,7 @@ public static class Checker
         {
             var key = (Identifiers.Root, e.TopLevel, e.External!);
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
-            list.Add(new DependencyFact(e.From, e.Assembly, "references", e.Symbol, Identifiers.LastSegmentOf(e.Symbol), e.Line, Identifiers.Root, [e.TopLevel, e.External!]));
+            list.Add(new DependencyFact(e.From, e.Assembly, "references", e.Symbol, e.File, e.Line, Identifiers.Root, [e.TopLevel, e.External!]));
         }
 
         CheckPermission(map, groups, violations);
@@ -81,17 +78,17 @@ public static class Checker
         CheckPolicy(map, groups, violations);
         CheckExternals(map, externalRefs, violations);
 
+        var leavesOfFile = LeavesOfFiles(analysis, leafOf);
         return new Facts
         {
             Commit = options.Commit,
             Map = map,
-            Files = analysis.Files.Select(f => new FileFact(f.Path, leafOf.GetValueOrDefault(f.Path), f.Hash))
-                .Concat(analysis.GeneratedFiles.Where(g => leafOf.ContainsKey(g.Path)).Select(g => new FileFact(g.Path, leafOf[g.Path], g.Hash, g.Generator)))
-                .OrderBy(f => f.Path, StringComparer.Ordinal).ToList(),
+            Types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, leafOf.GetValueOrDefault(t.Name), boundBy.GetValueOrDefault(t.Name), t.Files, t.Generator)).ToList(),
+            Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, leavesOfFile.GetValueOrDefault(f.Path, []), f.Generator)).ToList(),
             Dependencies = dependencies,
             ExternalRefs = Aggregate(externalRefs),
-            Unresolvable = unresolvable.OrderBy(u => u.From, StringComparer.Ordinal).ThenBy(u => u.Line).ToList(),
-            Metrics = ComputeMetrics(map, dependencies, externalRefs, groups, leafOf),
+            Unresolvable = analysis.Unresolvable.Select(u => new UnresolvableFact(u.FromType, u.Symbol, u.Reason, u.File, u.Line)).ToList(),
+            Metrics = ComputeMetrics(map, analysis, dependencies, externalRefs, groups, leafOf, boundBy),
             Violations = violations.OrderBy(v => RuleOrder(v.Rule)).ThenBy(v => v.Message, StringComparer.Ordinal).ToList(),
             Warnings = warnings,
         };
@@ -99,18 +96,20 @@ public static class Checker
 
     private static int RuleOrder(string rule) => rule switch
     {
-        "well-formedness" => 0, "partition" => 1, "cohesion" => 2, "permission" => 3, "realization" => 4, "policy" => 5, "externals" => 6, _ => 7,
+        "well-formedness" => 0, "partition" => 1, "permission" => 2, "realization" => 3, "policy" => 4, "externals" => 5, _ => 6,
     };
 
-    // ---------- Rule 3: well-formedness ----------
+    // ---------- Rule 2: well-formedness ----------
 
-    private static void CheckWellFormedness(ArchMap map, CheckOptions options, List<ViolationFact> violations, List<string> warnings)
+    /// <summary>Checks the map's own shape and returns each leaf's parsed patterns.</summary>
+    private static Dictionary<string, List<TypePattern>> CheckWellFormedness(ArchMap map, CheckOptions options, List<ViolationFact> violations, List<string> warnings)
     {
         void Fail(string message) => violations.Add(new ViolationFact("well-formedness", message, null, null));
 
         if (options.MapText is not null && options.MapText != MapWriter.Write(map))
             Fail("the map file is not in canonical form; run `archmap fmt`");
 
+        var leaves = new Dictionary<string, List<TypePattern>>(StringComparer.Ordinal);
         foreach (var (id, node) in map.Nodes)
         {
             if (!Identifiers.IsValid(id)) Fail($"\"{id}\" is not a valid identifier");
@@ -123,6 +122,16 @@ public static class Checker
             if (map.Externals.ContainsKey(id)) Fail($"\"{id}\" is both a node and an external");
             if (!node.IsLeaf && !map.Nodes.Keys.Any(k => Identifiers.ParentOf(k) == id))
                 Fail($"nodes.{id} is a container with no children; give it children or a bind");
+            if (node.IsLeaf)
+            {
+                var patterns = new List<TypePattern>();
+                foreach (var text in node.Bind!)
+                {
+                    if (TypePattern.TryParse(text, out var pattern, out var error)) patterns.Add(pattern!);
+                    else Fail($"nodes.{id}: {error}");
+                }
+                leaves[id] = patterns;
+            }
         }
         foreach (var id in map.Externals.Keys)
         {
@@ -165,150 +174,139 @@ public static class Checker
                     warnings.Add($"layout mentions \"{unknown}\", which the map does not define");
             }
         }
+        return leaves;
     }
 
     // ---------- Rule 1: partition ----------
 
-    private static Dictionary<string, string> Partition(ArchMap map, AnalysisResult analysis, List<ViolationFact> violations)
+    /// <summary>Binds every type to a leaf by attribute, then by most specific pattern, and reports the types that bind to none, to several, or by a bad attribute.</summary>
+    private static (Dictionary<string, string> LeafOf, Dictionary<string, string> BoundBy) Partition(ArchMap map, Dictionary<string, List<TypePattern>> leaves, AnalysisResult analysis, List<ViolationFact> violations)
     {
-        var matchers = map.Nodes.Where(kv => kv.Value.IsLeaf).Select(kv =>
-        {
-            var m = new Matcher(StringComparison.Ordinal);
-            foreach (var pattern in kv.Value.Bind!) m.AddInclude(pattern);
-            return (Id: kv.Key, Matcher: m);
-        }).ToList();
-
         var leafOf = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var file in analysis.Files)
+        var boundBy = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var type in analysis.Types)
         {
-            var hits = matchers.Where(m => m.Matcher.Match(file.Path).HasMatches).Select(m => m.Id).ToList();
+            if (type.MisattributedNested is not null)
+            {
+                violations.Add(new ViolationFact("partition",
+                    $"{type.Name} is misattributed: nested type {type.MisattributedNested} carries [Archmap], but nested types follow their container",
+                    new { type = type.Name, nested = type.MisattributedNested }, null));
+                continue;
+            }
+            if (type.Attribute is not null)
+            {
+                if (leaves.ContainsKey(type.Attribute))
+                {
+                    leafOf[type.Name] = type.Attribute;
+                    boundBy[type.Name] = "attribute";
+                }
+                else
+                {
+                    violations.Add(new ViolationFact("partition",
+                        $"{type.Name} is misattributed: [Archmap(\"{type.Attribute}\")] names no leaf of the map",
+                        new { type = type.Name, attribute = type.Attribute }, null));
+                }
+                continue;
+            }
+            var best = -1;
+            var hits = new List<(string Leaf, TypePattern Pattern)>();
+            foreach (var (leaf, patterns) in leaves)
+            {
+                foreach (var pattern in patterns)
+                {
+                    if (!pattern.Matches(type.PlainName, type.Assembly)) continue;
+                    if (pattern.Specificity > best) { best = pattern.Specificity; hits.Clear(); }
+                    if (pattern.Specificity == best && !hits.Any(h => h.Leaf == leaf)) hits.Add((leaf, pattern));
+                }
+            }
             if (hits.Count == 1)
             {
-                leafOf[file.Path] = hits[0];
+                leafOf[type.Name] = hits[0].Leaf;
+                boundBy[type.Name] = "pattern";
             }
             else if (hits.Count == 0)
             {
-                violations.Add(new ViolationFact("partition", $"{file.Path} is unmapped: no leaf binds it",
-                    new { file = file.Path }, ProposeLeaf(map, file.Path)));
+                violations.Add(new ViolationFact("partition", $"{type.Name} is unmapped: no leaf binds it",
+                    new { type = type.Name, assembly = type.Assembly }, ProposeLeaf(map, leaves, type)));
             }
             else
             {
-                violations.Add(new ViolationFact("partition", $"{file.Path} is ambiguous: bound by {string.Join(", ", hits)}",
-                    new { file = file.Path, leaves = hits }, null));
+                var competing = string.Join(", ", hits.Select(h => $"{h.Leaf} ({h.Pattern.Text})"));
+                violations.Add(new ViolationFact("partition", $"{type.Name} is ambiguous: bound equally by {competing}",
+                    new { type = type.Name, leaves = hits.Select(h => h.Leaf).ToList() }, null));
             }
         }
-        // A generated file is source only when a leaf binds it. One that nothing binds
-        // is left out without complaint; one that two leaves bind is as ambiguous as any file.
-        foreach (var file in analysis.GeneratedFiles)
-        {
-            var hits = matchers.Where(m => m.Matcher.Match(file.Path).HasMatches).Select(m => m.Id).ToList();
-            if (hits.Count == 1)
-            {
-                leafOf[file.Path] = hits[0];
-            }
-            else if (hits.Count > 1)
-            {
-                violations.Add(new ViolationFact("partition", $"{file.Path} is ambiguous: bound by {string.Join(", ", hits)}",
-                    new { file = file.Path, leaves = hits }, null));
-            }
-        }
-        return leafOf;
+        return (leafOf, boundBy);
     }
 
     /// <summary>
-    /// Proposes a leaf for an unmapped file: a leaf bound to the file's directory, placed
-    /// beside the existing leaf whose bindings share the longest directory prefix with it.
-    /// A prefix that every leaf shares, such as a common <c>src</c> directory, does not
-    /// count, so a file that resembles no leaf is proposed at the top level.
+    /// Proposes a leaf for an unmapped type: a leaf bound to the type's namespace, placed
+    /// beside the existing leaf whose patterns share the longest namespace prefix with it.
+    /// A prefix that every leaf shares, such as a product root namespace, does not count,
+    /// so a type that resembles no leaf is proposed at the top level.
     /// </summary>
-    private static ProposalFact ProposeLeaf(ArchMap map, string file)
+    private static ProposalFact ProposeLeaf(ArchMap map, Dictionary<string, List<TypePattern>> leaves, TypeInfo type)
     {
-        var dir = file.Contains('/') ? file[..file.LastIndexOf('/')] : "";
-        var literals = map.Nodes.Where(kv => kv.Value.IsLeaf)
-            .SelectMany(kv => kv.Value.Bind!.Select(p => (Id: kv.Key, Literal: p.Split('*')[0].TrimEnd('/'))))
-            .ToList();
-        var common = literals.Count == 0 ? 0 : literals.Min(l => SharedPrefixSegments(l.Literal, literals[0].Literal));
+        var ns = type.Namespace;
+        var literals = leaves.SelectMany(kv => kv.Value.Select(p => (Id: kv.Key, Literal: p.LiteralPrefix))).Where(l => l.Literal.Length > 0).ToList();
+        var common = literals.Count == 0 ? 0 : literals.Min(l => SharedSegments(l.Literal, literals[0].Literal));
         string? closest = null;
         var best = common;
         foreach (var (leafId, literal) in literals)
         {
-            var shared = SharedPrefixSegments(literal, dir);
+            var shared = SharedSegments(literal, ns);
             if (shared > best) { best = shared; closest = leafId; }
         }
         var parent = closest is null ? Identifiers.Root : Identifiers.ParentOrRoot(closest);
-        var dirName = dir.Length == 0 ? "root-files" : dir[(dir.LastIndexOf('/') + 1)..];
-        var baseId = parent == Identifiers.Root ? Identifiers.NormalizeSegment(dirName) : parent + "." + Identifiers.NormalizeSegment(dirName);
+        var segment = ns.Length == 0 ? "global" : ns[(ns.LastIndexOf('.') + 1)..];
+        var baseId = parent == Identifiers.Root ? Identifiers.NormalizeSegment(segment) : parent + "." + Identifiers.NormalizeSegment(segment);
         var id = baseId;
         for (var n = 2; map.Exists(id); n++) id = baseId + "-" + n;
-        var bind = dir.Length == 0 ? "*.cs" : dir + "/**/*.cs";
-        return new ProposalFact("add-leaf", Node: id, Name: dirName, Bind: [bind]);
+        var bind = ns.Length == 0 ? type.Assembly + "::*" : ns + ".**";
+        return new ProposalFact("add-leaf", Node: id, Name: segment, Bind: [bind]);
     }
 
-    private static int SharedPrefixSegments(string a, string b)
+    private static int SharedSegments(string a, string b)
     {
         if (a.Length == 0 || b.Length == 0) return 0;
-        var sa = a.Split('/');
-        var sb = b.Split('/');
+        var sa = a.Split('.');
+        var sb = b.Split('.');
         var n = 0;
         while (n < sa.Length && n < sb.Length && sa[n] == sb[n]) n++;
         return n;
     }
 
-    // ---------- Rule 2: cohesion ----------
-
-    /// <summary>
-    /// Checks that the source parts of a partial type bind to one leaf. A bound generated
-    /// part in another leaf is a warning rather than a failure: references resolve to a
-    /// source declaration first, so lifting does not depend on where the generated part
-    /// binds, and one generated file can hold parts of types from several leaves. Parts in
-    /// unbound generated files are not source and do not count.
-    /// </summary>
-    private static void CheckCohesion(AnalysisResult analysis, Dictionary<string, string> leafOf, Dictionary<string, string> generators, List<ViolationFact> violations, List<string> warnings)
+    /// <summary>Maps each file to the sorted leaves of the types it declares.</summary>
+    private static Dictionary<string, IReadOnlyList<string>> LeavesOfFiles(AnalysisResult analysis, Dictionary<string, string> leafOf)
     {
-        foreach (var partial in analysis.PartialTypes)
+        var sets = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        foreach (var type in analysis.Types)
         {
-            var bound = partial.Files.Where(leafOf.ContainsKey).ToList();
-            var sourceLeaves = bound.Where(f => !generators.ContainsKey(f)).Select(f => leafOf[f]).Distinct().ToList();
-            var allLeaves = bound.Select(f => leafOf[f]).Distinct().ToList();
-            if (sourceLeaves.Count > 1)
+            if (!leafOf.TryGetValue(type.Name, out var leaf)) continue;
+            foreach (var file in type.Files)
             {
-                violations.Add(new ViolationFact("cohesion",
-                    $"partial type {partial.Name} is declared in more than one leaf: {string.Join(", ", sourceLeaves)}",
-                    new { type = partial.Name, files = partial.Files, leaves = sourceLeaves }, null));
-            }
-            else if (allLeaves.Count > 1)
-            {
-                warnings.Add($"generated part of {partial.Name} binds to {string.Join(", ", allLeaves.Where(l => !sourceLeaves.Contains(l)))} while its source binds to {sourceLeaves.FirstOrDefault() ?? "nothing"}");
+                if (!sets.TryGetValue(file, out var set)) sets[file] = set = new SortedSet<string>(StringComparer.Ordinal);
+                set.Add(leaf);
             }
         }
+        return sets.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value.ToList(), StringComparer.Ordinal);
     }
 
     // ---------- Lifting ----------
 
-    /// <summary>
-    /// Lifts each dependency to the level where it is checked. A dependency from an
-    /// unbound generated file is dropped, since that file is not source. A dependency
-    /// into an unbound generated file is reported as unresolvable, naming the generator,
-    /// since the symbol exists only in code the map does not count.
-    /// </summary>
-    private static List<DependencyFact> Lift(ArchMap map, AnalysisResult analysis, Dictionary<string, string> leafOf, Dictionary<string, string> generators, List<UnresolvableFact> unresolvable)
+    private static List<DependencyFact> Lift(AnalysisResult analysis, Dictionary<string, string> leafOf)
     {
         var result = new List<DependencyFact>();
         foreach (var d in analysis.Dependencies)
         {
-            if (!leafOf.ContainsKey(d.ToFile) && generators.TryGetValue(d.ToFile, out var generator) && leafOf.ContainsKey(d.FromFile))
-            {
-                unresolvable.Add(new UnresolvableFact(d.FromFile, d.Symbol, generator, d.Line));
-                continue;
-            }
-            if (!leafOf.TryGetValue(d.FromFile, out var from) || !leafOf.TryGetValue(d.ToFile, out var to)) continue;
+            if (!leafOf.TryGetValue(d.FromType, out var from) || !leafOf.TryGetValue(d.ToType, out var to)) continue;
             if (from == to)
             {
-                result.Add(new DependencyFact(d.FromFile, d.ToFile, d.Kind, d.Symbol, d.Type, d.Line, from, null));
+                result.Add(new DependencyFact(d.FromType, d.ToType, d.Kind, d.Symbol, d.File, d.Line, from, null));
                 continue;
             }
             var (level, lf, lt) = Identifiers.Lift(from, to);
-            result.Add(new DependencyFact(d.FromFile, d.ToFile, d.Kind, d.Symbol, d.Type, d.Line, level, [lf, lt]));
+            result.Add(new DependencyFact(d.FromType, d.ToType, d.Kind, d.Symbol, d.File, d.Line, level, [lf, lt]));
         }
         return result;
     }
@@ -328,28 +326,28 @@ public static class Checker
         var result = new List<ExternalRefFact>();
         foreach (var e in analysis.ExternalReferences)
         {
-            if (!leafOf.TryGetValue(e.FromFile, out var leaf)) continue;
+            if (!leafOf.TryGetValue(e.FromType, out var leaf)) continue;
             if (!cache.TryGetValue(e.Assembly, out var external))
             {
                 external = patterns.FirstOrDefault(p => p.Regex.IsMatch(e.Assembly)).Id;
                 cache[e.Assembly] = external;
             }
-            result.Add(new ExternalRefFact(e.FromFile, e.Assembly, e.Symbol, e.Line, 1, external, Identifiers.TopLevelOf(leaf)));
+            result.Add(new ExternalRefFact(e.FromType, e.Assembly, e.Symbol, e.File, e.Line, 1, external, Identifiers.TopLevelOf(leaf)));
         }
         return result;
     }
 
-    /// <summary>Collapses per-reference external facts into one entry per file and assembly, keeping the first symbol and line and the total count.</summary>
+    private static Regex AssemblyPattern(string pattern) =>
+        new("^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$", RegexOptions.CultureInvariant);
+
+    /// <summary>Collapses per-reference external facts into one entry per type and assembly, keeping the first symbol and location and the total count.</summary>
     private static List<ExternalRefFact> Aggregate(List<ExternalRefFact> refs) =>
         refs.GroupBy(e => (e.From, e.Assembly))
             .Select(g => g.First() with { Count = g.Sum(e => e.Count) })
             .OrderBy(e => e.From, StringComparer.Ordinal).ThenBy(e => e.Assembly, StringComparer.Ordinal)
             .ToList();
 
-    private static Regex AssemblyPattern(string pattern) =>
-        new("^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$", RegexOptions.CultureInvariant);
-
-    // ---------- Rule 4: permission ----------
+    // ---------- Rule 3: permission ----------
 
     private static void CheckPermission(ArchMap map, Dictionary<(string Level, string From, string To), List<DependencyFact>> groups, List<ViolationFact> violations)
     {
@@ -359,13 +357,13 @@ public static class Checker
             if (map.FindEdge(from, to) is not null) continue;
             var first = evidence[0];
             violations.Add(new ViolationFact("permission",
-                $"{from} → {to} is not declared at level {level}; first seen at {first.From}:{first.Line} ({first.Kind} {first.Symbol}); {evidence.Count} reference(s)",
+                $"{from} → {to} is not declared at level {level}; first seen at {first.File}:{first.Line} ({first.Kind} {first.Symbol}); {evidence.Count} reference(s)",
                 new { level, from, to, count = evidence.Count, examples = evidence.Take(5).ToList() },
                 new ProposalFact("add-edge", From: from, To: to)));
         }
     }
 
-    // ---------- Rule 5: realization ----------
+    // ---------- Rule 4: realization ----------
 
     private static void CheckRealization(ArchMap map, Dictionary<(string Level, string From, string To), List<DependencyFact>> groups, List<ViolationFact> violations)
     {
@@ -393,9 +391,10 @@ public static class Checker
     }
 
     private static bool CarriesType(DependencyFact d, string payload) =>
-        d.Type == payload || d.Symbol == payload || d.Symbol.EndsWith("." + payload, StringComparison.Ordinal) || d.Symbol.Contains("." + payload + ".", StringComparison.Ordinal);
+        d.To == payload || d.To.EndsWith("." + payload, StringComparison.Ordinal)
+        || d.Symbol == payload || d.Symbol.EndsWith("." + payload, StringComparison.Ordinal) || d.Symbol.Contains("." + payload + ".", StringComparison.Ordinal);
 
-    // ---------- Rule 6: policy ----------
+    // ---------- Rule 5: policy ----------
 
     private static void CheckPolicy(ArchMap map, Dictionary<(string Level, string From, string To), List<DependencyFact>> groups, List<ViolationFact> violations)
     {
@@ -406,7 +405,7 @@ public static class Checker
                 if (!Identifiers.PatternMatches(f.From, from) || !Identifiers.PatternMatches(f.To, to)) continue;
                 var first = evidence[0];
                 violations.Add(new ViolationFact("policy",
-                    $"{from} → {to} is forbidden by policy {f.From} → {f.To}; first seen at {first.From}:{first.Line} ({first.Symbol})",
+                    $"{from} → {to} is forbidden by policy {f.From} → {f.To}; first seen at {first.File}:{first.Line} ({first.Symbol})",
                     new { level, from, to, forbid = f, count = evidence.Count, examples = evidence.Take(5).ToList() }, null));
             }
         }
@@ -429,7 +428,7 @@ public static class Checker
             var first = group.First();
             var count = group.Sum(e => e.Count);
             violations.Add(new ViolationFact("externals",
-                $"assembly {group.Key} is referenced but no external binds it; first seen at {first.From}:{first.Line} ({first.Symbol}); {count} reference(s)",
+                $"assembly {group.Key} is referenced but no external binds it; first seen at {first.File}:{first.Line} ({first.Symbol}); {count} reference(s)",
                 new { assembly = group.Key, count, examples = group.Take(5).ToList() }, null));
         }
     }
@@ -480,8 +479,8 @@ public static class Checker
 
     // ---------- Metrics ----------
 
-    private static SortedDictionary<string, NodeMetrics> ComputeMetrics(ArchMap map, List<DependencyFact> dependencies, List<ExternalRefFact> externalRefs,
-        Dictionary<(string Level, string From, string To), List<DependencyFact>> groups, Dictionary<string, string> leafOf)
+    private static SortedDictionary<string, NodeMetrics> ComputeMetrics(ArchMap map, AnalysisResult analysis, List<DependencyFact> dependencies, List<ExternalRefFact> externalRefs,
+        Dictionary<(string Level, string From, string To), List<DependencyFact>> groups, Dictionary<string, string> leafOf, Dictionary<string, string> boundBy)
     {
         var metrics = new SortedDictionary<string, NodeMetrics>(StringComparer.Ordinal);
         foreach (var level in new[] { Identifiers.Root }.Concat(map.Nodes.Where(kv => !kv.Value.IsLeaf).Select(kv => kv.Key)))
@@ -496,7 +495,8 @@ public static class Checker
                 else if (a || b) crossing++;
             }
             crossing += externalRefs.Where(e => Identifiers.IsUnder(leafOf[e.From], level)).Sum(e => e.Count);
-            metrics[level] = new NodeMetrics(internalCount, crossing, CyclesAmong(map, level, groups));
+            var attributed = boundBy.Count(kv => kv.Value == "attribute" && Identifiers.IsUnder(leafOf[kv.Key], level));
+            metrics[level] = new NodeMetrics(internalCount, crossing, CyclesAmong(map, level, groups), attributed);
         }
         return metrics;
     }

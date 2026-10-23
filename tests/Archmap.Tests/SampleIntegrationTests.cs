@@ -9,46 +9,20 @@ namespace Archmap.Tests;
 [Collection("sample")]
 public class SampleIntegrationTests(SampleFixture sample)
 {
-    private const string Stripe = "src/Orchard.Billing/Integrations/Stripe/StripeClient.cs";
+    private const string Capture = "Orchard.Billing.Core.Payments.CapturePayment";
+    private const string Context = "Orchard.Billing.Integrations.Stripe.StripeJsonContext";
+    private const string Invoice = "Orchard.Billing.Core.Invoices.Invoice";
 
     [Fact]
-    public void AnalysisListsSourceAndGeneratedFilesSeparately()
+    public void AnalysisListsTypesAndFilesIncludingGeneratedOnes()
     {
-        Assert.Equal(15, sample.Analysis.Files.Count);
-        Assert.All(sample.Analysis.Files, f => Assert.StartsWith("src/Orchard.", f.Path));
-        Assert.DoesNotContain(sample.Analysis.Files, f => f.Path.Contains("/Generated/"));
-        Assert.Contains(sample.Analysis.GeneratedFiles, g => g.Path.StartsWith("src/Orchard.Billing/Generated/") && g.Generator.Contains("JsonSourceGenerator"));
+        Assert.Equal(29, sample.Analysis.Types.Count);
+        Assert.Equal(16, sample.Analysis.Files.Count(f => f.Generator is null));
+        Assert.Contains(sample.Analysis.Files, f => f.Path.StartsWith("src/Orchard.Billing/Generated/") && f.Generator!.Contains("JsonSourceGenerator"));
         Assert.Empty(sample.Analysis.Warnings);
-        var listed = sample.Analysis.Files.Select(f => f.Path).Concat(sample.Analysis.GeneratedFiles.Select(g => g.Path)).ToHashSet();
-        Assert.All(sample.Analysis.Dependencies, d => { Assert.Contains(d.FromFile, listed); Assert.Contains(d.ToFile, listed); });
-    }
-
-    [Fact]
-    public void GeneratedCodeIsSourceWhenALeafBindsIt()
-    {
-        // The curated map folds Billing's generated output into the Stripe leaf, so the
-        // generated half of StripeJsonContext is source: references into it lift, and
-        // the partial type stays cohesive.
-        var facts = Checker.Run(sample.Map, sample.Analysis);
-        Assert.Empty(facts.Violations);
-        Assert.Empty(facts.Unresolvable);
-        var generated = facts.Files.Where(f => f.Generator is not null).ToList();
-        Assert.NotEmpty(generated);
-        Assert.All(generated, f => Assert.Equal("billing.integrations.stripe", f.Leaf));
-        Assert.Contains(facts.Dependencies, d => d.From == Stripe && d.Symbol.EndsWith("StripeJsonContext.Default") && d.Level == "billing.integrations.stripe");
-    }
-
-    [Fact]
-    public void GeneratedCodeIsUnresolvableWhenNothingBindsIt()
-    {
-        var map = sample.Map.Clone();
-        map.Nodes["billing.integrations.stripe"] = map.Nodes["billing.integrations.stripe"] with { Bind = ["src/Orchard.Billing/Integrations/Stripe/**/*.cs"] };
-        var facts = Checker.Run(map, sample.Analysis);
-        Assert.DoesNotContain(facts.Violations, v => v.Rule == "partition");
-        Assert.DoesNotContain(facts.Files, f => f.Generator is not null);
-        var u = Assert.Single(facts.Unresolvable, u => u.Symbol.EndsWith("StripeJsonContext.Default"));
-        Assert.Contains("JsonSourceGenerator", u.Generator);
-        Assert.Equal(Stripe, u.From);
+        Assert.Empty(sample.Analysis.Unresolvable);
+        var known = sample.Analysis.Types.Select(t => t.Name).ToHashSet();
+        Assert.All(sample.Analysis.Dependencies, d => { Assert.Contains(d.FromType, known); Assert.Contains(d.ToType, known); });
     }
 
     [Fact]
@@ -56,26 +30,48 @@ public class SampleIntegrationTests(SampleFixture sample)
     {
         var facts = Checker.Run(sample.Map, sample.Analysis, new CheckOptions { MapText = sample.MapText });
         Assert.Empty(facts.Violations);
-        Assert.All(facts.Files, f => Assert.NotNull(f.Leaf));
+        Assert.All(facts.Types, t => Assert.NotNull(t.Leaf));
     }
 
     [Fact]
-    public void ResolvesMembersToTheirDeclaringFile()
+    public void PartialTypesAreOneTypeAcrossSourceAndGeneratedFiles()
     {
-        var capture = "src/Orchard.Billing/Core/Payments/CapturePayment.cs";
-        var deps = sample.Analysis.Dependencies.Where(d => d.FromFile == capture).ToList();
-        Assert.Contains(deps, d => d.ToFile == "src/Orchard.Auth/Sessions/ISessionReader.cs" && d.Kind == "calls" && d.Symbol.EndsWith("RequireScopeAsync"));
-        Assert.Contains(deps, d => d.ToFile == "src/Orchard.Notifications/Dispatch/Dispatcher.cs" && d.Kind == "constructs" && d.Type == "PaymentEvent");
-        Assert.Contains(deps, d => d.ToFile == "src/Orchard.Billing/Integrations/Stripe/StripeClient.cs");
-        Assert.DoesNotContain(deps, d => d.ToFile == capture);
+        var service = sample.Analysis.Types.Single(t => t.Name == "Orchard.Billing.Core.PaymentService");
+        Assert.Equal(2, service.Files.Count);
+        Assert.Null(service.Generator);
+        var context = sample.Analysis.Types.Single(t => t.Name == Context);
+        Assert.Contains(context.Files, f => f.Contains("/Generated/"));
+        Assert.Contains("JsonSourceGenerator", context.Generator);
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        Assert.Equal("billing.integrations.stripe", facts.Types.Single(t => t.Name == Context).Leaf);
+        // A reference to a member that exists only in the generated half resolves to the type.
+        Assert.Contains(facts.Dependencies, d => d.From == "Orchard.Billing.Integrations.Stripe.StripeClient" && d.To == Context && d.Level == "billing.integrations.stripe");
     }
 
     [Fact]
-    public void DetectsPartialTypesAcrossSourceAndGeneratedFiles()
+    public void AttributeBindsInvoiceToTheLedgerAndIsCounted()
     {
-        Assert.Equal(["Orchard.Billing.Core.PaymentService", "Orchard.Billing.Integrations.Stripe.StripeJsonContext"], sample.Analysis.PartialTypes.Select(p => p.Name));
-        Assert.Equal(2, sample.Analysis.PartialTypes[0].Files.Count);
-        Assert.Contains(sample.Analysis.PartialTypes[1].Files, f => f.Contains("/Generated/"));
+        var invoice = sample.Analysis.Types.Single(t => t.Name == Invoice);
+        Assert.Equal("billing.ledger", invoice.Attribute);
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        var fact = facts.Types.Single(t => t.Name == Invoice);
+        Assert.Equal(("billing.ledger", "attribute"), (fact.Leaf, fact.By));
+        Assert.Equal(1, facts.Metrics["billing"].Attributed);
+        Assert.Equal(0, facts.Metrics["auth"].Attributed);
+        var file = facts.Files.Single(f => f.Path.EndsWith("InvoiceGenerator.cs"));
+        Assert.Equal(["billing.core.invoices", "billing.ledger"], file.Leaves);
+        Assert.DoesNotContain(facts.Dependencies, d => d.To == "Archmap.ArchmapAttribute");
+    }
+
+    [Fact]
+    public void ResolvesReferencesToTheDeclaringType()
+    {
+        var deps = sample.Analysis.Dependencies.Where(d => d.FromType == Capture).ToList();
+        Assert.Contains(deps, d => d.ToType == "Orchard.Auth.Sessions.ISessionReader" && d.Kind == "calls" && d.Symbol.EndsWith("RequireScopeAsync"));
+        Assert.Contains(deps, d => d.ToType == "Orchard.Notifications.Dispatch.PaymentEvent" && d.Kind == "constructs");
+        Assert.Contains(deps, d => d.ToType == "Orchard.Billing.Integrations.Stripe.StripeClient");
+        Assert.DoesNotContain(deps, d => d.ToType == Capture);
+        Assert.All(deps, d => Assert.Equal("src/Orchard.Billing/Core/Payments/CapturePayment.cs", d.File));
     }
 
     [Fact]
@@ -122,6 +118,7 @@ public class SampleIntegrationTests(SampleFixture sample)
     {
         var skeleton = Skeleton.Build(sample.Analysis, "Orchard.slnx");
         Assert.Contains("billing.core.self", skeleton.Nodes.Keys);
+        Assert.Contains("billing.core.payments", skeleton.Nodes.Keys);
         Assert.Equal("Orchard.Billing", skeleton.Nodes["billing"].Name);
         Assert.Contains("framework", skeleton.Externals.Keys);
         var facts = Checker.Run(skeleton, sample.Analysis);

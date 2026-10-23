@@ -23,7 +23,7 @@ public class CheckerTests
     {
         var facts = Run();
         Assert.Empty(facts.Violations);
-        Assert.All(facts.Files, f => Assert.NotNull(f.Leaf));
+        Assert.All(facts.Types, t => { Assert.NotNull(t.Leaf); Assert.Equal("pattern", t.By); });
         Assert.Equal(4, facts.Dependencies.Count);
     }
 
@@ -31,21 +31,30 @@ public class CheckerTests
     public void LiftsDependenciesToLowestCommonAncestor()
     {
         var facts = Run();
-        var cross = facts.Dependencies.Single(d => d.From == TestData.X1 && d.To == TestData.S1);
+        var cross = facts.Dependencies.Single(d => d.From == TestData.Thing && d.To == TestData.Result);
         Assert.Equal("root", cross.Level);
         Assert.Equal(["a", "shared"], cross.Edge!);
-        var sibling = facts.Dependencies.Single(d => d.From == TestData.X1 && d.To == TestData.Y1);
+        var sibling = facts.Dependencies.Single(d => d.From == TestData.Thing && d.To == TestData.Other);
         Assert.Equal("a", sibling.Level);
         Assert.Equal(["a.x", "a.y"], sibling.Edge!);
-        var intra = facts.Dependencies.Single(d => d.To == TestData.X2);
+        var intra = facts.Dependencies.Single(d => d.To == TestData.Helper);
         Assert.Equal("a.x", intra.Level);
         Assert.Null(intra.Edge);
     }
 
     [Fact]
+    public void FilesListTheLeavesOfTheirTypes()
+    {
+        var analysis = TestData.Analysis(extraTypes: [new TypeInfo("A.Y.InX", "Example.A", [TestData.X1])]);
+        var facts = Run(analysis: analysis);
+        Assert.Equal(["a.x", "a.y"], facts.Files.Single(f => f.Path == TestData.X1).Leaves);
+        Assert.Equal(["shared"], facts.Files.Single(f => f.Path == TestData.S1).Leaves);
+    }
+
+    [Fact]
     public void PermissionFailsOnUndeclaredEdgeAtDeclaredLevelAndProposesIt()
     {
-        var analysis = TestData.Analysis([new RawDependency(TestData.B1, TestData.X1, "calls", "A.X.Thing.Go", "Thing", 7)]);
+        var analysis = TestData.Analysis([new RawDependency(TestData.Service, TestData.Thing, "calls", "A.X.Thing.Go", TestData.B1, 7)]);
         var v = Single(Run(analysis: analysis), "permission");
         Assert.Contains("b → a is not declared at level root", v.Message);
         Assert.Contains("src/B/B1.cs:7", v.Message);
@@ -89,52 +98,107 @@ public class CheckerTests
         Assert.Contains("declares payload Money", v.Message);
         Assert.Null(v.Proposal);
 
-        var ok = Run(map, TestData.Analysis([new RawDependency(TestData.Y1, TestData.S1, "references", "Shared.Money", "Money", 3)]));
-        Assert.Empty(ok.Violations);
+        var analysis = TestData.Analysis(
+            [new RawDependency(TestData.Other, "Shared.Money", "references", "Shared.Money", TestData.Y1, 3)],
+            extraTypes: [new TypeInfo("Shared.Money", "Example.Shared", [TestData.S1])]);
+        Assert.Empty(Run(map, analysis).Violations);
     }
 
     [Fact]
-    public void PartitionFailsOnUnmappedFileAndProposesLeaf()
+    public void PartitionFailsOnUnmappedTypeAndProposesLeafAtTopLevel()
     {
-        var analysis = TestData.Analysis(extraFiles: [new SourceFile("src/C/Deep/C1.cs", "h9", "C")]);
+        var analysis = TestData.Analysis(extraTypes: [new TypeInfo("C.Deep.Thing", "Example.C", ["src/C/Deep/C1.cs"])]);
         var v = Single(Run(analysis: analysis), "partition");
-        Assert.Contains("unmapped", v.Message);
-        Assert.Equal("add-leaf", v.Proposal!.Op);
-        Assert.Equal("deep", v.Proposal.Node);
-        Assert.Equal(["src/C/Deep/**/*.cs"], v.Proposal.Bind);
+        Assert.Contains("C.Deep.Thing is unmapped", v.Message);
+        Assert.Equal(("add-leaf", "deep", "Deep"), (v.Proposal!.Op, v.Proposal.Node, v.Proposal.Name));
+        Assert.Equal(["C.Deep.**"], v.Proposal.Bind);
     }
 
     [Fact]
     public void PartitionProposalNestsBesideClosestLeaf()
     {
-        var analysis = TestData.Analysis(extraFiles: [new SourceFile("src/A/Z/Z1.cs", "h9", "A")]);
+        var analysis = TestData.Analysis(extraTypes: [new TypeInfo("A.Z.Thing", "Example.A", ["src/A/Z/Z1.cs"])]);
         var v = Single(Run(analysis: analysis), "partition");
         Assert.Equal("a.z", v.Proposal!.Node);
+        Assert.Equal(["A.Z.**"], v.Proposal.Bind);
         var fixedMap = Proposals.Apply(TestData.Map(), [v.Proposal]);
         Assert.Empty(Checker.Run(fixedMap, analysis).Violations);
     }
 
     [Fact]
-    public void PartitionFailsOnAmbiguousFile()
+    public void GlobalNamespaceTypeIsProposedByAssembly()
+    {
+        var analysis = TestData.Analysis(extraTypes: [new TypeInfo("Program", "Example.B", ["src/B/Program.cs"])]);
+        var v = Single(Run(analysis: analysis), "partition");
+        Assert.Equal(("add-leaf", "global", "global"), (v.Proposal!.Op, v.Proposal.Node, v.Proposal.Name));
+        Assert.Equal(["Example.B::*"], v.Proposal.Bind);
+    }
+
+    [Fact]
+    public void EquallySpecificPatternsMakeATypeAmbiguous()
     {
         var map = TestData.Map();
-        map.Nodes["b2"] = new NodeSpec { Name = "B2", Bind = ["src/B/*.cs"] };
+        map.Nodes["b2"] = new NodeSpec { Name = "B2", Bind = ["B.*"] };
         var facts = Run(map);
         var v = Assert.Single(facts.Violations, v => v.Rule == "partition");
-        Assert.Contains("ambiguous", v.Message);
+        Assert.Contains("B.Service is ambiguous", v.Message);
+        Assert.Contains("b (B.**)", v.Message);
+        Assert.Contains("b2 (B.*)", v.Message);
         Assert.Null(v.Proposal);
-        // An ambiguous file binds nowhere, so the edge its references realized is now dead.
+        // An ambiguous type binds nowhere, so the edge its references realized is now dead.
         Assert.Contains(facts.Violations, v => v.Rule == "realization" && v.Message.Contains("b → shared"));
     }
 
     [Fact]
-    public void CohesionFailsWhenPartialTypeSpansLeaves()
+    public void MostSpecificPatternWinsWithoutExclusions()
     {
-        var analysis = TestData.Analysis(partials: [new PartialType("A.Service", [TestData.X1, TestData.Y1])]);
-        var v = Single(Run(analysis: analysis), "cohesion");
-        Assert.Contains("A.Service", v.Message);
-        var same = TestData.Analysis(partials: [new PartialType("A.Other", [TestData.X1, TestData.X2])]);
-        Assert.Empty(Run(analysis: same).Violations);
+        var map = TestData.Map();
+        map.Nodes["b.service"] = new NodeSpec { Name = "Service", Bind = ["B.Service"] };
+        map.Nodes["b.rest"] = new NodeSpec { Name = "Rest", Bind = ["B.**"] };
+        map.Nodes["b"] = new NodeSpec { Name = "B" };
+        var facts = Run(map);
+        Assert.Empty(facts.Violations);
+        Assert.Equal("b.service", facts.Types.Single(t => t.Name == TestData.Service).Leaf);
+    }
+
+    [Fact]
+    public void AttributeOverridesPatternsAndIsCounted()
+    {
+        // Helper moves to b by attribute, so the reference from Thing to it now crosses
+        // from a to b, which the map must declare.
+        var map = TestData.Map();
+        map.Edges.Add(new EdgeSpec { From = "a", To = "b" });
+        var analysis = TestData.Analysis(adjust: t => t.Name == TestData.Helper ? t with { Attribute = "b" } : t);
+        var facts = Run(map, analysis);
+        Assert.Empty(facts.Violations);
+        var helper = facts.Types.Single(t => t.Name == TestData.Helper);
+        Assert.Equal(("b", "attribute"), (helper.Leaf, helper.By));
+        Assert.Equal(1, facts.Metrics["root"].Attributed);
+        Assert.Equal(0, facts.Metrics["a"].Attributed);
+        Assert.Contains(facts.Dependencies, d => d.To == TestData.Helper && d.Level == "root" && d.Edge is ["a", "b"]);
+    }
+
+    [Fact]
+    public void AttributeReferenceCrossingUndeclaredLevelFailsPermission()
+    {
+        var map = TestData.Map();
+        map.Edges.RemoveAll(e => e.From == "a" && e.To == "shared");
+        var analysis = TestData.Analysis(adjust: t => t.Name == TestData.Result ? t with { Attribute = "b" } : t);
+        var v = Single(Run(map, analysis), "permission");
+        Assert.Contains("a → b is not declared", v.Message);
+    }
+
+    [Fact]
+    public void BadAttributesAreMisattributed()
+    {
+        var unknown = TestData.Analysis(adjust: t => t.Name == TestData.Helper ? t with { Attribute = "nope" } : t);
+        var v1 = Single(Run(analysis: unknown), "partition");
+        Assert.Contains("names no leaf", v1.Message);
+        Assert.Null(v1.Proposal);
+
+        var nested = TestData.Analysis(adjust: t => t.Name == TestData.Helper ? t with { MisattributedNested = "A.X.Helper.Inner" } : t);
+        var v2 = Single(Run(analysis: nested), "partition");
+        Assert.Contains("nested type A.X.Helper.Inner", v2.Message);
     }
 
     [Fact]
@@ -143,7 +207,7 @@ public class CheckerTests
         var map = TestData.Map();
         map.Policies.Forbid.Add(new ForbidSpec { From = "shared", To = "*" });
         map.Edges.Add(new EdgeSpec { From = "shared", To = "b" });
-        var analysis = TestData.Analysis([new RawDependency(TestData.S1, TestData.B1, "references", "B.Thing", "Thing", 1)]);
+        var analysis = TestData.Analysis([new RawDependency(TestData.Result, TestData.Service, "references", "B.Service", TestData.S1, 1)]);
         var v = Single(Run(map, analysis), "policy");
         Assert.Contains("forbidden by policy shared → *", v.Message);
     }
@@ -154,24 +218,22 @@ public class CheckerTests
         var map = TestData.Map();
         map.Policies.Acyclic.Add("root");
         map.Edges.Add(new EdgeSpec { From = "shared", To = "b" });
-        var analysis = TestData.Analysis([new RawDependency(TestData.S1, TestData.B1, "references", "B.Thing", "Thing", 1)]);
+        var analysis = TestData.Analysis([new RawDependency(TestData.Result, TestData.Service, "references", "B.Service", TestData.S1, 1)]);
         var facts = Run(map, analysis);
         var v = Single(facts, "policy");
         Assert.Contains("form a cycle", v.Message);
-        Assert.Contains("b", v.Message);
-        Assert.Contains("shared", v.Message);
         Assert.Single(facts.Metrics["root"].Cycles);
     }
 
     [Fact]
     public void ExternalsPolicyFailsOnUnboundAssemblyWhenDeclared()
     {
-        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.B1, "Other.Lib", "Other.Lib.Api", 2)]);
+        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.Service, "Other.Lib", "Other.Lib.Api", TestData.B1, 2)]);
         var v = Single(Run(analysis: analysis), "externals");
         Assert.Contains("Other.Lib", v.Message);
 
-        var map = TestData.Map();
-        var relaxed = new ArchMap { Solution = map.Solution, Nodes = map.Nodes, Externals = map.Externals, Edges = map.Edges, Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Declared, Externals = ArchMap.Observed } } };
+        var relaxed = TestData.Map();
+        relaxed = new ArchMap { Solution = relaxed.Solution, Nodes = relaxed.Nodes, Externals = relaxed.Externals, Edges = relaxed.Edges, Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Declared, Externals = ArchMap.Observed } } };
         var facts = Run(relaxed, analysis);
         Assert.Empty(facts.Violations);
         Assert.Contains(facts.ExternalRefs, e => e.Assembly == "Other.Lib" && e.External is null);
@@ -199,17 +261,39 @@ public class CheckerTests
     }
 
     [Fact]
-    public void WellFormednessCatchesStructuralMistakes()
+    public void ExternalRefsAreAggregatedPerTypeAndAssembly()
+    {
+        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.Thing, "Ext.Sdk", "Ext.Sdk.Other", TestData.X1, 30)]);
+        var facts = Run(analysis: analysis);
+        var e = Assert.Single(facts.ExternalRefs);
+        Assert.Equal(2, e.Count);
+        Assert.Equal(20, e.Line);
+        Assert.Equal(2, facts.Metrics["root"].Crossing);
+    }
+
+    [Fact]
+    public void DependenciesOnUnlistedTypesAreWarnedAboutNotDropped()
+    {
+        var analysis = TestData.Analysis([new RawDependency(TestData.Thing, "Ghost.Type", "references", "Ghost.Type", TestData.X1, 1)]);
+        var facts = Run(analysis: analysis);
+        Assert.Empty(facts.Violations);
+        Assert.Contains(facts.Warnings, w => w.Contains("analysis bug: 1 dependencies"));
+    }
+
+    [Fact]
+    public void WellFormednessCatchesStructuralMistakesAndBadPatterns()
     {
         var map = TestData.Map();
-        map.Nodes["orphan.child"] = new NodeSpec { Name = "Orphan", Bind = ["src/O/**"] };
+        map.Nodes["orphan.child"] = new NodeSpec { Name = "Orphan", Bind = ["O.**"] };
         map.Nodes["empty"] = new NodeSpec { Name = "Empty" };
+        map.Nodes["bad"] = new NodeSpec { Name = "Bad", Bind = ["A::B::C"] };
         map.Edges.Add(new EdgeSpec { From = "a.x", To = "b" });
         map.Edges.Add(new EdgeSpec { From = "a", To = "shared" });
         var facts = Run(map);
         Assert.All(facts.Violations, v => Assert.Equal("well-formedness", v.Rule));
         Assert.Contains(facts.Violations, v => v.Message.Contains("parent \"orphan\" does not exist"));
         Assert.Contains(facts.Violations, v => v.Message.Contains("container with no children"));
+        Assert.Contains(facts.Violations, v => v.Message.Contains("more than one assembly qualifier"));
         Assert.Contains(facts.Violations, v => v.Message.Contains("must be siblings"));
         Assert.Contains(facts.Violations, v => v.Message.Contains("declared twice"));
         Assert.Empty(facts.Dependencies);
@@ -235,77 +319,6 @@ public class CheckerTests
         Assert.Contains(facts.Warnings, w => w.Contains("ghost"));
     }
 
-    private const string Gen = "src/A/Generated/Gen.Assembly/Gen.Assembly.Generator/X1.g.cs";
-    private static readonly GeneratedFile GenFile = new(Gen, "hg", "A", "Gen.Assembly.Generator");
-
-    [Fact]
-    public void UnboundGeneratedFileIsNotSource()
-    {
-        var analysis = TestData.Analysis(
-            [new RawDependency(TestData.B1, Gen, "calls", "A.X.Thing.Generated", "Thing", 9), new RawDependency(Gen, TestData.S1, "references", "Shared.Result", "Result", 1)],
-            generated: [GenFile]);
-        var facts = Run(analysis: analysis);
-        Assert.Empty(facts.Violations);
-        Assert.Empty(facts.Warnings);
-        Assert.DoesNotContain(facts.Files, f => f.Path == Gen);
-        var u = Assert.Single(facts.Unresolvable);
-        Assert.Equal((TestData.B1, "Gen.Assembly.Generator", 9), (u.From, u.Generator, u.Line));
-        Assert.DoesNotContain(facts.Dependencies, d => d.From == Gen);
-    }
-
-    [Fact]
-    public void BoundGeneratedFileIsSourceAndItsReferencesLift()
-    {
-        var map = TestData.Map();
-        map.Nodes["a.x"] = map.Nodes["a.x"] with { Bind = ["src/A/X/**/*.cs", "src/A/Generated/**/*.cs"] };
-        map.Edges.Add(new EdgeSpec { From = "b", To = "a" });
-        var analysis = TestData.Analysis(
-            [new RawDependency(TestData.B1, Gen, "calls", "A.X.Thing.Generated", "Thing", 9), new RawDependency(Gen, TestData.S1, "references", "Shared.Result", "Result", 1)],
-            generated: [GenFile]);
-        var facts = Run(map, analysis);
-        Assert.Empty(facts.Violations);
-        Assert.Empty(facts.Unresolvable);
-        var file = Assert.Single(facts.Files, f => f.Path == Gen);
-        Assert.Equal(("a.x", "Gen.Assembly.Generator"), (file.Leaf, file.Generator));
-        Assert.Contains(facts.Dependencies, d => d.To == Gen && d.Edge is ["b", "a"]);
-        Assert.Contains(facts.Dependencies, d => d.From == Gen && d.Edge is ["a", "shared"]);
-    }
-
-    [Fact]
-    public void GeneratedPartInAnotherLeafWarnsRatherThanFails()
-    {
-        var analysis = TestData.Analysis(partials: [new PartialType("A.X.Ctx", [TestData.X1, Gen])], generated: [GenFile]);
-        var unbound = Run(analysis: analysis);
-        Assert.Empty(unbound.Violations);
-        Assert.DoesNotContain(unbound.Warnings, w => w.Contains("A.X.Ctx"));
-
-        var map = TestData.Map();
-        map.Nodes["a.y"] = map.Nodes["a.y"] with { Bind = ["src/A/Y/**/*.cs", "src/A/Generated/**/*.cs"] };
-        var facts = Run(map, analysis);
-        Assert.Empty(facts.Violations);
-        Assert.Contains(facts.Warnings, w => w.Contains("generated part of A.X.Ctx binds to a.y while its source binds to a.x"));
-    }
-
-    [Fact]
-    public void ExternalRefsAreAggregatedPerFileAndAssembly()
-    {
-        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.X1, "Ext.Sdk", "Ext.Sdk.Other", 30)]);
-        var facts = Run(analysis: analysis);
-        var e = Assert.Single(facts.ExternalRefs);
-        Assert.Equal(2, e.Count);
-        Assert.Equal(20, e.Line);
-        Assert.Equal(2, facts.Metrics["root"].Crossing);
-    }
-
-    [Fact]
-    public void DependenciesOnUnlistedFilesAreWarnedAboutNotDropped()
-    {
-        var analysis = TestData.Analysis([new RawDependency(TestData.X1, "src/Ghost.cs", "references", "Ghost", "Ghost", 1)]);
-        var facts = Run(analysis: analysis);
-        Assert.Empty(facts.Violations);
-        Assert.Contains(facts.Warnings, w => w.Contains("analysis bug: 1 dependencies"));
-    }
-
     [Fact]
     public void MetricsCountInternalAndCrossingDependencies()
     {
@@ -324,7 +337,7 @@ public class CheckerTests
         [
             new ProposalFact("add-edge", From: "b", To: "a"),
             new ProposalFact("remove-edge", From: "a", To: "ext"),
-            new ProposalFact("add-leaf", Node: "c", Name: "C", Bind: ["src/C/**/*.cs"]),
+            new ProposalFact("add-leaf", Node: "c", Name: "C", Bind: ["C.**"]),
         ]);
         Assert.NotNull(applied.FindEdge("b", "a"));
         Assert.Null(applied.FindEdge("a", "ext"));
@@ -340,8 +353,9 @@ public class CheckerTests
         var json = FactsJson.Serialize(facts);
         var back = FactsJson.Deserialize<Facts>(json);
         Assert.Equal(facts.Dependencies.Count, back.Dependencies.Count);
+        Assert.Equal(facts.Types.Count, back.Types.Count);
         Assert.Equal(facts.Map.Edges.Count, back.Map.Edges.Count);
-        Assert.Equal("a.x", back.Map.Nodes["a.x"] is { IsLeaf: true } ? "a.x" : "");
+        Assert.True(back.Map.Nodes["a.x"].IsLeaf);
         Assert.Equal(ArchMap.Declared, back.Map.Policies.Root.Edges);
     }
 }

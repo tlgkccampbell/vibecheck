@@ -10,12 +10,19 @@ public class ChangesetTests
 {
     private static Facts Base() => Checker.Run(TestData.Map(), TestData.Analysis(), new CheckOptions { Commit = "base" });
 
+    private static ArchMap Relaxed(ArchMap map) => new()
+    {
+        Solution = map.Solution, Nodes = map.Nodes, Externals = map.Externals, Edges = map.Edges,
+        Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Observed, Externals = ArchMap.Declared } },
+    };
+
     [Fact]
     public void NoChangeProducesEmptyStructureAndUnchangedContent()
     {
         var cs = ChangesetBuilder.Build(Base(), Base());
         Assert.Empty(cs.Structural.Nodes);
         Assert.Empty(cs.Structural.Edges);
+        Assert.Empty(cs.Structural.Types);
         Assert.All(cs.Files, f => Assert.Equal("unchanged", f.Status));
         Assert.Equal("unchanged", cs.Content["root"].Status);
         Assert.All(cs.Edges, e => Assert.Equal("unchanged", e.Status));
@@ -26,7 +33,7 @@ public class ChangesetTests
     {
         var map = TestData.Map();
         map.Edges.Add(new EdgeSpec { From = "b", To = "a" });
-        var analysis = TestData.Analysis([new RawDependency(TestData.B1, TestData.X1, "calls", "A.X.Thing.Go", "Thing", 7)]);
+        var analysis = TestData.Analysis([new RawDependency(TestData.Service, TestData.Thing, "calls", "A.X.Thing.Go", TestData.B1, 7)]);
         var head = Checker.Run(map, analysis, new CheckOptions { Commit = "head" });
         Assert.Empty(head.Violations);
 
@@ -44,9 +51,8 @@ public class ChangesetTests
     public void UnjustifiedEdgeAdditionIsGratuitous()
     {
         var map = TestData.Map();
-        map.Edges.Add(new EdgeSpec { From = "b", To = "a", Asserted = false });
-        var relaxed = new ArchMap { Solution = map.Solution, Nodes = map.Nodes, Externals = map.Externals, Edges = map.Edges, Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Observed, Externals = ArchMap.Declared } } };
-        var head = Checker.Run(relaxed, TestData.Analysis());
+        map.Edges.Add(new EdgeSpec { From = "b", To = "a" });
+        var head = Checker.Run(Relaxed(map), TestData.Analysis());
         var cs = ChangesetBuilder.Build(Base(), head);
         Assert.True(Assert.Single(cs.Structural.Edges).Gratuitous);
         Assert.Contains(cs.Structural.Policies, p => p.Level == "root" && p.To == ArchMap.Observed);
@@ -57,8 +63,7 @@ public class ChangesetTests
     {
         var map = TestData.Map();
         map.Edges.RemoveAll(e => e.From == "b" && e.To == "shared");
-        var relaxed = new ArchMap { Solution = map.Solution, Nodes = map.Nodes, Externals = map.Externals, Edges = map.Edges, Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Observed, Externals = ArchMap.Declared } } };
-        var head = Checker.Run(relaxed, TestData.Analysis());
+        var head = Checker.Run(Relaxed(map), TestData.Analysis());
         var cs = ChangesetBuilder.Build(Base(), head);
         var removed = Assert.Single(cs.Structural.Edges);
         Assert.Equal("removed", removed.Op);
@@ -82,10 +87,21 @@ public class ChangesetTests
     }
 
     [Fact]
+    public void AFileCountsUnderEveryLeafItsTypesBindTo()
+    {
+        var analysis = TestData.Analysis(extraTypes: [new TypeInfo("B.InShared", "Example.B", [TestData.S1])]);
+        var baseFacts = Checker.Run(TestData.Map(), analysis);
+        var changed = analysis with { Files = analysis.Files.Select(f => f.Path == TestData.S1 ? f with { Hash = "changed" } : f).ToList() };
+        var cs = ChangesetBuilder.Build(baseFacts, Checker.Run(TestData.Map(), changed));
+        Assert.Equal("modified", cs.Content["shared"].Status);
+        Assert.Equal("modified", cs.Content["b"].Status);
+    }
+
+    [Fact]
     public void AddedLeafBindingNothingIsGratuitous()
     {
         var map = TestData.Map();
-        map.Nodes["c"] = new NodeSpec { Name = "C", Bind = ["src/C/**/*.cs"] };
+        map.Nodes["c"] = new NodeSpec { Name = "C", Bind = ["C.**"] };
         var head = Checker.Run(map, TestData.Analysis());
         var cs = ChangesetBuilder.Build(Base(), head);
         var node = Assert.Single(cs.Structural.Nodes);
@@ -93,15 +109,27 @@ public class ChangesetTests
     }
 
     [Fact]
-    public void RemovedLeafWhoseBindingsStillMatchIsGratuitous()
+    public void RemovedLeafWhosePatternsStillMatchIsGratuitous()
     {
-        var head = Checker.Run(TestData.Map(), TestData.Analysis());
         var baseMap = TestData.Map();
-        baseMap.Nodes["c"] = new NodeSpec { Name = "C", Bind = ["src/B/B1.cs"] };
+        baseMap.Nodes["c"] = new NodeSpec { Name = "C", Bind = ["B.Service"] };
         var baseFacts = Checker.Run(baseMap, TestData.Analysis());
+        Assert.Equal("c", baseFacts.Types.Single(t => t.Name == TestData.Service).Leaf);
+        var head = Checker.Run(TestData.Map(), TestData.Analysis());
         var cs = ChangesetBuilder.Build(baseFacts, head);
         var node = Assert.Single(cs.Structural.Nodes);
         Assert.Equal(("c", "removed", true), (node.Id, node.Op, node.Gratuitous));
+        var move = Assert.Single(cs.Structural.Types);
+        Assert.Equal((TestData.Service, "c", "b"), (move.Name, move.LeafBase, move.LeafHead));
+    }
+
+    [Fact]
+    public void TypeMovedByAttributeIsStructural()
+    {
+        var head = Checker.Run(TestData.Map(), TestData.Analysis(adjust: t => t.Name == TestData.Helper ? t with { Attribute = "a.y" } : t));
+        var cs = ChangesetBuilder.Build(Base(), head);
+        var move = Assert.Single(cs.Structural.Types);
+        Assert.Equal((TestData.Helper, "a.x", "a.y", "attribute"), (move.Name, move.LeafBase, move.LeafHead, move.By));
     }
 
     [Fact]
@@ -109,7 +137,7 @@ public class ChangesetTests
     {
         var map = TestData.Map();
         map.Nodes["a"] = map.Nodes["a"] with { Edges = ArchMap.Observed };
-        var analysis = TestData.Analysis([new RawDependency(TestData.Y1, TestData.X1, "calls", "A.X.Thing.Back", "Thing", 2)]);
+        var analysis = TestData.Analysis([new RawDependency(TestData.Other, TestData.Thing, "calls", "A.X.Thing.Back", TestData.Y1, 2)]);
         var head = Checker.Run(map, analysis);
         Assert.Empty(head.Violations);
         var baseFacts = Checker.Run(map, TestData.Analysis());

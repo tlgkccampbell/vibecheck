@@ -20,6 +20,9 @@ public sealed record StructuralDiff
     public required List<NodeStructuralChange> Nodes { get; init; }
     public required List<EdgeStructuralChange> Edges { get; init; }
     public required List<PolicyChange> Policies { get; init; }
+
+    /// <summary>Types that bind to a different leaf at head than at base. Membership is structure, so these are listed here.</summary>
+    public required List<TypeMove> Types { get; init; }
 }
 
 /// <summary>A node or external added, removed or modified in the map, with the evidence that justifies it. A gratuitous change is one the minimality rules do not justify.</summary>
@@ -30,10 +33,14 @@ public sealed record EdgeStructuralChange(string Level, string From, string To, 
 
 public sealed record PolicyChange(string Level, string From, string To);
 
+/// <summary>A type whose leaf changed between base and head, and how it is bound at head.</summary>
+public sealed record TypeMove(string Name, string? LeafBase, string? LeafHead, string? By);
+
 /// <summary>File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>, <c>modified</c>, <c>children</c> or <c>unchanged</c>.</summary>
 public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status);
 
-public sealed record FileChange(string Path, string Status, string? LeafBase, string? LeafHead);
+/// <summary>A file's change status and the leaves its types bound to at base and at head.</summary>
+public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead);
 
 /// <summary>A lifted edge with its reference counts at base and head. Undeclared marks a new edge at an observed level, which no map change approved.</summary>
 public sealed record EdgeChange(string Level, string From, string To, int Base, int Head, string Status, bool Undeclared);

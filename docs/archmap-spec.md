@@ -14,10 +14,6 @@ The map is a specification, not documentation. Everything the viewer draws is a 
 the checker has established, and every dependency in the code must correspond to
 something the map permits. The two cannot drift silently in either direction.
 
-> Status: this revision moves the unit of partition from files to types. The
-> implementation in this repository still partitions by file and will be brought to
-> this revision next.
-
 ## 1. Files
 
 | File | Purpose | Reviewed as |
@@ -278,6 +274,13 @@ Resolution details that matter in C#:
 - `using` directives are not dependencies. A namespace import creates no edge.
 - References within one type are not dependencies. References between two types in
   the same file are, and lift to the leaf they share when they share one.
+- Anonymous types are not types of the map, and a reference to one creates no edge.
+  A tuple resolves to the framework's tuple type, which the core-library rule below
+  drops.
+- A fully qualified name declared in more than one assembly, such as a generator's
+  helper emitted into every project, is prefixed with the assembly and `::` so that
+  each type keeps its own identity. Patterns match the plain name together with the
+  assembly.
 - Symbols with no source in the solution resolve to an external by assembly name.
   References to the core library, meaning the assembly that defines `System.Object`
   in the compilation, are never recorded, since every type would carry them. Other

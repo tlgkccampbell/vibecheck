@@ -98,7 +98,7 @@ public static class Program
         var progress = new Progress<string>(m => Console.Error.WriteLine("  " + m));
         var sw = Stopwatch.StartNew();
         var result = await RoslynAnalyzer.AnalyzeAsync(root, solutionPath, progress);
-        Console.Error.WriteLine($"  analyzed {result.Files.Count} files, {result.Dependencies.Count} dependencies in {sw.Elapsed.TotalSeconds:F1}s");
+        Console.Error.WriteLine($"  analyzed {result.Types.Count} types in {result.Files.Count} files, {result.Dependencies.Count} dependencies in {sw.Elapsed.TotalSeconds:F1}s");
         foreach (var w in result.Warnings) Console.Error.WriteLine("  warning: " + w);
         return result;
     }
@@ -143,7 +143,7 @@ public static class Program
         foreach (var w in facts.Warnings) Console.Error.WriteLine("warning: " + w);
         if (facts.Passed)
         {
-            Console.WriteLine($"ok: {facts.Files.Count} files, {facts.Dependencies.Count} dependencies, {facts.Map.Edges.Count} declared edges");
+            Console.WriteLine($"ok: {facts.Types.Count} types in {facts.Files.Count} files, {facts.Dependencies.Count} dependencies, {facts.Map.Edges.Count} declared edges");
             return 0;
         }
         foreach (var v in facts.Violations)

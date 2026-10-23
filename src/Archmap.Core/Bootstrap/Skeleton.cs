@@ -5,8 +5,8 @@ namespace Archmap.Bootstrap;
 
 /// <summary>
 /// Builds the deterministic skeleton map of <c>docs/archmap-spec.md</c> section 5.1:
-/// one top-level node per project and one node per directory that contains compiled
-/// files, every level observed, no edges declared.
+/// one top-level node per project and one node per namespace segment beyond the
+/// project's root namespace, every level observed, no edges declared.
 /// </summary>
 public static class Skeleton
 {
@@ -15,32 +15,97 @@ public static class Skeleton
         var map = new ArchMap { Version = 0, Solution = solutionRelativePath.Replace('\\', '/') };
         var prefix = CommonPrefixSegments(analysis.Projects.Select(p => p.Name).ToList());
         var topLevelIds = new HashSet<string>(StringComparer.Ordinal);
+        var typesByAssembly = analysis.Types.GroupBy(t => t.Assembly, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
         foreach (var project in analysis.Projects.OrderBy(p => p.Name, StringComparer.Ordinal))
         {
-            if (project.Files.Count == 0) continue;
+            if (!typesByAssembly.TryGetValue(project.AssemblyName, out var types) || types.Count == 0) continue;
             var stripped = string.Join('.', project.Name.Split('.').Skip(prefix));
             var id = Unique(Identifiers.NormalizeSegment(stripped), topLevelIds);
-            var root = new Dir();
-            var linked = new List<string>();
-            var dirPrefix = project.Directory.Length == 0 ? "" : project.Directory.Replace('\\', '/') + "/";
-            foreach (var file in project.Files)
+            // A pattern is qualified when another assembly declares types it would otherwise
+            // match: the namespace itself for a `*` pattern, the namespace or any beneath it for `**`.
+            bool Shared(string ns, bool recursive) => analysis.Types.Any(t => t.Assembly != project.AssemblyName
+                && (t.Namespace == ns || (recursive && t.Namespace.StartsWith(ns + ".", StringComparison.Ordinal))));
+            string Qualify(string pattern, string ns, bool recursive) => Shared(ns, recursive) ? project.AssemblyName + "::" + pattern : pattern;
+
+            var namespaced = types.Where(t => t.Namespace.Length > 0).ToList();
+            var global = types.Where(t => t.Namespace.Length == 0).ToList();
+            // The root namespace comes from hand-written types. A generator that emits into
+            // its own namespace, as the regex generator does, must not pull the root up to nothing.
+            var handWritten = namespaced.Where(t => t.Generator is null).Select(t => t.Namespace).ToList();
+            var rootNs = RootNamespace(handWritten.Count > 0 ? handWritten : namespaced.Select(t => t.Namespace).ToList());
+            var tree = new Ns();
+            foreach (var t in namespaced)
             {
-                if (dirPrefix.Length > 0 && !file.StartsWith(dirPrefix, StringComparison.Ordinal)) { linked.Add(file); continue; }
-                var rel = file[dirPrefix.Length..];
-                var segments = rel.Split('/');
-                var dir = root;
-                foreach (var segment in segments.Take(segments.Length - 1)) dir = dir.Child(segment);
-                dir.Files.Add(file);
+                var under = rootNs.Length > 0 && (t.Namespace == rootNs || t.Namespace.StartsWith(rootNs + ".", StringComparison.Ordinal));
+                var rest = !under ? t.Namespace : t.Namespace == rootNs ? "" : t.Namespace[(rootNs.Length + 1)..];
+                var node = tree;
+                if (!under) node = node.Child("");
+                foreach (var segment in rest.Split('.', StringSplitOptions.RemoveEmptyEntries)) node = node.Child(segment);
+                node.Types++;
             }
-            Emit(map, root, id, project.Name, project.Directory.Replace('\\', '/'), forceContainer: linked.Count > 0);
-            if (linked.Count > 0)
+
+            if (global.Count > 0 && namespaced.Count == 0)
             {
-                map.Nodes[id + ".linked"] = new NodeSpec { Name = "linked", Purpose = "Files compiled from outside the project directory.", Bind = linked };
+                map.Nodes[id] = new NodeSpec { Name = project.Name, Bind = [project.AssemblyName + "::*"] };
+                continue;
+            }
+            Emit(map, tree, id, project.Name, rootNs, Qualify, forceContainer: global.Count > 0);
+            if (global.Count > 0)
+            {
+                map.Nodes[id + ".global"] = new NodeSpec { Name = "global", Purpose = "Types in the global namespace.", Bind = [project.AssemblyName + "::*"] };
             }
         }
         AddExternals(map, analysis);
         return map;
+    }
+
+    /// <summary>
+    /// Emits the node for a namespace: a leaf when it has no child namespaces, else a
+    /// container with a <c>self</c> leaf for its own types. A child keyed by the empty
+    /// string holds namespaces outside the project's root namespace, which are emitted
+    /// from the top of the namespace hierarchy under the same node.
+    /// </summary>
+    private static void Emit(ArchMap map, Ns ns, string id, string name, string fullNs, Func<string, string, bool, string> qualify, bool forceContainer = false)
+    {
+        if (ns.Children.Count == 0 && !forceContainer)
+        {
+            map.Nodes[id] = new NodeSpec { Name = name, Bind = [qualify(Pattern(fullNs, recursive: true), fullNs, true)] };
+            return;
+        }
+        map.Nodes[id] = new NodeSpec { Name = name };
+        if (ns.Types > 0)
+        {
+            map.Nodes[id + ".self"] = new NodeSpec { Name = "self", Bind = [qualify(Pattern(fullNs, recursive: false), fullNs, false)] };
+        }
+        var used = new HashSet<string>(StringComparer.Ordinal) { "self", "global" };
+        foreach (var (segment, child) in ns.Children.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (segment.Length == 0)
+            {
+                foreach (var (outsideSegment, outside) in child.Children.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                {
+                    var outsideId = Unique(Identifiers.NormalizeSegment(outsideSegment), used);
+                    Emit(map, outside, id + "." + outsideId, outsideSegment, outsideSegment, qualify);
+                }
+                continue;
+            }
+            var childId = Unique(Identifiers.NormalizeSegment(segment), used);
+            Emit(map, child, id + "." + childId, segment, fullNs.Length == 0 ? segment : fullNs + "." + segment, qualify);
+        }
+    }
+
+    private static string Pattern(string ns, bool recursive) =>
+        (ns.Length == 0 ? "" : ns + ".") + (recursive ? "**" : "*");
+
+    /// <summary>Returns the longest namespace prefix, in whole segments, shared by every namespace in the list.</summary>
+    internal static string RootNamespace(IReadOnlyList<string> namespaces)
+    {
+        if (namespaces.Count == 0) return "";
+        var split = namespaces.Select(n => n.Split('.')).ToList();
+        var n = 0;
+        while (split.All(s => s.Length > n && s[n] == split[0][n])) n++;
+        return string.Join('.', split[0].Take(n));
     }
 
     /// <summary>The assembly name patterns that the skeleton binds to one <c>framework</c> external.</summary>
@@ -55,8 +120,7 @@ public static class Skeleton
     {
         var assemblies = analysis.ExternalReferences.Select(e => e.Assembly).Distinct(StringComparer.Ordinal).OrderBy(a => a, StringComparer.Ordinal).ToList();
         if (assemblies.Count == 0) return;
-        var framework = assemblies.Where(IsFramework).ToList();
-        if (framework.Count > 0)
+        if (assemblies.Any(IsFramework))
         {
             map.Externals["framework"] = new ExternalSpec { Name = "Framework", Purpose = "Framework assemblies other than the core library.", Bind = FrameworkPatterns };
         }
@@ -70,29 +134,6 @@ public static class Skeleton
 
     private static bool IsFramework(string assembly) =>
         FrameworkPatterns.Any(p => p.EndsWith('*') ? assembly.StartsWith(p[..^1], StringComparison.Ordinal) : assembly == p);
-
-    private static void Emit(ArchMap map, Dir dir, string id, string name, string path, bool forceContainer = false)
-    {
-        if (dir.Children.Count == 0 && !forceContainer)
-        {
-            map.Nodes[id] = new NodeSpec { Name = name, Bind = [Glob(path, recursive: true)] };
-            return;
-        }
-        map.Nodes[id] = new NodeSpec { Name = name };
-        if (dir.Files.Count > 0)
-        {
-            map.Nodes[id + ".self"] = new NodeSpec { Name = "self", Bind = [Glob(path, recursive: false)] };
-        }
-        var used = new HashSet<string>(StringComparer.Ordinal) { "self", "linked" };
-        foreach (var (segment, child) in dir.Children.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-        {
-            var childId = Unique(Identifiers.NormalizeSegment(segment), used);
-            Emit(map, child, id + "." + childId, segment, path.Length == 0 ? segment : path + "/" + segment);
-        }
-    }
-
-    private static string Glob(string dir, bool recursive) =>
-        (dir.Length == 0 ? "" : dir + "/") + (recursive ? "**/*.cs" : "*.cs");
 
     private static string Unique(string id, HashSet<string> used)
     {
@@ -111,14 +152,14 @@ public static class Skeleton
         return n;
     }
 
-    private sealed class Dir
+    private sealed class Ns
     {
-        public SortedDictionary<string, Dir> Children { get; } = new(StringComparer.Ordinal);
-        public List<string> Files { get; } = [];
+        public SortedDictionary<string, Ns> Children { get; } = new(StringComparer.Ordinal);
+        public int Types { get; set; }
 
-        public Dir Child(string segment)
+        public Ns Child(string segment)
         {
-            if (!Children.TryGetValue(segment, out var d)) Children[segment] = d = new Dir();
+            if (!Children.TryGetValue(segment, out var d)) Children[segment] = d = new Ns();
             return d;
         }
     }

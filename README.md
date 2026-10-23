@@ -1,9 +1,9 @@
 # archviz
 
 Tooling for reviewing large, generated pull requests at the architecture level. A
-checked-in architecture map binds code to logical components, a checker holds the map
-and the code to each other, and a viewer renders changesets as a schematic that
-reviewers drill into.
+checked-in architecture map binds types to logical components by namespace pattern
+or by an `[Archmap]` attribute, a checker holds the map and the code to each other,
+and a viewer renders changesets as a schematic that reviewers drill into.
 
 The design is in [docs/archmap-spec.md](docs/archmap-spec.md). The interaction mock is
 in [mock/](mock/).

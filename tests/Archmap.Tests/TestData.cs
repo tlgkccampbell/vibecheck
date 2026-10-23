@@ -15,67 +15,81 @@ internal static class TestData
     public const string B1 = "src/B/B1.cs";
     public const string S1 = "src/Shared/S1.cs";
 
+    public const string Thing = "A.X.Thing";
+    public const string Helper = "A.X.Helper";
+    public const string Other = "A.Y.Other";
+    public const string Service = "B.Service";
+    public const string Result = "Shared.Result";
+    public const string Error = "Shared.Error";
+
     /// <summary>A map with a declared root, a declared container <c>a</c> with two leaves, leaf <c>b</c>, leaf <c>shared</c> and external <c>ext</c>.</summary>
     public static ArchMap Map()
     {
-        var map = new ArchMap { Version = 0, Solution = "Example.sln" };
+        var map = new ArchMap
+        {
+            Version = 0,
+            Solution = "Example.sln",
+            Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Declared, Externals = ArchMap.Declared } },
+        };
         map.Nodes["a"] = new NodeSpec { Name = "A", Edges = ArchMap.Declared };
-        map.Nodes["a.x"] = new NodeSpec { Name = "X", Bind = ["src/A/X/**/*.cs"] };
-        map.Nodes["a.y"] = new NodeSpec { Name = "Y", Bind = ["src/A/Y/**/*.cs"] };
-        map.Nodes["b"] = new NodeSpec { Name = "B", Bind = ["src/B/**/*.cs"] };
-        map.Nodes["shared"] = new NodeSpec { Name = "Shared", Bind = ["src/Shared/**/*.cs"] };
+        map.Nodes["a.x"] = new NodeSpec { Name = "X", Bind = ["A.X.**"] };
+        map.Nodes["a.y"] = new NodeSpec { Name = "Y", Bind = ["A.Y.**"] };
+        map.Nodes["b"] = new NodeSpec { Name = "B", Bind = ["B.**"] };
+        map.Nodes["shared"] = new NodeSpec { Name = "Shared", Bind = ["Shared.**"] };
         map.Externals["ext"] = new ExternalSpec { Name = "Ext", Bind = ["Ext.*"] };
         map.Edges.Add(new EdgeSpec { From = "a", To = "shared" });
         map.Edges.Add(new EdgeSpec { From = "b", To = "shared" });
         map.Edges.Add(new EdgeSpec { From = "a.x", To = "a.y" });
         map.Edges.Add(new EdgeSpec { From = "a", To = "ext" });
-        return new ArchMap
-        {
-            Version = 0,
-            Solution = map.Solution,
-            Nodes = map.Nodes,
-            Externals = map.Externals,
-            Edges = map.Edges,
-            Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Declared, Externals = ArchMap.Declared } },
-        };
+        return map;
     }
 
     /// <summary>An analysis whose dependencies realize every edge of <see cref="Map"/> and nothing else.</summary>
     public static AnalysisResult Analysis(
         IEnumerable<RawDependency>? extraDependencies = null,
+        IEnumerable<TypeInfo>? extraTypes = null,
         IEnumerable<SourceFile>? extraFiles = null,
         IEnumerable<ExternalReference>? extraExternals = null,
-        IEnumerable<PartialType>? partials = null,
-        IEnumerable<GeneratedFile>? generated = null)
+        Func<TypeInfo, TypeInfo>? adjust = null)
     {
         var files = new List<SourceFile>
         {
             new(X1, "h1", "A"), new(X2, "h2", "A"), new(Y1, "h3", "A"), new(B1, "h4", "B"), new(S1, "h5", "Shared"),
         };
         if (extraFiles is not null) files.AddRange(extraFiles);
+        var types = new List<TypeInfo>
+        {
+            new(Thing, "Example.A", [X1]),
+            new(Helper, "Example.A", [X2]),
+            new(Other, "Example.A", [Y1]),
+            new(Service, "Example.B", [B1]),
+            new(Result, "Example.Shared", [S1]),
+            new(Error, "Example.Shared", [S1]),
+        };
+        if (extraTypes is not null) types.AddRange(extraTypes);
+        if (adjust is not null) types = types.Select(adjust).ToList();
         var deps = new List<RawDependency>
         {
-            new(X1, Y1, "calls", "A.Y.Thing.Run", "Thing", 10),
-            new(X1, X2, "references", "A.X.Helper", "Helper", 11),
-            new(X1, S1, "references", "Shared.Result", "Result", 12),
-            new(B1, S1, "constructs", "Shared.Error", "Error", 5),
+            new(Thing, Other, "calls", "A.Y.Other.Run", X1, 10),
+            new(Thing, Helper, "references", "A.X.Helper", X1, 11),
+            new(Thing, Result, "references", "Shared.Result", X1, 12),
+            new(Service, Error, "constructs", "Shared.Error", B1, 5),
         };
         if (extraDependencies is not null) deps.AddRange(extraDependencies);
-        var externals = new List<ExternalReference> { new(X1, "Ext.Sdk", "Ext.Sdk.Client", 20) };
+        var externals = new List<ExternalReference> { new(Thing, "Ext.Sdk", "Ext.Sdk.Client", X1, 20) };
         if (extraExternals is not null) externals.AddRange(extraExternals);
         return new AnalysisResult
         {
             Files = files,
-            GeneratedFiles = generated?.ToList() ?? [],
+            Types = types,
             Dependencies = deps,
             ExternalReferences = externals,
             Unresolvable = [],
-            PartialTypes = partials?.ToList() ?? [],
             Projects =
             [
-                new ProjectInfo("Example.A", "src/A", [X1, X2, Y1]),
-                new ProjectInfo("Example.B", "src/B", [B1]),
-                new ProjectInfo("Example.Shared", "src/Shared", [S1]),
+                new ProjectInfo("Example.A", "Example.A", "src/A"),
+                new ProjectInfo("Example.B", "Example.B", "src/B"),
+                new ProjectInfo("Example.Shared", "Example.Shared", "src/Shared"),
             ],
         };
     }

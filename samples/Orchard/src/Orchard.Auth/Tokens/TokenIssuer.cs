@@ -19,6 +19,8 @@ public sealed class TokenIssuer
         {
             return new Error("auth.expired", "The session has expired.");
         }
-        return $"{session.Id.Value:N}.{DateTimeOffset.UtcNow.Add(lifetime).ToUnixTimeSeconds()}";
+        // An anonymous type: not a type of the map, and no edge may come from referencing it.
+        var claims = new { Subject = session.Id.Value, Expires = DateTimeOffset.UtcNow.Add(lifetime).ToUnixTimeSeconds() };
+        return $"{claims.Subject:N}.{claims.Expires}";
     }
 }

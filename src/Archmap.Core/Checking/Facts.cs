@@ -13,6 +13,7 @@ public sealed record Facts
 {
     public string? Commit { get; init; }
     public required ArchMap Map { get; init; }
+    public required List<TypeFact> Types { get; init; }
     public required List<FileFact> Files { get; init; }
     public required List<DependencyFact> Dependencies { get; init; }
     public required List<ExternalRefFact> ExternalRefs { get; init; }
@@ -25,27 +26,30 @@ public sealed record Facts
     public bool Passed => Violations.Count == 0;
 }
 
-/// <summary>A compiled file and the leaf it binds to, which is absent when the partition rule failed for it. A generated file names its generator.</summary>
-public sealed record FileFact(string Path, string? Leaf, string Hash, string? Generator = null);
+/// <summary>A top-level type, the leaf it binds to, how it was bound (<c>attribute</c> or <c>pattern</c>), the files that declare it, and the generator that produced a part of it. The leaf and binding are absent when the partition rule failed for it.</summary>
+public sealed record TypeFact(string Name, string Assembly, string? Leaf, string? By, IReadOnlyList<string> Files, string? Generator = null);
+
+/// <summary>A source document, its content hash, and the leaves its types bind to. A generated document names its generator.</summary>
+public sealed record FileFact(string Path, string Hash, IReadOnlyList<string> Leaves, string? Generator = null);
 
 /// <summary>
 /// An observed dependency lifted to the level where it is checked and drawn. For a
-/// dependency between files of the same leaf, the level is the leaf and the edge is
+/// dependency between types of the same leaf, the level is the leaf and the edge is
 /// absent.
 /// </summary>
-public sealed record DependencyFact(string From, string To, string Kind, string Symbol, string Type, int Line, string Level, string[]? Edge);
+public sealed record DependencyFact(string From, string To, string Kind, string Symbol, string File, int Line, string Level, string[]? Edge);
 
 /// <summary>
-/// The references one file makes to one external assembly, resolved to the external
-/// the assembly binds to, if any, and lifted to the top-level node of the file. The
-/// symbol and line are the first reference; the count covers all of them.
+/// The references one type makes to one external assembly, resolved to the external
+/// the assembly binds to, if any, and lifted to the top-level node of the type. The
+/// symbol, file and line are the first reference; the count covers all of them.
 /// </summary>
-public sealed record ExternalRefFact(string From, string Assembly, string Symbol, int Line, int Count, string? External, string TopLevel);
+public sealed record ExternalRefFact(string From, string Assembly, string Symbol, string File, int Line, int Count, string? External, string TopLevel);
 
-public sealed record UnresolvableFact(string From, string Symbol, string Generator, int Line);
+public sealed record UnresolvableFact(string From, string Symbol, string Reason, string File, int Line);
 
-/// <summary>Counts for curation: dependencies that stay inside a node, dependencies that cross its boundary, and cycles among its children.</summary>
-public sealed record NodeMetrics(int Internal, int Crossing, List<List<string>> Cycles);
+/// <summary>Counts for curation: dependencies that stay inside a node, dependencies that cross its boundary, cycles among its children, and types bound by attribute.</summary>
+public sealed record NodeMetrics(int Internal, int Crossing, List<List<string>> Cycles, int Attributed);
 
 /// <summary>A failed rule, with the evidence that failed it and the map edit that would resolve it when one exists.</summary>
 public sealed record ViolationFact(string Rule, string Message, object? Evidence, ProposalFact? Proposal);

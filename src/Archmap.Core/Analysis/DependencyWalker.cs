@@ -5,14 +5,15 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Archmap.Analysis;
 
 /// <summary>
-/// Walks one file's syntax tree and records every symbol reference that resolves to
-/// another file, an external assembly, or a generated declaration. Namespace imports,
-/// references within the same file, and references to the core library are not
-/// recorded.
+/// Walks one document's syntax tree and records every symbol reference as a
+/// dependency from the top-level type that contains the reference to the top-level
+/// type that declares the symbol, or to an external assembly, or as unresolvable.
+/// Namespace imports, references within one type, references to the core library,
+/// and references to the <c>[Archmap]</c> attribute itself are not recorded.
 /// </summary>
 internal sealed class DependencyWalker : CSharpSyntaxWalker
 {
-    private static readonly SymbolDisplayFormat DisplayFormat = new(
+    private static readonly SymbolDisplayFormat SymbolFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
         genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
@@ -20,20 +21,28 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
 
     private readonly SemanticModel model;
     private readonly SourceResolver resolver;
-    private readonly string currentFile;
+    private readonly string file;
+    private readonly string assembly;
     private readonly IAssemblySymbol coreLibrary;
 
-    public List<RawDependency> Dependencies { get; } = [];
+    /// <summary>A dependency before duplicate names are qualified: the plain type names and the assemblies that declare them.</summary>
+    internal sealed record Walked(string FromType, string ToType, string ToAssembly, string Kind, string Symbol, int Line);
+
+    public List<Walked> Dependencies { get; } = [];
     public List<ExternalReference> ExternalReferences { get; } = [];
     public List<UnresolvableReference> Unresolvable { get; } = [];
 
-    public DependencyWalker(SemanticModel model, Compilation compilation, SourceResolver resolver, string currentFile)
+    public DependencyWalker(SemanticModel model, Compilation compilation, SourceResolver resolver, string file)
     {
         this.model = model;
         this.resolver = resolver;
-        this.currentFile = currentFile;
+        this.file = file;
+        assembly = compilation.AssemblyName ?? "";
         coreLibrary = compilation.ObjectType.ContainingAssembly;
     }
+
+    /// <summary>The assembly of the document being walked, which is the assembly of every source type in it.</summary>
+    public string Assembly => assembly;
 
     public override void VisitUsingDirective(UsingDirectiveSyntax node)
     {
@@ -61,6 +70,9 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
             if (leftSymbol is INamedTypeSymbol or INamespaceSymbol) return;
         }
 
+        var from = EnclosingTopLevelType(node);
+        if (from is null) return;
+
         var info = model.GetSymbolInfo(node);
         var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
         if (symbol is IAliasSymbol alias) symbol = alias.Target;
@@ -84,37 +96,47 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         if (symbol is IArrayTypeSymbol array) symbol = array.ElementType.OriginalDefinition;
         if (symbol is IPointerTypeSymbol) return;
 
-        var target = symbol;
-        if (target.DeclaringSyntaxReferences.Length == 0 && target.ContainingType is not null)
-        {
-            target = target.ContainingType;
-        }
-        var typeName = (symbol as INamedTypeSymbol ?? symbol.ContainingType)?.Name ?? symbol.Name;
-        var display = symbol.ToDisplayString(DisplayFormat);
+        var target = TopLevelTypeOf(symbol);
+        if (target is null || target.IsAnonymousType) return;
+        var display = symbol.ToDisplayString(SymbolFormat);
         var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+        var fromName = from.ToDisplayString(RoslynAnalyzer.TypeNameFormat);
 
         if (target.DeclaringSyntaxReferences.Length == 0)
         {
-            var assembly = symbol.ContainingAssembly;
+            var assembly = target.ContainingAssembly;
             if (assembly is null || SymbolEqualityComparer.Default.Equals(assembly, coreLibrary)) return;
-            ExternalReferences.Add(new ExternalReference(currentFile, assembly.Name, display, line));
+            ExternalReferences.Add(new ExternalReference(fromName, assembly.Name, display, file, line));
             return;
         }
 
-        // A symbol declared in several places, such as a partial type or a partial
-        // method with a generated implementation, resolves to its first compiled source
-        // declaration, then to its first generated declaration. The checker decides
-        // whether a generated file counts, so the dependency is recorded either way.
+        var targetName = target.ToDisplayString(RoslynAnalyzer.TypeNameFormat);
+        if (targetName == RoslynAnalyzer.AttributeName) return;
+        if (SymbolEqualityComparer.Default.Equals(target, from)) return;
         var paths = target.DeclaringSyntaxReferences.Select(r => r.SyntaxTree.FilePath).ToList();
-        var file = paths.Select(resolver.SourceOf).Where(p => p is not null).OrderBy(p => p, StringComparer.Ordinal).FirstOrDefault()
-            ?? paths.Select(resolver.GeneratedOf).Where(p => p is not null).OrderBy(p => p, StringComparer.Ordinal).FirstOrDefault();
-        if (file is null)
+        if (!paths.Any(p => resolver.SourceOf(p) is not null))
         {
-            Unresolvable.Add(new UnresolvableReference(currentFile, display, resolver.ReasonFor(paths.FirstOrDefault()), line));
+            Unresolvable.Add(new UnresolvableReference(fromName, display, resolver.ReasonFor(paths.FirstOrDefault()), file, line));
             return;
         }
-        if (file == currentFile) return;
-        Dependencies.Add(new RawDependency(currentFile, file, KindOf(node, symbol), display, typeName, line));
+        Dependencies.Add(new Walked(fromName, targetName, target.ContainingAssembly?.Name ?? "", KindOf(node, symbol), display, line));
+    }
+
+    /// <summary>Returns the top-level type whose declaration contains a node, or <see langword="null"/> outside any type, as in an assembly attribute.</summary>
+    private INamedTypeSymbol? EnclosingTopLevelType(SyntaxNode node)
+    {
+        var enclosing = model.GetEnclosingSymbol(node.SpanStart);
+        return TopLevelTypeOf(enclosing);
+    }
+
+    /// <summary>Returns the top-level type that declares a symbol: the symbol itself when it is a type, else its containing type, lifted out of any nesting.</summary>
+    private static INamedTypeSymbol? TopLevelTypeOf(ISymbol? symbol)
+    {
+        var type = symbol as INamedTypeSymbol ?? symbol?.ContainingType;
+        if (type is null) return null;
+        type = type.OriginalDefinition;
+        while (type.ContainingType is not null) type = type.ContainingType.OriginalDefinition;
+        return type;
     }
 
     private static bool IsNamespaceName(SyntaxNode node)
@@ -154,5 +176,4 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         }
         return symbol is IMethodSymbol ? "calls" : "references";
     }
-
 }

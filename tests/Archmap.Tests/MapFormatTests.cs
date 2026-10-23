@@ -27,7 +27,7 @@ public class MapFormatTests
         var edgesStart = text.IndexOf("\"edges\"", StringComparison.Ordinal);
         Assert.True(text.IndexOf("\"from\": \"a\"", edgesStart, StringComparison.Ordinal) < text.IndexOf("\"from\": \"b\"", edgesStart, StringComparison.Ordinal));
         Assert.Contains("{ \"from\": \"b\", \"to\": \"shared\", \"label\": \"L\", \"payload\": \"P\", \"asserted\": true }", text);
-        Assert.Contains("    \"a.x\": { \"name\": \"X\", \"bind\": [\"src/A/X/**/*.cs\"] }", text);
+        Assert.Contains("    \"a.x\": { \"name\": \"X\", \"bind\": [\"A.X.**\"] }", text);
     }
 
     [Fact]

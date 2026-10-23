@@ -1,6 +1,5 @@
 using Archmap.Checking;
 using Archmap.Model;
-using Microsoft.Extensions.FileSystemGlobbing;
 
 namespace Archmap.Diffing;
 
@@ -43,12 +42,12 @@ public static class ChangesetBuilder
         }
         foreach (var d in facts.Dependencies.Where(d => d.Edge is not null)) Add((d.Level, d.Edge![0], d.Edge[1]), d, 1);
         foreach (var e in facts.ExternalRefs.Where(e => e.External is not null))
-            Add((Identifiers.Root, e.TopLevel, e.External!), new DependencyFact(e.From, e.Assembly, "references", e.Symbol, Identifiers.LastSegmentOf(e.Symbol), e.Line, Identifiers.Root, [e.TopLevel, e.External!]), e.Count);
+            Add((Identifiers.Root, e.TopLevel, e.External!), new DependencyFact(e.From, e.Assembly, "references", e.Symbol, e.File, e.Line, Identifiers.Root, [e.TopLevel, e.External!]), e.Count);
         return groups;
     }
 
     private static List<string> Evidence(Group? g) =>
-        (g?.Examples ?? []).Select(d => $"{d.From}:{d.Line} {d.Kind} {d.Symbol}").ToList();
+        (g?.Examples ?? []).Select(d => $"{d.File}:{d.Line} {d.Kind} {d.Symbol}").ToList();
 
     private static StructuralDiff DiffStructure(Facts baseFacts, Facts headFacts,
         Dictionary<(string Level, string From, string To), Group> baseGroups,
@@ -66,16 +65,16 @@ public static class ChangesetBuilder
             var inHead = hm.Nodes.TryGetValue(id, out var h);
             if (inHead && !inBase)
             {
-                var bound = headFacts.Files.Count(f => f!.Leaf == id);
+                var bound = headFacts.Types.Count(t => t.Leaf == id);
                 var isLeaf = h!.IsLeaf;
                 nodes.Add(new NodeStructuralChange(id, "added", "node", null,
-                    isLeaf ? [$"binds {bound} file(s) at head"] : ["container"], isLeaf && bound == 0));
+                    isLeaf ? [$"binds {bound} type(s) at head"] : ["container"], isLeaf && bound == 0));
             }
             else if (inBase && !inHead)
             {
-                var stillBound = b!.IsLeaf ? MatchCount(b.Bind!, headFacts.Files.Select(f => f.Path)) : 0;
+                var stillBound = b!.IsLeaf ? MatchCount(b.Bind!, headFacts.Types) : 0;
                 nodes.Add(new NodeStructuralChange(id, "removed", "node", null,
-                    b.IsLeaf ? [$"its bindings match {stillBound} file(s) at head"] : ["container"], stillBound > 0));
+                    b.IsLeaf ? [$"its patterns match {stillBound} type(s) at head"] : ["container"], stillBound > 0));
             }
             else if (inBase && inHead)
             {
@@ -135,17 +134,23 @@ public static class ChangesetBuilder
                 if (details.Count > 0) edges.Add(new EdgeStructuralChange(level, key.From, key.To, "modified", baseRefs, headRefs, string.Join("; ", details), [], false));
             }
         }
-        return new StructuralDiff { Nodes = nodes, Edges = edges, Policies = policies };
+
+        var baseTypes = baseFacts.Types.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var types = headFacts.Types
+            .Where(t => baseTypes.TryGetValue(t.Name, out var bt) && bt.Leaf != t.Leaf)
+            .Select(t => new TypeMove(t.Name, baseTypes[t.Name].Leaf, t.Leaf, t.By))
+            .OrderBy(m => m.Name, StringComparer.Ordinal)
+            .ToList();
+        return new StructuralDiff { Nodes = nodes, Edges = edges, Policies = policies, Types = types };
     }
 
     private static bool SeqEq(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.SequenceEqual(b, StringComparer.Ordinal));
 
-    private static int MatchCount(IReadOnlyList<string> patterns, IEnumerable<string> paths)
+    private static int MatchCount(IReadOnlyList<string> patterns, IEnumerable<TypeFact> types)
     {
-        var m = new Matcher(StringComparison.Ordinal);
-        foreach (var p in patterns) m.AddInclude(p);
-        return paths.Count(p => m.Match(p).HasMatches);
+        var parsed = patterns.Select(p => TypePattern.TryParse(p, out var tp, out _) ? tp : null).Where(p => p is not null).ToList();
+        return types.Count(t => parsed.Any(p => p!.Matches(Archmap.Analysis.TypeNames.Plain(t.Name), t.Assembly)));
     }
 
     private static List<FileChange> DiffFiles(Facts baseFacts, Facts headFacts)
@@ -158,21 +163,23 @@ public static class ChangesetBuilder
             baseFiles.TryGetValue(path, out var b);
             headFiles.TryGetValue(path, out var h);
             var status = b is null ? "added" : h is null ? "removed" : b.Hash != h.Hash ? "modified" : "unchanged";
-            result.Add(new FileChange(path, status, b?.Leaf, h?.Leaf));
+            result.Add(new FileChange(path, status, b?.Leaves ?? [], h?.Leaves ?? []));
         }
         return result;
     }
 
+    /// <summary>Rolls file changes up through the hierarchy. A file counts under every node that contains any leaf its types bind to.</summary>
     private static SortedDictionary<string, NodeContent> Rollup(ArchMap baseMap, ArchMap headMap, List<FileChange> files)
     {
+        static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsUnder(l, id));
         var content = new SortedDictionary<string, NodeContent>(StringComparer.Ordinal);
         var ids = new[] { Identifiers.Root }.Concat(headMap.Nodes.Keys.Union(baseMap.Nodes.Keys)).Distinct().OrderBy(k => k, StringComparer.Ordinal);
         foreach (var id in ids)
         {
-            var total = files.Count(f => f.LeafHead is not null && Identifiers.IsUnder(f.LeafHead, id));
-            var added = files.Count(f => f.Status == "added" && f.LeafHead is not null && Identifiers.IsUnder(f.LeafHead, id));
-            var removed = files.Count(f => f.Status == "removed" && f.LeafBase is not null && Identifiers.IsUnder(f.LeafBase, id));
-            var modified = files.Count(f => f.Status == "modified" && f.LeafHead is not null && Identifiers.IsUnder(f.LeafHead, id));
+            var total = files.Count(f => Under(f.LeavesHead, id));
+            var added = files.Count(f => f.Status == "added" && Under(f.LeavesHead, id));
+            var removed = files.Count(f => f.Status == "removed" && Under(f.LeavesBase, id));
+            var modified = files.Count(f => f.Status == "modified" && Under(f.LeavesHead, id));
             string status;
             if (id != Identifiers.Root && !baseMap.Nodes.ContainsKey(id)) status = "added";
             else if (id != Identifiers.Root && !headMap.Nodes.ContainsKey(id)) status = "removed";
