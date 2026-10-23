@@ -358,7 +358,7 @@
       const g = svg("g", { class: cls, "data-key": r.e.key,
         onclick: (ev) => { ev.stopPropagation(); select(r.e.key); } });
       g.append(svg("path", { d: r.d, class: "edge-hit" }));
-      g.append(svg("path", { d: r.d, class: "edge-line", "stroke-width": strokeWidth(st === "removed" ? d.base : d.head), "marker-end": `url(#arrow-${marker})` }));
+      g.append(svg("path", { d: r.d, class: "edge-line", "stroke-width": strokeWidth(st === "removed" ? d.base : d.head), "marker-end": `url(#arrow-${marker})`, "data-marker": undeclared ? "undeclared" : st }));
       edgeLayer.append(g);
 
       // Label: payload, label, delta, undeclared badge.
@@ -407,7 +407,12 @@
       else if (a.status === "added") meta = `new · ${a.files} files`;
       else meta = `${a.files} files` + (a.changed ? ` · ${a.changed} changed` : "") + (a.structural && !n.leaf ? ` · ${a.structural} structural` : "");
       g.append(text(r.x + 12, r.y + 34, meta, { class: "meta" }));
-      if (!n.leaf && !n.external) g.append(text(r.x + r.w - 10, r.y + 20, "⤵", { class: "enter-glyph", "text-anchor": "end" }));
+      if (!n.external) {
+        const glyph = text(r.x + r.w - 10, r.y + 20, n.leaf ? "≡" : "⤵", { class: "enter-glyph", "text-anchor": "end",
+          onclick: (ev) => { ev.stopPropagation(); enter(k); } });
+        glyph.append(svg("title", {}, n.leaf ? "Open files and diffs" : "Open " + n.name));
+        g.append(glyph);
+      }
       previewInto(g, k, r);
       nodeLayer.append(g);
     }
@@ -685,9 +690,24 @@
     }
   }
 
+  // Updates the selection in place. The level is not re-rendered, so a second click
+  // lands on the same element and the browser can report a double-click.
   function select(key) {
     state.selected = key;
-    mount(state.current);
+    const s = stage();
+    for (const n of s.querySelectorAll(".node.selected, .edge.selected")) {
+      n.classList.remove("selected");
+      const line = n.querySelector(".edge-line");
+      if (line) line.setAttribute("marker-end", `url(#arrow-${line.getAttribute("data-marker")})`);
+    }
+    if (key) {
+      const target = NODES[key] ? s.querySelector(`.node[data-id="${CSS.escape(key)}"]`) : s.querySelector(`.edge[data-key="${CSS.escape(key)}"]`);
+      if (target) {
+        target.classList.add("selected");
+        const line = target.querySelector(".edge-line");
+        if (line) line.setAttribute("marker-end", "url(#arrow-selected)");
+      }
+    }
     renderDetails();
   }
 
