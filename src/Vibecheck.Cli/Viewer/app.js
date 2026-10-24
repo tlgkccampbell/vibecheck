@@ -729,7 +729,10 @@
     selected: null,
     // The selections the details panel came from, most recent last, so that its Back button can return to them.
     back: [],
-    opts: { threshold: "1", externals: false, dim: true, mute: true },
+    // The talk option keeps only the blocks with unresolved threads in the Changes panel.
+    opts: { threshold: "1", externals: false, dim: true, mute: true, talk: false },
+    // The tab the page shows: "map" or "conversation".
+    tab: "map",
     // The reviewed files whose diffs the reader has shown, by path.
     expanded: new Set(),
     current: null, // { level, layout }
@@ -890,6 +893,16 @@
         bg.append(text(r.x + r.w - bw / 2 - 8, r.y + 3, badge.toUpperCase(), { class: "badge-text", "text-anchor": "middle" }));
         g.append(bg);
       }
+      const talk = openThreadsUnder(c.key).length;
+      if (talk) {
+        const tw = String(talk).length * MONO.badge + 26, tx = r.x + 8;
+        const tg = svg("g", { class: "talk-badge" });
+        tg.append(svg("rect", { x: tx, y: r.y - 8, width: tw, height: 15, rx: 7.5, class: "talk-bg" }));
+        tg.append(svg("path", { d: `M${tx + 7},${r.y - 4} h9 v6 h-5 l-2.5,2.5 v-2.5 h-1.5 z`, class: "talk-icon" }));
+        tg.append(text(tx + 19, r.y + 3, String(talk), { class: "talk-text" }));
+        tg.append(svg("title", {}, `${plural(talk, "unresolved review thread", "unresolved review threads")} on files under ${nameOf(c.id)}`));
+        g.append(tg);
+      }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
       g.append(text(r.x + 10, r.y + 43, fitText(meta, r.w - 20, MONO.meta), { class: "meta" }));
@@ -1018,7 +1031,9 @@
     return td;
   }
 
-  function diffTable(path, hunk) {
+  // Returns the split diff of one hunk of a file. The threads given, keyed by hunk and line index as threadsOf keys
+  // them, show under their lines.
+  function diffTable(path, hunk, index, threads) {
     const nums = parseHeader(hunk.header);
     let la = nums.a, lb = nums.b;
     // The columns are fixed: each line-number column fits the hunk's largest line number, and the two code columns
@@ -1040,6 +1055,8 @@
         codeCell(lk, text(row.l), lit && row.l !== null ? lit.left[row.l] : null),
         el("td", { class: "ln " + rk }, row.r === null ? "" : String(lb++)),
         codeCell(rk, text(row.r), lit && row.r !== null ? lit.right[row.r] : null)));
+      const here = threads ? [...new Set([row.l, row.r])].filter((i) => i !== null).flatMap((i) => threads.get(index + ":" + i) || []) : [];
+      if (here.length) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, ...here.map((t) => threadBox(t)))));
     }
     table.append(body);
     return el("div", { class: "diff-scroll" }, table);
@@ -1080,10 +1097,13 @@
     head.append(el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path));
     if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
     if (done && REASON_TEXT[REVIEWED.get(path)]) head.append(el("span", { class: "file-note" }, REASON_TEXT[REVIEWED.get(path)]));
+    const talk = threadsOf(path);
+    const open = [...talk.lines.values()].flat().concat(talk.top).filter((t) => !t.isResolved).length;
+    if (open) head.append(el("span", { class: "file-note talk-note" }, plural(open, "unresolved thread", "unresolved threads")));
     const muted = done && state.opts.mute;
     const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
     const diffs = el("div", { class: "file-diffs" });
-    const fill = () => { if (!diffs.childElementCount) for (const h of hunks) diffs.append(diffTable(path, h)); };
+    const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(diffTable(path, h, i, talk.lines))); };
     if (muted && !state.expanded.has(path)) diffs.hidden = true;
     else fill();
     if (muted && hunks.length) {
@@ -1094,6 +1114,7 @@
         ev.target.textContent = show ? "Hide diff" : "Show diff";
       } }, diffs.hidden ? "Show diff" : "Hide diff"));
     }
+    if (talk.top.length) block.append(el("div", { class: "file-threads" }, ...talk.top.map((t) => threadBox(t, { top: true }))));
     block.append(diffs);
     return block;
   }
@@ -1227,6 +1248,8 @@
   function changeTree(id) {
     const st = statusOf(id);
     if (st === "unchanged") return null;
+    const talk = openThreadsUnder(id).length;
+    if (state.opts.talk && !talk) return null;
     const leaves = leavesUnder(id);
     const c = contentOf(id);
     const li = el("li");
@@ -1234,7 +1257,7 @@
     const isCur = !loc().leaf && !loc().view && loc().level === id || loc().leaf === id;
     li.append(el("button", { class: "row st-" + st + (isCur ? " current" : ""), onclick: () => showInContext(id) },
       el("span", { class: "dot" }), treeIcon(id), el("span", { class: "row-name" }, nameOf(id)),
-      el("span", { class: "row-meta" }, st === "added" ? "new" : st === "removed" ? "removed" : `${c.added + c.removed + c.modified} files · ${edges} edges`)));
+      el("span", { class: "row-meta" }, state.opts.talk ? plural(talk, "thread", "threads") : st === "added" ? "new" : st === "removed" ? "removed" : `${c.added + c.removed + c.modified} files · ${edges} edges`)));
     if (!isLeaf(id)) {
       const kids = childrenOf(id).map(changeTree).filter(Boolean);
       if (kids.length) li.append(el("ul", {}, ...kids));
@@ -1245,6 +1268,9 @@
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
+    const talk = openThreadsUnder(ROOT).length;
+    if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
+      el("input", { type: "checkbox", checked: state.opts.talk, onchange: (ev) => { state.opts.talk = ev.target.checked; renderChanges(); } }), ` Only unresolved threads (${talk})`));
     const tree = changeTree(ROOT);
     box.append(tree ? el("ul", { class: "tree" }, tree) : el("p", { class: "hint" }, "No file changed under any leaf."));
 
@@ -1283,6 +1309,7 @@
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
       if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf) || "");
+      box.append(threadList(l.leaf) || "");
       box.append(el("p", { class: "hint" }, "Changed types show their diffs. Click an edge row to see the type pairs behind it. Esc goes back to the schematic."));
       return;
     }
@@ -1309,6 +1336,7 @@
       if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
       const bar = reviewedBar(id);
       if (bar) box.append(bar);
+      box.append(threadList(id) || "");
       const m = metricsOf(id);
       if (m.head) box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
       else if (id === ROOT) box.append(kv("Types", deltaText(CS.types.filter((t) => t.leafBase).length, CS.types.filter((t) => t.leafHead).length)));
@@ -1338,6 +1366,7 @@
       box.append(kv("Files", `${content.files}` + (content.added + content.removed + content.modified ? ` · +${content.added} −${content.removed} ~${content.modified}` : "")));
       const bar = reviewedBar(child.key);
       if (bar) box.append(bar);
+      box.append(threadList(child.key) || "");
       if (level.inCycle.has(child.key)) {
         const cyc = level.cycles.find((c) => c.includes(child.key));
         box.append(el("p", { class: "warn" }, "In a cycle with " + cyc.filter((k) => k !== child.key).map(nameOf).join(", ") + "."));
@@ -1965,7 +1994,8 @@
   // The review's pull request as the server's pull events deliver it, and why it is stale when GitHub cannot be read.
   // The bar under the top bar shows its state, and a notice offers a new review when the author pushes. See
   // docs/pull-requests.md sections 2, 3.3 and 4.6.
-  const PULL = { snapshot: META.pull || null, stale: META.pullStale || null };
+  // Each thread's place in this review's diffs arrives with the snapshot, by thread identifier (section 7.1).
+  const PULL = { snapshot: META.pull || null, stale: META.pullStale || null, places: META.pullThreads || {} };
   // How the bar words GitHub's check rollup states, review decisions and merge states, each with the pill's tone.
   const CHECK_TEXT = { SUCCESS: ["checks pass", "good"], FAILURE: ["checks fail", "bad"], ERROR: ["checks fail", "bad"], PENDING: ["checks pending", "wait"], EXPECTED: ["checks pending", "wait"] };
   const DECISION_TEXT = { APPROVED: ["approved", "good"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "wait"] };
@@ -1974,19 +2004,22 @@
   // Returns a pill with a text and its tone, or null when there is no text.
   const pill = (pair) => pair ? el("span", { class: "pill " + pair[1] }, pair[0]) : null;
 
-  // Shows the pull request's number, title, author, state, checks and review decision in the bar, and the new-push
-  // notice when its head has moved past the review's.
+  // Shows the tabs, the pull request's number, title, author, state, checks and review decision, and the size of the
+  // viewer's pending review in the bar, and the new-push notice when its head has moved past the review's.
   function renderPull() {
-    const bar = $("#pullbar"), p = PULL.snapshot;
+    const bar = $("#pullbar"), p = PULL.snapshot, d = discussion();
     if (!p) { bar.hidden = true; $("#pushnotice").hidden = true; return; }
-    const state = p.state === "OPEN" ? (p.isDraft ? "draft" : "open") : p.state.toLowerCase();
+    const tab = (name, label) => el("button", { class: state.tab === name ? "on" : "", onclick: () => showTab(name) }, label);
+    const pr = p.state === "OPEN" ? (p.isDraft ? "draft" : "open") : p.state.toLowerCase();
     bar.replaceChildren(...[
+      el("span", { class: "seg", role: "tablist" }, tab("map", "Map"), tab("conversation", "Conversation")),
       el("a", { class: "pull-number", href: p.url, target: "_blank", rel: "noopener", title: "Open the pull request on GitHub" }, "#" + p.number),
       el("span", { class: "pull-title" }, p.title),
       p.author ? el("span", { class: "by" }, "by " + p.author) : null,
-      pill([state, state === "open" ? "good" : state === "merged" ? "" : "wait"]),
+      pill([pr, pr === "open" ? "good" : pr === "merged" ? "" : "wait"]),
       pill(CHECK_TEXT[p.checks] || ["no checks", ""]),
       pill(DECISION_TEXT[p.reviewDecision]),
+      d && d.pending ? pill([`your pending review: ${plural(d.pending.comments, "comment", "comments")}`, "wait"]) : null,
       p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
       el("span", { class: "spacer" }),
       PULL.stale ? el("span", { class: "stale", title: PULL.stale }, "Stale: " + PULL.stale) : null,
@@ -2021,6 +2054,238 @@
     const body = await r.json().catch(() => ({}));
     if (r.ok) { location.href = "/?review=" + encodeURIComponent(body.id); return; }
     $("#pushnotice").replaceChildren(el("span", {}, body.message || `The review could not start (${r.status}).`));
+  }
+
+  // ---------- Discussion ----------
+
+  // The pull request's review threads, and where each goes in this review's diffs. The server places them: a thread
+  // with a hunk shows under its line, a thread without one is listed at the top of its file, and a thread on a file
+  // this review's diff does not hold appears only in the conversation. See docs/pull-requests.md sections 6 and 7.
+  const discussion = () => (PULL.snapshot && PULL.snapshot.discussion) || null;
+  const allThreads = () => { const d = discussion(); return d ? d.threads : []; };
+
+  // Returns the threads on a file of this review: those under each line, keyed by hunk and line index, and those
+  // listed at the top of the file.
+  function threadsOf(path) {
+    const lines = new Map(), top = [];
+    for (const t of allThreads()) {
+      const p = PULL.places[t.id];
+      if (!p || p.path !== path) continue;
+      if (p.hunk === null || p.hunk === undefined) { top.push(t); continue; }
+      const k = p.hunk + ":" + p.line;
+      if (!lines.has(k)) lines.set(k, []);
+      lines.get(k).push(t);
+    }
+    return { lines, top };
+  }
+
+  // Returns the unresolved threads on the changed files under a node or a group, which count by the rule of
+  // reviewedCount, the rule of section 5.3.
+  function openThreadsUnder(key) {
+    const threads = allThreads();
+    if (!threads.length) return [];
+    const paths = new Set(reviewedCount(key).paths);
+    return threads.filter((t) => !t.isResolved && PULL.places[t.id] && paths.has(PULL.places[t.id].path));
+  }
+
+  // The elements a comment body keeps, and those it drops with everything inside them. Any other element is replaced
+  // by its contents.
+  const BODY_TAGS = new Set("a abbr b blockquote br code dd del details div dl dt em h1 h2 h3 h4 h5 h6 hr i img input ins kbd li ol p pre q s samp small span strong sub summary sup table tbody td tfoot th thead tr tt ul".split(" "));
+  const BODY_DROPPED = new Set("script style iframe frame frameset object embed form template svg math noscript link meta base textarea select button audio video".split(" "));
+
+  // Returns a comment body that GitHub rendered as HTML, as nodes that are safe to insert. GitHub sanitizes the HTML,
+  // and the page sanitizes it again, so that a gap in either does not become script in a page that can call the
+  // server. The HTML is parsed in an inert document, and only the allowed elements and attributes are copied. Links
+  // open in a new tab, and only web and mail links and https images survive. See docs/pull-requests.md section 11.
+  function safeBody(html) {
+    const doc = new DOMParser().parseFromString(html || "", "text/html");
+    const base = PULL.snapshot ? PULL.snapshot.url : location.href;
+    const address = (value, schemes) => { try { const u = new URL(value || "", base); return schemes.includes(u.protocol) ? u.href : null; } catch (e) { return null; } };
+    const copy = (from, to) => {
+      for (const n of from.childNodes) {
+        if (n.nodeType === Node.TEXT_NODE) { to.append(n.data); continue; }
+        if (n.nodeType !== Node.ELEMENT_NODE || BODY_DROPPED.has(n.localName)) continue;
+        if (!BODY_TAGS.has(n.localName)) { copy(n, to); continue; }
+        const tag = n.localName, e = document.createElement(tag);
+        if (tag === "a") {
+          const href = address(n.getAttribute("href"), ["http:", "https:", "mailto:"]);
+          if (href) { e.href = href; e.target = "_blank"; e.rel = "noopener noreferrer"; }
+        } else if (tag === "img") {
+          const src = address(n.getAttribute("src"), ["https:"]);
+          if (!src) continue;
+          e.src = src; e.alt = n.getAttribute("alt") || ""; e.loading = "lazy"; e.referrerPolicy = "no-referrer";
+        } else if (tag === "input") {
+          if (n.getAttribute("type") !== "checkbox") continue;
+          e.type = "checkbox"; e.checked = n.hasAttribute("checked"); e.disabled = true;
+        } else if (tag === "ol" && /^\d+$/.test(n.getAttribute("start") || "")) e.start = +n.getAttribute("start");
+        else if ((tag === "td" || tag === "th") && /^(left|right|center)$/.test(n.getAttribute("align") || "")) e.style.textAlign = n.getAttribute("align");
+        else if (tag === "details" && n.hasAttribute("open")) e.open = true;
+        if (n.hasAttribute("title")) e.title = n.getAttribute("title");
+        copy(n, e);
+        to.append(e);
+      }
+    };
+    const out = document.createDocumentFragment();
+    copy(doc.body, out);
+    return out;
+  }
+
+  const when = (at) => at ? new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  const shortOid = (oid) => oid ? oid.slice(0, 7) : "";
+
+  // Returns a comment with its author, its time, whether it is pending, and its body.
+  function commentBox(c) {
+    return el("div", { class: "comment" + (c.pending ? " pending" : "") },
+      el("div", { class: "comment-head" }, el("b", {}, c.author || "ghost"), el("a", { class: "when", href: c.url, target: "_blank", rel: "noopener" }, when(c.at)),
+        c.pending ? el("span", { class: "pill wait" }, "pending") : null),
+      el("div", { class: "body" }, safeBody(c.bodyHtml)));
+  }
+
+  // Returns where a thread was written: the whole file, a line, or a range of lines, on the side it was written on.
+  function threadLines(t) {
+    if (t.onFile) return "the file";
+    const end = t.isOutdated ? t.originalLine : t.line, start = t.isOutdated ? t.originalStartLine : t.startLine;
+    const where = start && start !== end ? `lines ${start}–${end}` : `line ${end}`;
+    return t.side === "LEFT" ? where + " at base" : where;
+  }
+
+  // Returns the last lines of the hunk a thread was written against, for a thread whose lines this diff does not show.
+  function hunkTail(diffHunk, count) {
+    const lines = diffHunk.split("\n").filter((l) => !l.startsWith("@@")).slice(-count);
+    return el("pre", { class: "thread-hunk" }, ...lines.map((l) => el("span", { class: l[0] === "+" ? "add" : l[0] === "-" ? "del" : "" }, l + "\n")));
+  }
+
+  // Returns a review thread with its comments. A resolved thread is collapsed to one line. A thread listed at the top
+  // of its file, or shown in the conversation, says where it was written and shows the hunk it was written against.
+  // The options are top, for the list at the top of a file, and away, for the conversation.
+  function threadBox(t, opts = {}) {
+    const placed = PULL.places[t.id];
+    const why = t.isResolved ? "resolved" + (t.resolvedBy ? " by " + t.resolvedBy : "") : t.isOutdated ? "outdated"
+      : opts.top && !t.onFile ? "not on this review's lines" : null;
+    const replies = t.comments.length - 1;
+    const box = el("details", { class: "thread" + (t.isResolved ? " resolved" : "") + (t.comments.some((c) => c.pending) ? " pending" : ""), open: !t.isResolved, "data-thread": opts.away ? null : t.id },
+      el("summary", {},
+        el("span", { class: "thread-where" }, opts.away ? `${t.path} · ${threadLines(t)}` : threadLines(t)),
+        why ? el("span", { class: "pill" + (t.isResolved ? " good" : "") }, why) : null,
+        el("span", { class: "thread-count" }, replies > 0 ? plural(replies, "reply", "replies") : ""),
+        t.isResolved && t.comments[0] ? el("span", { class: "thread-excerpt" }, `${t.comments[0].author || "ghost"}: ${t.comments[0].bodyHtml.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 90)}`) : null));
+    if (opts.away && placed) box.append(el("button", { class: "link thread-show", onclick: () => openThread(t) }, "Show in the diff"));
+    if ((opts.top || opts.away) && !t.onFile && t.comments[0] && t.comments[0].diffHunk) box.append(hunkTail(t.comments[0].diffHunk, 4));
+    for (const c of t.comments) box.append(commentBox(c));
+    return box;
+  }
+
+  // Returns the list of a node's unresolved threads for the details panel, each opening its line, or null when it has
+  // none.
+  function threadList(key) {
+    const open = openThreadsUnder(key);
+    if (!open.length) return null;
+    const ul = el("ul", { class: "list" });
+    for (const t of open) {
+      const path = PULL.places[t.id].path;
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => openThread(t), title: path },
+        el("span", { class: "row-name" }, path.slice(path.lastIndexOf("/") + 1)), el("span", { class: "row-meta" }, threadLines(t)))));
+    }
+    return el("div", {}, el("h3", {}, plural(open.length, "unresolved thread", "unresolved threads")), ul);
+  }
+
+  // Opens the Map tab on the diff that shows a thread, and scrolls to the thread.
+  async function openThread(t) {
+    const p = PULL.places[t.id];
+    if (!p) return;
+    if (state.tab !== "map") showTab("map");
+    state.expanded.add(p.path);
+    await openFile(p.path);
+    const target = document.querySelector(`[data-thread="${CSS.escape(t.id)}"]`);
+    if (!target) return;
+    target.open = true;
+    target.scrollIntoView({ block: "center" });
+    target.classList.remove("flash");
+    void target.offsetWidth;
+    target.classList.add("flash");
+  }
+
+  // Shows the Map tab or the Conversation tab.
+  function showTab(tab) {
+    state.tab = tab;
+    $(".main").hidden = tab !== "map";
+    $("#conversation").hidden = tab !== "conversation";
+    renderPull();
+    renderConversation();
+  }
+
+  const REVIEW_TEXT = { APPROVED: ["approved these changes", "good"], CHANGES_REQUESTED: ["requested changes", "bad"], COMMENTED: ["reviewed", ""], DISMISSED: ["reviewed, since dismissed", ""] };
+
+  // Returns one entry of the timeline. A description, comment or review is a card with its body, and a review lists
+  // the threads that started in it. Any other entry is one line.
+  function timelineEntry(item, threads) {
+    const who = el("b", {}, item.author || "ghost");
+    const time = item.url ? el("a", { class: "when", href: item.url, target: "_blank", rel: "noopener" }, when(item.at)) : el("span", { class: "when" }, when(item.at));
+    const line = (...kids) => el("div", { class: "talk-event" }, who, " ", ...kids, time);
+    switch (item.kind) {
+      case "description":
+      case "comment":
+      case "review": {
+        const verb = item.kind === "description" ? ["opened this pull request", ""] : item.kind === "comment" ? ["commented", ""] : REVIEW_TEXT[item.state] || ["reviewed", ""];
+        const card = el("section", { class: "card" + (item.kind === "review" ? " review st-" + (item.state || "").toLowerCase() : "") },
+          el("header", {}, who, el("span", { class: verb[1] ? "verb " + verb[1] : "verb" }, verb[0]), item.kind === "review" && item.commit ? el("code", {}, shortOid(item.commit)) : null, time));
+        if (item.bodyHtml && item.bodyHtml.trim()) card.append(el("div", { class: "body" }, safeBody(item.bodyHtml)));
+        else if (item.kind === "description") card.append(el("div", { class: "body hint" }, "No description provided."));
+        if (threads.length) card.append(el("div", { class: "card-threads" }, ...threads.map((t) => threadBox(t, { away: true }))));
+        return card;
+      }
+      case "force-push": return line("force-pushed from ", el("code", {}, shortOid(item.from)), " to ", el("code", {}, shortOid(item.commit)));
+      case "base-changed": return line("changed the base from ", el("code", {}, item.from), " to ", el("code", {}, item.to));
+      case "ready": return line("marked this ready for review");
+      case "draft": return line("converted this to a draft");
+      case "closed": return line("closed this");
+      case "reopened": return line("reopened this");
+      case "merged": return line("merged ", el("code", {}, shortOid(item.commit)), " into ", el("code", {}, item.to || ""));
+      default: return line(item.kind);
+    }
+  }
+
+  // Returns a run of pushed commits as one entry, with each commit's headline.
+  function pushEntry(commits) {
+    const authors = [...new Set(commits.map((c) => c.author || "ghost"))];
+    const list = el("ul", { class: "talk-commits" }, ...commits.map((c) => el("li", {}, el("a", { href: c.url, target: "_blank", rel: "noopener" }, el("code", {}, shortOid(c.commit))), " ", c.text || "")));
+    return el("div", { class: "talk-event" }, el("b", {}, authors.join(", ")), ` pushed ${plural(commits.length, "commit", "commits")}`, el("span", { class: "when" }, when(commits[commits.length - 1].at)), list);
+  }
+
+  // Shows the Conversation tab: the checks, then the timeline, oldest first, starting with the description. Each
+  // review lists the threads that started in it, and threads of the viewer's pending review follow at the end.
+  function renderConversation() {
+    const box = $("#conversation"), p = PULL.snapshot, d = discussion();
+    if (box.hidden) return;
+    const col = el("div", { class: "talk-col" });
+    box.replaceChildren(col);
+    if (!p) return;
+    col.append(el("div", { class: "talk-checks" }, el("span", {}, "Checks"), pill(CHECK_TEXT[p.checks] || ["no checks", ""]), pill(DECISION_TEXT[p.reviewDecision]),
+      p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
+      el("span", { class: "spacer" }), el("a", { href: p.url, target: "_blank", rel: "noopener" }, "Open on GitHub")));
+    if (!d) { col.append(el("p", { class: "hint" }, "GitHub has not sent the discussion yet.")); return; }
+    const reviews = new Set(d.timeline.filter((i) => i.kind === "review").map((i) => i.id));
+    const started = new Map();
+    const rest = [];
+    for (const t of d.threads) {
+      const review = t.comments[0] && t.comments[0].review;
+      if (review && reviews.has(review)) { if (!started.has(review)) started.set(review, []); started.get(review).push(t); }
+      else rest.push(t);
+    }
+    let commits = [];
+    const flush = () => { if (commits.length) col.append(pushEntry(commits)); commits = []; };
+    for (const item of d.timeline) {
+      if (item.kind === "commit") { commits.push(item); continue; }
+      flush();
+      col.append(timelineEntry(item, started.get(item.id) || []));
+    }
+    flush();
+    const pending = rest.filter((t) => t.comments.some((c) => c.pending)), other = rest.filter((t) => !pending.includes(t));
+    if (pending.length) col.append(el("section", { class: "card review pending" }, el("header", {}, el("b", {}, "Your pending review"),
+      el("span", { class: "verb wait" }, plural(d.pending ? d.pending.comments : pending.length, "comment", "comments") + ", visible only to you")),
+      el("div", { class: "card-threads" }, ...pending.map((t) => threadBox(t, { away: true })))));
+    if (other.length) col.append(el("section", { class: "card" }, el("header", {}, el("b", {}, "Other review threads")),
+      el("div", { class: "card-threads" }, ...other.map((t) => threadBox(t, { away: true })))));
   }
 
   // ---------- Map notices ----------
@@ -2068,9 +2333,13 @@
       const fresh = e.seq >= META.events;
       // The marks sent before the page loaded are already in META.reviewed.
       if (e.type === "reviewed") { if (fresh) applyMarks(e.marks); return; }
+      // The snapshot and the places sent before the page loaded are already in META.
       if (e.type === "pull") {
-        if (e.stale) PULL.stale = e.message; else { PULL.snapshot = e.snapshot; PULL.stale = null; }
+        if (!fresh) return;
+        if (e.stale) PULL.stale = e.message;
+        else { PULL.snapshot = e.snapshot; PULL.places = e.threads || {}; PULL.stale = null; }
         renderPull();
+        if (!e.stale) { renderConversation(); redraw(); }
         return;
       }
       if (e.type === "ready" && fresh) { source.close(); location.reload(); }
@@ -2157,7 +2426,7 @@
     $("#fit").addEventListener("click", zoomToFit);
     document.addEventListener("keydown", (ev) => {
       // Keys typed into a text field or a list belong to it. A checkbox or button does not take Escape or the arrows.
-      if (ev.target.matches("input:not([type=checkbox]):not([type=radio]), select, textarea")) return;
+      if (ev.target.matches("input:not([type=checkbox]):not([type=radio]), select, textarea") || state.tab !== "map") return;
       if (ev.key === "Escape" || ev.key === "Backspace") { ev.preventDefault(); up(); }
       else if (ev.key === "Enter" && state.selected && state.current) {
         const c = state.current.level.children.find((x) => x.key === state.selected);

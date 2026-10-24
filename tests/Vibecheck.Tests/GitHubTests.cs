@@ -41,17 +41,129 @@ public class GitHubTests
     }
 
     [Fact]
-    public async Task ReadsAPullRequestsSnapshot()
+    public async Task ReadsAPullRequestsSnapshotWithItsDiscussion()
     {
-        using var client = Client(_ => Json(Fixture("pull.json")));
-        var pull = (await client.GetPullAsync(13894))!;
-        Assert.Equal(("OPEN", true, "DIRTY", 4, false), (pull.State, pull.IsDraft, pull.MergeState, pull.Commits, pull.ViewerDidAuthor));
-        Assert.Equal(("8f44336ccb889465115aa85319c275c8dec1c3b7", "55dbb4dc6b7edb10b48e3d7fc5bccd32318d1b55"), (pull.HeadOid, pull.BaseOid));
-        Assert.Equal("SUCCESS", pull.Checks);
+        using var client = Client(_ => Json(Fixture("discussion.json")));
+        var pull = (await client.GetPullAsync(14663))!;
+        Assert.Equal(("MERGED", false, 23, false), (pull.State, pull.IsDraft, pull.Commits, pull.ViewerDidAuthor));
+        Assert.Equal(("153adc66eef2af5fe51715ea7f571f3514c50bec", "316e7a80fba9ba68b45cb55e0ade5ab707a54cbd"), (pull.HeadOid, pull.BaseOid));
         Assert.Null(pull.LatestReviewCommit);
 
-        using var missing = Client(_ => Json("""{"data":{"repository":{"pullRequest":null}}}"""));
-        Assert.Null(await missing.GetPullAsync(1));
+        // The description comes first, and the timeline follows in GitHub's order.
+        var discussion = pull.Discussion!;
+        Assert.Equal(("description", pull.Author), (discussion.Timeline[0].Kind, discussion.Timeline[0].Author));
+        Assert.StartsWith("<h3", discussion.Timeline[0].BodyHtml);
+        var kinds = discussion.Timeline.GroupBy(i => i.Kind).ToDictionary(g => g.Key, g => g.Count());
+        Assert.Equal(new Dictionary<string, int> { ["description"] = 1, ["review"] = 3, ["force-push"] = 7, ["commit"] = 23, ["merged"] = 1, ["closed"] = 1 }, kinds);
+        var review = discussion.Timeline.First(i => i.Kind == "review");
+        Assert.Equal(("COMMENTED", "f7b5fbd69df429ae391d5a926856b359821860fd"), (review.State, review.Commit));
+        Assert.Equal(DateTimeOffset.Parse("2026-10-13T16:38:24Z"), review.At);
+        var merged = discussion.Timeline.Single(i => i.Kind == "merged");
+        Assert.Equal(("4a289a9e19cac88013626378185f8debb690a59c", "trunk"), (merged.Commit, merged.To));
+        Assert.All(discussion.Timeline.Where(i => i.Kind == "force-push"), i => Assert.True(i.From is { Length: 40 } && i.Commit is { Length: 40 }));
+        Assert.All(discussion.Timeline.Where(i => i.Kind == "commit"), i => Assert.True(i.Commit is { Length: 40 } && !string.IsNullOrEmpty(i.Text)));
+
+        Assert.Null(discussion.Pending);
+        Assert.Equal(9, discussion.Threads.Count);
+        Assert.Equal(2, discussion.Threads.Count(t => t.IsOutdated));
+        // GitHub can give an outdated thread a line, which the placer does not trust.
+        Assert.Contains(discussion.Threads, t => t.IsOutdated && t.Line is not null);
+        var thread = discussion.Threads[^1];
+        Assert.Equal(("internal/config/refreshable.go", "RIGHT", 426, 426, false), (thread.Path, thread.Side, thread.Line, thread.OriginalLine, thread.OnFile));
+        Assert.Equal("24d96ddc578040649c4c406e0ad458ae2986e239", thread.OriginalCommit);
+        Assert.Equal(["PRR_kwDODKw3uc8AAAABSMvzVg", "PRR_kwDODKw3uc8AAAABTDatBw"], thread.Comments.Select(c => c.Review));
+        Assert.All(thread.Comments, c => Assert.True(!c.Pending && c.DiffHunk!.StartsWith("@@") && c.BodyHtml.Length > 0));
+    }
+
+    [Fact]
+    public async Task ReadsEveryPageOfThreadsAndOfTheTimeline()
+    {
+        // The first answer says that more threads follow. The second, asked for the threads alone, holds the last of them.
+        var first = JsonNode.Parse(Fixture("discussion.json"))!;
+        var pr = first["data"]!["repository"]!["pullRequest"]!;
+        pr["reviewThreads"]!["pageInfo"] = new JsonObject { ["hasNextPage"] = true, ["endCursor"] = "T1" };
+        var second = first.DeepClone();
+        var rest = second["data"]!["repository"]!["pullRequest"]!.AsObject();
+        rest.Remove("timelineItems");
+        var extra = pr["reviewThreads"]!["nodes"]![0]!.DeepClone();
+        extra["id"] = "PRRT_next";
+        rest["reviewThreads"] = new JsonObject { ["pageInfo"] = new JsonObject { ["hasNextPage"] = false, ["endCursor"] = "T2" }, ["nodes"] = new JsonArray(extra) };
+        var bodies = new List<JsonNode>();
+        using var client = Client(r =>
+        {
+            bodies.Add(JsonNode.Parse(r.Content!.ReadAsStringAsync().Result)!);
+            return Json((bodies.Count == 1 ? first : second).ToJsonString());
+        });
+
+        var pull = (await client.GetPullAsync(14663))!;
+
+        Assert.Equal(2, bodies.Count);
+        var variables = bodies[1]["variables"]!;
+        Assert.Equal((true, "T1", false), (variables["threads"]!.GetValue<bool>(), variables["threadsAfter"]!.GetValue<string>(), variables["timeline"]!.GetValue<bool>()));
+        Assert.Equal(10, pull.Discussion!.Threads.Count);
+        Assert.Equal("PRRT_next", pull.Discussion.Threads[^1].Id);
+        Assert.Equal(36, pull.Discussion.Timeline.Count);
+    }
+
+    /// <summary>
+    /// Returns the hunks of one file, in which line 11 at base became lines 11 and 12 at head, between line 10 and
+    /// lines 12 and 13 at base, which are lines 13 and 14 at head.
+    /// </summary>
+    private static List<FileHunks> OneHunk(string path) =>
+        [new FileHunks(path, [new Hunk("@@ -10,4 +10,5 @@ class C", [[" ", "a"], ["-", "b"], ["+", "B"], ["+", "B2"], [" ", "c"], [" ", "d"]])])];
+
+    private static ReviewThread Thread(string id, string path = "src/C.cs", string side = "RIGHT", int? line = 12, int? original = 12, bool outdated = false, bool onFile = false, string? commit = "h0") =>
+        new(id, path, side, line, null, original, null, onFile, false, outdated, null, commit, []);
+
+    [Fact]
+    public void ThreadsLandOnTheirLinesAndTheRestAtTheTopOfTheirFile()
+    {
+        var threads = new[]
+        {
+            Thread("right"),
+            Thread("left", side: "LEFT", line: 11, original: 11),
+            Thread("context", line: 14, original: 14),
+            Thread("beyond", line: 40, original: 40),
+            Thread("outdated", line: 12, original: 13, outdated: true, commit: "old"),
+            Thread("kept", line: null, original: 11, outdated: true, commit: "h1"),
+            Thread("file", line: null, original: null, onFile: true),
+            Thread("elsewhere", path: "docs/readme.md"),
+            Thread("untouched", path: "src/D.cs"),
+        };
+        var top = new ThreadPlace("C.cs", null, null);
+
+        // The review is of the pull request's current range, at h1.
+        var current = ThreadPlacer.Place(threads, OneHunk("C.cs"), "src", "h1", sameHead: true, sameBase: true);
+        Assert.Equal(new ThreadPlace("C.cs", 0, 3), current["right"]);
+        Assert.Equal(new ThreadPlace("C.cs", 0, 1), current["left"]);
+        Assert.Equal(new ThreadPlace("C.cs", 0, 5), current["context"]);
+        Assert.Equal(top, current["beyond"]);
+        Assert.Equal(top, current["outdated"]);
+        // An outdated thread written on the review's head keeps its line there.
+        Assert.Equal(new ThreadPlace("C.cs", 0, 2), current["kept"]);
+        Assert.Equal(top, current["file"]);
+        // A thread outside the review's directory, or on a file its diff does not hold, is only in the conversation.
+        Assert.False(current.ContainsKey("elsewhere"));
+        Assert.False(current.ContainsKey("untouched"));
+
+        // A review from a later base shares the head's lines but not the base's.
+        var since = ThreadPlacer.Place(threads, OneHunk("C.cs"), "src", "h1", sameHead: true, sameBase: false);
+        Assert.Equal(current["right"], since["right"]);
+        Assert.Equal(top, since["left"]);
+
+        // A review of an earlier head shows only the threads written on that head, on the lines they were written on.
+        var earlier = ThreadPlacer.Place(threads, OneHunk("C.cs"), "src", "h0", sameHead: false, sameBase: false);
+        Assert.Equal(new ThreadPlace("C.cs", 0, 3), earlier["right"]);
+        Assert.Equal(top, earlier["kept"]);
+        Assert.Equal(top, earlier["left"]);
+    }
+
+    [Fact]
+    public void LinesAreNumberedFromOneOnTheirSide()
+    {
+        Assert.Equal((0, 0), ThreadPlacer.Find([new Hunk("@@ -0,0 +1,2 @@", [["+", "x"], ["+", "y"]])], right: true, 1));
+        Assert.Equal((1, 1), ThreadPlacer.Find([new Hunk("@@ -1 +1 @@", [["-", "a"], ["+", "b"]]), new Hunk("@@ -9,2 +9,2 @@", [[" ", "c"], ["-", "d"], ["+", "e"]])], right: false, 10));
+        Assert.Null(ThreadPlacer.Find([new Hunk("@@ -1 +1 @@", [["-", "a"], ["+", "b"]])], right: true, 2));
     }
 
     [Fact]

@@ -11,7 +11,8 @@ The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step 
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
 Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
-its first two phases, reviewed files and the full diff, and opening pull requests, are built.
+its first three phases, reviewed files and the full diff, opening pull requests, and reading
+the discussion, are built.
 
 ## Layout
 
@@ -130,6 +131,13 @@ seconds and sends it to the page when it changes; **Refresh** reads it at once, 
 bar says when GitHub's rate limit has made it stale. When the author pushes, a notice
 offers a review of the new head, or of the commits since your last review. A review of
 a range whose head is the head of exactly one open pull request is attached to it too.
+
+The bar's **Conversation** tab shows the description, comments, reviews and pushes in
+order, with each review's threads. In the **Map** tab, review threads appear under the
+diff lines they belong to, and outdated threads in a list at the top of their file.
+Blocks with unresolved threads carry a count. Your pending review is read back, and its
+comments are marked pending. Bodies are GitHub's HTML, sanitized again in the page,
+which runs under a Content-Security-Policy.
 `--no-github` leaves GitHub out. Nothing is written to GitHub.
 
 ## Using the tool

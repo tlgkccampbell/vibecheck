@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Vibecheck.Checking;
 using Vibecheck.Model;
 
@@ -111,4 +112,20 @@ public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = nu
 /// One hunk of a unified diff. Each line is a two-element array of marker (<c>" "</c>, <c>"-"</c> or <c>"+"</c>) and
 /// text. Trivial is true when the hunk's edit is trivial, as <see cref="TrivialEdits"/> defines it, and null otherwise.
 /// </summary>
-public sealed record Hunk(string Header, List<string[]> Lines, bool? Trivial = null);
+public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Trivial = null)
+{
+    /// <summary>Reads the base and head line ranges of the hunk's header, such as <c>@@ -12,7 +12,9 @@</c>, as zero-based first lines and counts.</summary>
+    public bool TryRanges(out (int Start, int Count) old, out (int Start, int Count) now)
+    {
+        old = now = default;
+        var m = HeaderPattern().Match(Header);
+        if (!m.Success) return false;
+        static (int, int) Range(Group start, Group count) => (int.Parse(start.Value) - 1, count.Success ? int.Parse(count.Value) : 1);
+        old = Range(m.Groups[1], m.Groups[2]);
+        now = Range(m.Groups[3], m.Groups[4]);
+        return true;
+    }
+
+    [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")]
+    private static partial Regex HeaderPattern();
+}

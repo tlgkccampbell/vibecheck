@@ -299,9 +299,20 @@ resolved and whether it is outdated, and its comments with their authors and the
 `diffHunk`. A thread that is not outdated appears under the line it belongs to, in
 the leaf view's diff tables. A resolved thread is collapsed to one line.
 
+The server places each thread, in `ThreadPlacer`, and sends the places with the
+snapshot. A thread's line is a line of the pull request's current diff, so it is in the
+review's diff at head when the review's head is the pull request's head, and at base
+when the review's base is the pull request's base as well. A thread on the head side
+also keeps the line it was written on in its original commit, so it keeps its place in
+a review of that commit after later pushes. GitHub can give an outdated thread a line,
+and the placer ignores it.
+
 An outdated thread's lines are no longer in the diff. It appears in a list at the top
 of its file, with the hunk that it was written against, and in the conversation under
-its review.
+the review it started in. So do a thread on the whole file and a thread whose line the
+review's diff does not show, such as a thread on the base side in a review of the
+commits since the reviewer's last review. A thread on a file the review's diff does not
+hold appears only in the conversation.
 
 ### 7.2 On the map
 

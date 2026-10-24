@@ -358,8 +358,11 @@ public sealed class ReviewServer : IAsyncDisposable
         }
     }
 
-    /// <summary>Sends a review's pages a <c>pull</c> event with a snapshot, unless it is the snapshot they were last sent.</summary>
-    private static void PublishSnapshot(Review review, PullSnapshot snapshot)
+    /// <summary>
+    /// Sends a review's pages a <c>pull</c> event with a snapshot, and with where its threads go in the review's diffs,
+    /// unless it is the snapshot they were last sent.
+    /// </summary>
+    private void PublishSnapshot(Review review, PullSnapshot snapshot)
     {
         var text = JsonSerializer.Serialize(snapshot, FactsJson.Options);
         lock (review)
@@ -369,7 +372,20 @@ public sealed class ReviewServer : IAsyncDisposable
             review.SentSnapshot = text;
             review.Stale = null;
         }
-        review.Add(new { type = "pull", snapshot });
+        review.Add(new { type = "pull", snapshot, threads = Placements(review, snapshot) });
+    }
+
+    /// <summary>
+    /// Returns where a pull request's threads go in a review's diffs, by thread identifier, or <see langword="null"/>
+    /// before the review has a result. See <c>docs/pull-requests.md</c> section 7.1.
+    /// </summary>
+    private Dictionary<string, ThreadPlace>? Placements(Review review, PullSnapshot? snapshot)
+    {
+        if (review.Result is not { } result || snapshot?.Discussion is not { } discussion) return null;
+        var sameHead = review.Head == snapshot.HeadOid;
+        // A review's base is the pull request's when it is the merge base of the pull request's current base and head.
+        var sameBase = sameHead && review.Since is null && review.Base is { } b && Git.TryRun(options.Directory, "merge-base", snapshot.BaseOid, snapshot.HeadOid) == b;
+        return ThreadPlacer.Place(discussion.Threads, result.Changeset.Hunks, result.Target.Root, review.Head, sameHead, sameBase);
     }
 
     /// <summary>Sends a review's pages a <c>pull</c> event saying that the snapshot they have is stale, and why, unless they were told already.</summary>
@@ -599,7 +615,7 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private void MapEndpoints(WebApplication web)
     {
-        web.MapGet("/", () => Page("start.html", "text/html; charset=utf-8"));
+        web.MapGet("/", (HttpContext ctx) => HtmlPage(ctx, ReadViewer("start.html")));
 
         web.MapGet("/api/ranges", async () =>
         {
@@ -728,7 +744,7 @@ public sealed class ReviewServer : IAsyncDisposable
             if (r.Result is null) return Results.Redirect($"/?review={Uri.EscapeDataString(id)}");
             // The viewer's page is a body fragment that the artifact host wraps, so it is wrapped here the same way.
             var page = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" + ReadViewer("index.html");
-            return Results.Text(page, "text/html; charset=utf-8");
+            return HtmlPage(ctx, page);
         });
         web.MapGet("/reviews/{id}/app.js", (string id) => Page("app.js", "text/javascript; charset=utf-8"));
         web.MapGet("/reviews/{id}/changeset.js", (string id) =>
@@ -742,7 +758,7 @@ public sealed class ReviewServer : IAsyncDisposable
                 solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
                 mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
                 narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root),
-                pull = r.Snapshot, pullCommits = r.OpenedCommits, pullStale = r.Stale,
+                pull = r.Snapshot, pullThreads = Placements(r, r.Snapshot), pullCommits = r.OpenedCommits, pullStale = r.Stale,
             };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
             return Results.Text(script, "text/javascript; charset=utf-8");
@@ -794,6 +810,30 @@ public sealed class ReviewServer : IAsyncDisposable
     }
 
     private IResult Page(string name, string contentType) => Results.Text(ReadViewer(name), contentType);
+
+    /// <summary>
+    /// Returns one of the viewer's pages with a <c>Content-Security-Policy</c> that lets it run only the server's
+    /// scripts, the pinned libraries it loads, and its own inline scripts, which carry a nonce made for this response.
+    /// The viewer shows comment bodies that other people wrote, so the policy keeps a gap in their sanitizing from
+    /// running script. See <c>docs/pull-requests.md</c> section 11.
+    /// </summary>
+    private static IResult HtmlPage(HttpContext ctx, string page)
+    {
+        var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        ctx.Response.Headers.ContentSecurityPolicy = string.Join("; ",
+            "default-src 'none'",
+            $"script-src 'self' 'nonce-{nonce}' https://cdn.jsdelivr.net/npm/elkjs@0.9.3/ https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/",
+            // The pages set style attributes from script, and the fonts come from Google Fonts.
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "font-src https://fonts.gstatic.com",
+            // Comment bodies show images that GitHub and its users host.
+            "img-src 'self' https: data:",
+            "connect-src 'self'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'");
+        return Results.Text(page.Replace("<script>", $"<script nonce=\"{nonce}\">", StringComparison.Ordinal), "text/html; charset=utf-8");
+    }
 
     /// <summary>Returns one of the viewer's files, from the viewer directory when the options name one and from the tool's embedded copy otherwise.</summary>
     private string ReadViewer(string name)

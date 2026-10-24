@@ -180,16 +180,28 @@ public static class ReviewPipeline
     }
 
     /// <summary>
+    /// Returns a path given relative to the repository's top relative to the directory the changeset's paths are
+    /// relative to, or <see langword="null"/> when the path is outside that directory. This is the one place where the
+    /// repository's paths, which GitHub uses, become the changeset's.
+    /// </summary>
+    /// <param name="root">The directory the changeset's paths are relative to, relative to the repository's top, such as <see cref="AnalysisTarget.Root"/>.</param>
+    public static string? ChangesetPath(string path, string root)
+    {
+        var prefix = root is "." or "" ? "" : root.TrimEnd('/') + "/";
+        return path.StartsWith(prefix, StringComparison.Ordinal) ? path[prefix.Length..] : null;
+    }
+
+    /// <summary>
     /// Returns renames given relative to the repository's top relative to the directory the changeset's paths are
-    /// relative to, leaving out those with a path outside it. This is the one place where the repository's paths
-    /// become the changeset's.
+    /// relative to, leaving out those with a path outside it.
     /// </summary>
     private static Dictionary<string, string>? Relative(IReadOnlyDictionary<string, string>? renames, string root)
     {
         if (renames is null) return null;
-        var prefix = root is "." or "" ? "" : root.TrimEnd('/') + "/";
-        return renames.Where(r => r.Key.StartsWith(prefix, StringComparison.Ordinal) && r.Value.StartsWith(prefix, StringComparison.Ordinal))
-            .ToDictionary(r => r.Key[prefix.Length..], r => r.Value[prefix.Length..], StringComparer.Ordinal);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (head, before) in renames)
+            if (ChangesetPath(head, root) is { } h && ChangesetPath(before, root) is { } b) result[h] = b;
+        return result;
     }
 
     /// <summary>Returns the subject of the head commit when the range is that one commit, and <see langword="null"/> otherwise.</summary>

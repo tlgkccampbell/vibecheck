@@ -107,6 +107,10 @@ public class ReviewServerTests
     private static PullSnapshot Snapshot(int number, string head, string baseTip, string title = "Call the service", int commits = 1) =>
         new(number, title, $"https://github.com/o/r/pull/{number}", "OPEN", false, "author", "feature", head, "main", baseTip, "REVIEW_REQUIRED", "BLOCKED", "SUCCESS", false, commits, null, null);
 
+    /// <summary>Returns a discussion that holds one unresolved thread, on the first line at head of a file given relative to the repository's top.</summary>
+    private static PullDiscussion OneThread(string path) =>
+        new([], [new ReviewThread("T1", path, "RIGHT", 1, null, 1, null, false, false, false, null, null, [])], null);
+
     [Fact]
     public async Task OpensAPullRequestFetchingItsCommitsAndFollowsItWhileItsPageIsOpen()
     {
@@ -130,7 +134,7 @@ public class ReviewServerTests
         var github = new FakeGitHub
         {
             Pulls = [new PullSummary(9, "Other", "u", "x", false, baseTip, "main", null, null, false), new PullSummary(5, "Call the service", "u", "author", false, head, "main", "REVIEW_REQUIRED", "SUCCESS", true)],
-            Snapshots = { [5] = Snapshot(5, head, baseTip) },
+            Snapshots = { [5] = Snapshot(5, head, baseTip) with { Discussion = OneThread("app/" + TestData.X1) } },
         };
         await using var server = new ReviewServer(Options(clone) with { Directory = Path.Combine(clone.Path, "app"), GitHub = github, PollInterval = TimeSpan.FromMilliseconds(100) });
         using var client = Client();
@@ -154,6 +158,8 @@ public class ReviewServerTests
         var script = await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js");
         Assert.Contains("\"pullCommits\":1", script, StringComparison.Ordinal);
         Assert.Contains($"\"headOid\":\"{head}\"", script, StringComparison.Ordinal);
+        // The thread on the head's first line of the changed file goes under that line, by the changeset's path.
+        Assert.Contains($"\"pullThreads\":{{\"T1\":{{\"path\":\"{TestData.X1}\",\"hunk\":0,\"line\":1}}}}", script, StringComparison.Ordinal);
 
         // While the page is open the server polls, and sends a snapshot only when it changed, or word that it is stale.
         github.Snapshots[5] = Snapshot(5, head, baseTip, title: "Call the service, renamed");
@@ -188,6 +194,34 @@ public class ReviewServerTests
 
         var events = await ReadEventsAsync(client, $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}/events");
         Assert.Contains(events, e => e.TryGetProperty("snapshot", out var p) && p.GetProperty("number").GetInt32() == 3);
+    }
+
+    [Fact]
+    public async Task PagesRunOnlyTheServersScriptsThePinnedLibrariesAndTheirOwnInlineScripts()
+    {
+        using var repo = new TempRepo();
+        repo.Write("a.txt", "1");
+        repo.Commit("one");
+        await using var server = new ReviewServer(Options(repo));
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+
+        var nonces = new List<string>();
+        for (var i = 0; i < 2; i++)
+        {
+            using var page = await client.GetAsync(server.BaseAddress + "/");
+            var policy = string.Join("", page.Headers.GetValues("Content-Security-Policy"));
+            Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
+            Assert.Contains("script-src 'self' 'nonce-", policy, StringComparison.Ordinal);
+            Assert.DoesNotContain("'unsafe-inline' https://cdn", policy, StringComparison.Ordinal);
+            var nonce = System.Text.RegularExpressions.Regex.Match(policy, "'nonce-([^']+)'").Groups[1].Value;
+            var html = await page.Content.ReadAsStringAsync();
+            Assert.Contains($"<script nonce=\"{nonce}\">", html, StringComparison.Ordinal);
+            Assert.DoesNotContain("<script>", html, StringComparison.Ordinal);
+            nonces.Add(nonce);
+        }
+        // Each response has a nonce of its own.
+        Assert.NotEqual(nonces[0], nonces[1]);
     }
 
     [Fact]
