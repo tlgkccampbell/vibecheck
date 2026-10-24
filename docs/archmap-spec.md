@@ -493,22 +493,36 @@ aggregated per type and assembly, with the first symbol, file and line and a cou
 The document is written without indentation. On a solution of a thousand types with
 seventy thousand dependencies it is roughly twenty megabytes.
 
-`archmap diff <base> <head>` combines two facts documents into a changeset document:
+`archmap diff <base> <head>` combines two facts documents into a changeset document.
+The changeset is the only input the viewer has, so it carries the map at head as well
+as the differences:
 
+- **Map**: the head map, from which the viewer takes the tree, the views and the
+  externals.
 - **Structural**: nodes, views and externals added, removed or modified between the
   two maps, and every type that binds to a different leaf at head than at base,
   since membership is structure.
 - **Content**: for every node, the files under it that were added, removed or
   modified, as paths and as counts, rolled up through the hierarchy. A file counts
   under every leaf whose types it declares.
+- **Types**: every type at either end with the leaf it binds to at base and at head,
+  the files that declare it, and whether it was added, removed, moved or unchanged.
+  This is how the viewer descends from a leaf to its types to their files.
 - **Edges**: for every pair of leaves with references at base or at head, both
   counts and whether the pair is new, gone, changed or unchanged. The viewer
-  aggregates these to the level and view it is drawing.
+  aggregates these to the level and view it is drawing. An edge that changed also
+  carries its evidence: the type pairs behind it whose counts differ between base
+  and head, largest change first. An unchanged edge carries no evidence, which keeps
+  the document small.
+- **Metrics**: the per-node metrics of section 4.1 at base and at head, and the
+  per-level and per-view edges and cycles at head.
 - **Hunks**: the textual diff per file, attached to the file's leaves, so that the
   viewer can descend from a node to its code without a second tool.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
-separate layer that cites entries in this document by identifier.
+separate layer that cites entries in this document by identifier. On a solution of a
+thousand types the changeset for a commit touching twenty files is under a megabyte,
+most of it the type roster and the hunks.
 
 ## 7. Tooling
 

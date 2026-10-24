@@ -19,7 +19,7 @@ in [mock/](mock/).
 | `tests/Archmap.Tests` | Unit tests on synthetic analyses, plus an integration suite against the sample. |
 | `samples/Orchard` | A small four-project solution with a curated `archmap.json` and one view. |
 | `schema/` | JSON Schemas for `archmap.json` and `archmap.layout.json`. |
-| `mock/` | The throwaway viewer mock with hand-written data. |
+| `mock/` | The viewer mock: a static page over a real changeset, laid out with ELK. See [Viewer mock](#viewer-mock). |
 
 ## Building and testing
 
@@ -77,3 +77,30 @@ behind one edge.
    type name where it does not.
 4. `archmap check` answers with cycles, unsorted types and, in the facts, cohesion
    per node. `archmap why a b` explains an edge. Revise and repeat.
+
+## Viewer mock
+
+`mock/index.html` is a static page that draws one changeset document. It has no
+build step: open the file, or publish the three files together. `changeset.js` wraps
+the changeset `archmap diff` wrote for one commit of a real solution, so the page
+loads from a file URL; the viewer proper will fetch the JSON.
+
+Every level is drawn from the changeset's leaf-pair edges aggregated to the blocks
+of that level. ELK lays the blocks out top-down, so a dependency stack reads as a
+stack, and merges parallel traces into trunks. Edges that leave the level end at
+tabs on the frame: what uses the level along the top, what it uses along the bottom.
+A view regroups the leaves under a level into other blocks, and a leaf opens its
+types, the files that changed, their diffs, and the type pairs behind each of its
+edges. Changed edges carry a label with the count and the delta; a change of fewer
+than three references or under one percent is drawn as minor and left unlabeled.
+
+To regenerate the data for another range, produce facts at both ends and diff them:
+
+```
+archmap facts --out base.json          # at the base revision
+archmap facts --out head.json          # at the head revision
+archmap diff base.json head.json --out changeset.json --repo <repo> --base-rev <a> --head-rev <b>
+```
+
+Source generators run only when the solution has been built, so build each
+revision before `facts`, or the generated types are missing from the picture.

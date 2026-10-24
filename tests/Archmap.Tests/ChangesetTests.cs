@@ -131,6 +131,41 @@ public class ChangesetTests
     }
 
     [Fact]
+    public void TheChangesetCarriesTheHeadMapTypesAndMetrics()
+    {
+        var head = Checker.Run(TestData.Map(), TestData.Analysis(extraTypes: [new TypeInfo("B.Extra", "Example.B", [TestData.B1])]), new CheckOptions { Commit = "head" });
+        var cs = ChangesetBuilder.Build(Base(), head);
+        Assert.Equal(head.Map.Nodes.Keys, cs.Map.Nodes.Keys);
+        var extra = cs.Types.Single(t => t.Name == "B.Extra");
+        Assert.Equal((null, "b", "added"), (extra.LeafBase, extra.LeafHead, extra.Status));
+        Assert.Equal([TestData.B1], extra.Files);
+        Assert.Equal("unchanged", cs.Types.Single(t => t.Name == TestData.Thing).Status);
+        Assert.Equal((1, 2), (cs.Metrics["b"].Base!.Types, cs.Metrics["b"].Head!.Types));
+        Assert.Equal(head.Levels["root"].Edges.Count, cs.Levels["root"].Edges.Count);
+
+        var reverse = ChangesetBuilder.Build(head, Base());
+        var gone = reverse.Types.Single(t => t.Name == "B.Extra");
+        Assert.Equal(("b", null, "removed"), (gone.LeafBase, gone.LeafHead, gone.Status));
+        Assert.Equal([TestData.B1], gone.Files);
+    }
+
+    [Fact]
+    public void AChangedEdgeCarriesTheTypePairsThatChanged()
+    {
+        var analysis = TestData.Analysis([
+            new RawDependency(TestData.Service, TestData.Thing, "calls", "A.X.Thing.Go", TestData.B1, 7),
+            new RawDependency(TestData.Service, TestData.Thing, "calls", "A.X.Thing.Stop", TestData.B1, 8),
+            new RawDependency(TestData.Service, TestData.Result, "references", "Shared.Result", TestData.B1, 9)]);
+        var cs = ChangesetBuilder.Build(Base(), Checker.Run(TestData.Map(), analysis));
+        var added = cs.Edges.Single(e => e.From == "b" && e.To == "a.x");
+        Assert.Equal([new PairChange(TestData.Service, TestData.Thing, 0, 2)], added.Evidence);
+        var grown = cs.Edges.Single(e => e.From == "b" && e.To == "shared");
+        Assert.Equal((1, 2), (grown.Base, grown.Head));
+        Assert.Equal([new PairChange(TestData.Service, TestData.Result, 0, 1)], grown.Evidence);
+        Assert.Null(cs.Edges.Single(e => e.From == "a.x" && e.To == "shared").Evidence);
+    }
+
+    [Fact]
     public void ChangesetRoundTripsThroughJson()
     {
         var cs = ChangesetBuilder.Build(Base(), Base(), [new FileHunks("a.cs", [new Hunk("@@ -1 +1 @@", [["-", "x"], ["+", "y"]])])]);

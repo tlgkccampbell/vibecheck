@@ -13,12 +13,40 @@ public static class ChangesetBuilder
         {
             Base = baseFacts.Commit,
             Head = headFacts.Commit,
+            Map = headFacts.Map,
             Structural = DiffStructure(baseFacts, headFacts),
             Content = Rollup(baseFacts.Map, headFacts.Map, files),
             Files = files,
+            Types = DiffTypes(baseFacts, headFacts),
             Edges = DiffEdges(baseFacts, headFacts),
+            Metrics = DiffMetrics(baseFacts, headFacts),
+            Levels = headFacts.Levels,
+            Views = headFacts.Views,
             Hunks = hunks ?? [],
         };
+    }
+
+    private static List<TypeChange> DiffTypes(Facts baseFacts, Facts headFacts)
+    {
+        var baseTypes = baseFacts.Types.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var headTypes = headFacts.Types.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var result = new List<TypeChange>();
+        foreach (var name in baseTypes.Keys.Union(headTypes.Keys).OrderBy(n => n, StringComparer.Ordinal))
+        {
+            baseTypes.TryGetValue(name, out var b);
+            headTypes.TryGetValue(name, out var h);
+            var status = b is null ? "added" : h is null ? "removed" : b.Leaf != h.Leaf ? "moved" : "unchanged";
+            result.Add(new TypeChange(name, b?.Leaf, h?.Leaf, (h ?? b)!.Files, status));
+        }
+        return result;
+    }
+
+    private static SortedDictionary<string, MetricsChange> DiffMetrics(Facts baseFacts, Facts headFacts)
+    {
+        var result = new SortedDictionary<string, MetricsChange>(StringComparer.Ordinal);
+        foreach (var id in baseFacts.Nodes.Keys.Union(headFacts.Nodes.Keys))
+            result[id] = new MetricsChange(baseFacts.Nodes.GetValueOrDefault(id), headFacts.Nodes.GetValueOrDefault(id));
+        return result;
     }
 
     private static StructuralDiff DiffStructure(Facts baseFacts, Facts headFacts)
@@ -131,8 +159,21 @@ public static class ChangesetBuilder
             var b = baseEdges.GetValueOrDefault(key);
             var h = headEdges.GetValueOrDefault(key);
             var status = b == 0 ? "added" : h == 0 ? "removed" : b != h ? "modified" : "unchanged";
-            result.Add(new EdgeChange(key.From, key.To, b, h, status));
+            var evidence = status == "unchanged" ? null : Evidence(baseFacts, headFacts, key.From, key.To);
+            result.Add(new EdgeChange(key.From, key.To, b, h, status, evidence));
         }
         return result;
+    }
+
+    /// <summary>Returns the type pairs behind an edge whose counts differ between base and head, largest change first.</summary>
+    private static List<PairChange> Evidence(Facts baseFacts, Facts headFacts, string from, string to)
+    {
+        var pairs = new Dictionary<(string, string), (int Base, int Head)>();
+        foreach (var (f, t, n) in Explain.Pairs(baseFacts, from, to)) pairs[(f, t)] = (n, 0);
+        foreach (var (f, t, n) in Explain.Pairs(headFacts, from, to)) pairs[(f, t)] = (pairs.GetValueOrDefault((f, t)).Base, n);
+        return pairs.Where(p => p.Value.Base != p.Value.Head)
+            .Select(p => new PairChange(p.Key.Item1, p.Key.Item2, p.Value.Base, p.Value.Head))
+            .OrderByDescending(p => Math.Abs(p.Head - p.Base)).ThenBy(p => p.From, StringComparer.Ordinal).ThenBy(p => p.To, StringComparer.Ordinal)
+            .ToList();
     }
 }
