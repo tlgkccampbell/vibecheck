@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>vibecheck</AssemblyName>
+    <RootNamespace>Vibecheck.Cli</RootNamespace>
+    <RollForward>LatestMajor</RollForward>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>vibecheck</ToolCommandName>
+    <PackageId>vibecheck</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Draws a pull request as a change to a solution's architecture map.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Viewer\*" LogicalName="viewer/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Vibecheck.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vibecheck.Core\Vibecheck.Core.csproj" />
+  </ItemGroup>
+
+</Project>

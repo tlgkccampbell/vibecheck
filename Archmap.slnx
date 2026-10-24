@@ -1,9 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/Archmap.Cli/Archmap.Cli.csproj" />
-    <Project Path="src/Archmap.Core/Archmap.Core.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/Archmap.Tests/Archmap.Tests.csproj" />
-  </Folder>
-</Solution>

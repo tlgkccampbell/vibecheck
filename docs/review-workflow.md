@@ -2,7 +2,7 @@
 
 This document describes how a reviewer goes from a range of commits to an
 understanding of what changed, in one step. It builds on the map, facts and
-changeset of [archmap-spec.md](archmap-spec.md), and it lists, in section 10, the
+changeset of [vibecheck-spec.md](vibecheck-spec.md), and it lists, in section 10, the
 changes it makes to that specification.
 
 The tool is meant for reviewing large changes that a language model wrote. Its
@@ -30,13 +30,13 @@ repositories at once, and any form of enforcement.
 
 ## 2. The reviewer's path
 
-1. The reviewer runs `archmap` anywhere inside a repository. The tool starts a local
+1. The reviewer runs `vibecheck` anywhere inside a repository. The tool starts a local
    server and opens the viewer in the default browser.
 2. With no range on the command line, the first page is a picker. It offers the
    current branch against the default branch, the uncommitted work against `HEAD`,
    recent commits on the current branch, other local branches, and, when the `gh`
    command is available, open pull requests whose commits are present locally. A
-   free-form field takes any range `archmap changeset` accepts, and `:worktree` for
+   free-form field takes any range `vibecheck changeset` accepts, and `:worktree` for
    the uncommitted work (section 4.6).
 3. Choosing a range starts a review. The page shows each stage's progress as it runs
    and draws the changeset as soon as it exists.
@@ -46,11 +46,11 @@ repositories at once, and any form of enforcement.
    to the concept map once that is ready, and later offers to save the map into the
    repository.
 
-`archmap review <range>` skips the picker and opens straight into that review.
+`vibecheck review <range>` skips the picker and opens straight into that review.
 
 ## 3. Architecture
 
-The `archmap` tool hosts an ASP.NET Core server on the loopback interface. The
+The `vibecheck` tool hosts an ASP.NET Core server on the loopback interface. The
 server runs the pipeline of section 4 as background jobs, keeps their results in
 the cache of section 5, and serves the viewer and a small JSON API. The viewer is
 the page that was in `mock/`, moved into the tool. It still reads
@@ -63,7 +63,7 @@ opened from a file shows none.
 browser ── viewer (static files, embedded in the tool)
    │  GET /api/ranges, POST /api/reviews, GET /api/reviews/{id}/events (SSE), …
    ▼
-archmap server ── pipeline jobs ── git (worktrees, diffs)
+vibecheck server ── pipeline jobs ── git (worktrees, diffs)
                        │          ── MSBuild + Roslyn (analysis)
                        │          ── claude -p (map proposals, narratives)
                        ▼
@@ -109,7 +109,7 @@ commit, described in section 4.6.
 ### 4.2 Analyze
 
 Each end is checked out into a temporary worktree, built and analyzed, the two in
-parallel, as `archmap changeset` does now. The result of this stage is the
+parallel, as `vibecheck changeset` does now. The result of this stage is the
 `AnalysisResult`, which does not depend on the map, and it is cached per commit.
 Caching the analysis rather than the facts means that a change of map, such as the
 switch from skeleton to concept map, costs a check of each end and no compilation.
@@ -124,9 +124,9 @@ removed when the tool exits.
 The map comes from the first of these that exists:
 
 1. The `--map` option.
-2. `archmap.json` at the head revision, or in the working tree when the head is the
+2. `vibecheck.json` at the head revision, or in the working tree when the head is the
    uncommitted work.
-3. `archmap.json` at the base revision.
+3. `vibecheck.json` at the base revision.
 4. The generated map for this repository, from the cache.
 5. The skeleton of spec section 5.1, derived from the head analysis.
 
@@ -151,7 +151,7 @@ it:
 3. Check the proposal against the analysis. Collect the format errors of a proposal
    that cannot be used, and otherwise the unsorted types, the types two leaves claim
    equally, the cycles at each level with the type pairs behind each edge as
-   `archmap why` reports them, the cycles among a view's groups, and leaves of more
+   `vibecheck why` reports them, the cycles among a view's groups, and leaves of more
    than sixty types.
 4. If anything was found, send the findings back with the proposal and ask for a
    revision. Stop when nothing is found, after three rounds, or when a usable
@@ -160,12 +160,12 @@ it:
 5. Keep the usable proposal with the fewest findings, preferring the later of two
    that tie.
 
-The prompts are in `src/Archmap.Core/Assist/Prompts`. The result is stored as the
+The prompts are in `src/Vibecheck.Core/Assist/Prompts`. The result is stored as the
 solution's generated map, version 1, and reused by every later review of that
 solution, which keeps the picture stable from one review to the next. Each version
 is kept. The viewer's notice offers to switch to it, since switching changes the
 layout under the reader; the switch reruns the review, which costs no compilation.
-A "Save to repository" action writes the map as `archmap.json` beside the solution,
+A "Save to repository" action writes the map as `vibecheck.json` beside the solution,
 where reviews of the uncommitted work find it at once and reviews of later commits
 find it once it is committed. The action never overwrites an existing file.
 
@@ -213,8 +213,8 @@ the viewer as each one passes its check.
 
 ## 5. The cache
 
-The cache lives under `%LOCALAPPDATA%\archmap\` on Windows and
-`$XDG_CACHE_HOME/archmap/` elsewhere, in one folder per repository. A repository is
+The cache lives under `%LOCALAPPDATA%\vibecheck\` on Windows and
+`$XDG_CACHE_HOME/vibecheck/` elsewhere, in one folder per repository. A repository is
 identified by the hash of its first root commit and the path of its solution, so
 that clones and worktrees of one repository share a folder.
 
@@ -253,7 +253,7 @@ Edges to the tabs on a level's frame have no narrative of their own. The edge th
 stand for has one at the enclosing level, and the viewer shows that one. An edge
 between two leaves of one group that are not siblings in the tree has no narrative.
 
-`NarrativePlanner` in `src/Archmap.Core/Assist` repeats the viewer's aggregation to
+`NarrativePlanner` in `src/Vibecheck.Core/Assist` repeats the viewer's aggregation to
 decide what each level and view explains.
 
 ### 6.2 Inputs
@@ -322,7 +322,7 @@ The tool calls the Claude Code command line in print mode. Each request runs
   narratives.
 - `--model`, always, so that the tool's choice and not the reviewer's Claude Code
   settings decides the model. The defaults below are pinned to exact identifiers,
-  and `archmap review --model <model>` replaces them for every request.
+  and `vibecheck review --model <model>` replaces them for every request.
 
 The defaults were chosen by measurement. Each model generated the map of this
 repository (81 types) from the same range, and then placed the ten types of a new
@@ -379,7 +379,7 @@ rebinding, from driving it.
 
 Each phase ends with the tool usable, and with tests that state its new behavior.
 
-1. **Server, picker and caches.** (Done.) The `review` command and the bare `archmap`
+1. **Server, picker and caches.** (Done.) The `review` command and the bare `vibecheck`
    command, the server and its events, the viewer moved into the tool, the analysis
    and changeset caches. A repository with a map needs no other command. Without a
    map, the review uses the skeleton.
@@ -389,7 +389,7 @@ Each phase ends with the tool usable, and with tests that state its new behavior
    notice and the save action. (Done.)
 4. **Narratives.** Inputs, batching, checking, streaming, and the tooltip, panel and
    summary in the viewer. (Done.)
-5. **Claude Code integration.** An `/archmap` skill that opens a review of the
+5. **Claude Code integration.** An `/vibecheck` skill that opens a review of the
    current session's changes.
 
 No test calls Claude. The canned `IClaude` drives the pipeline tests, and a manual
@@ -397,13 +397,13 @@ smoke script exercises the real command line against the sample.
 
 ## 10. Changes to the specification
 
-These land in [archmap-spec.md](archmap-spec.md) with the phase that makes them true:
+These land in [vibecheck-spec.md](vibecheck-spec.md) with the phase that makes them true:
 
 - Section 1 gains the cache and the generated map as places a map can come from.
 - Section 6 gains the `narratives` member of the changeset document. (Not done in
   phase 4: narratives stream as events beside the changeset, so a changeset published
   as an artifact carries none.)
-- Section 7 gains `archmap review` and the bare `archmap` command. The other
+- Section 7 gains `vibecheck review` and the bare `vibecheck` command. The other
   commands stay as building blocks for scripts. (Done in phase 1.)
 - Section 7.1 describes the analysis cache, which replaces the manual
   `facts --out` workaround. (Done in phase 1.)

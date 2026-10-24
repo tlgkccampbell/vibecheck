@@ -3,6 +3,6 @@ obj/
 Generated/
 .vs/
 *.user
-archmap.facts.json
+vibecheck.facts.json
 TestResults/
 nupkg/

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Vibecheck.Cli/Vibecheck.Cli.csproj" />
+    <Project Path="src/Vibecheck.Core/Vibecheck.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Vibecheck.Tests/Vibecheck.Tests.csproj" />
+  </Folder>
+</Solution>

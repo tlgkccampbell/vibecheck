@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using Archmap;
+using Vibecheck;
 using Orchard.Billing.Ledger;
 using Orchard.Shared.Kernel;
 
@@ -10,7 +10,7 @@ namespace Orchard.Billing.Core.Invoices;
 /// to the ledger, which the attribute states; the map's patterns would otherwise put
 /// it with the generator.
 /// </summary>
-[Archmap("billing.ledger")]
+[Vibecheck("billing.ledger")]
 public sealed record Invoice(string Number, OrderId Order, Money Amount);
 
 /// <summary>
