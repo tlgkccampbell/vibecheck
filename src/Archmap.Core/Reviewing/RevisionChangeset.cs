@@ -1,9 +1,9 @@
 using Archmap.Analysis;
 using Archmap.Checking;
+using Archmap.Diffing;
 using Archmap.Model;
-using Archmap.Reviewing;
 
-namespace Archmap.Diffing;
+namespace Archmap.Reviewing;
 
 /// <summary>Analyzes a solution checked out at some path. <see cref="RoslynAnalyzer.AnalyzeAsync"/> is the real one.</summary>
 public delegate Task<AnalysisResult> SolutionAnalyzer(string root, string solution, IProgress<string>? progress, CancellationToken ct);

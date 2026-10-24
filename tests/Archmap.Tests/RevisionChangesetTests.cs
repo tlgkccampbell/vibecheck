@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Archmap.Analysis;
 using Archmap.Diffing;
 using Archmap.Format;
+using Archmap.Reviewing;
 using Xunit;
 
 namespace Archmap.Tests;
