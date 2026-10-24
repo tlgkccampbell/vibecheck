@@ -25,6 +25,21 @@ public class IdentifiersTests
         Assert.Equal("billing", Identifiers.TopLevelOf("billing.core.self"));
     }
 
+    [Theory]
+    [InlineData("billing.core", "billing", true)]
+    [InlineData("billing", "billing", true)]
+    [InlineData("billing", "root", true)]
+    [InlineData("billing-core", "billing", false)]
+    [InlineData("auth", "billing", false)]
+    public void IdentifierIsWithinItselfAndItsAncestors(string id, string ancestor, bool within) =>
+        Assert.Equal(within, Identifiers.IsWithin(id, ancestor));
+
+    [Theory]
+    [InlineData("root", 0)]
+    [InlineData("billing", 1)]
+    [InlineData("billing.core.self", 3)]
+    public void DepthCountsSegments(string id, int depth) => Assert.Equal(depth, Identifiers.Depth(id));
+
     [Fact]
     public void LiftsToLowestCommonAncestor()
     {

@@ -78,7 +78,7 @@ public static class TypePlacer
             .ToList();
         foreach (var id in added.Where(copy.Nodes.ContainsKey))
         {
-            foreach (var (viewId, view) in copy.Views.Where(v => Identifiers.IsUnder(id, v.Value.Level)).ToList())
+            foreach (var (viewId, view) in copy.Views.Where(v => Identifiers.IsWithin(id, v.Value.Level)).ToList())
             {
                 var group = named.Where(n => n.Leaf == id && n.View == viewId && view.Groups.ContainsKey(n.Group)).Select(n => n.Group).FirstOrDefault()
                     ?? view.Groups.OrderByDescending(g => g.Value.Leaves.Count(l => Identifiers.ParentOrRoot(l) == Identifiers.ParentOrRoot(id)))

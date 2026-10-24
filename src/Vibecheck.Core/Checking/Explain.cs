@@ -20,7 +20,7 @@ public static class Explain
         {
             foreach (var e in facts.ExternalRefs)
             {
-                if (e.External == to && leafOf.TryGetValue(e.From, out var leaf) && Identifiers.IsUnder(leaf, from))
+                if (e.External == to && leafOf.TryGetValue(e.From, out var leaf) && Identifiers.IsWithin(leaf, from))
                     counts[(e.From, e.Assembly)] = counts.GetValueOrDefault((e.From, e.Assembly)) + e.Count;
             }
         }
@@ -30,7 +30,7 @@ public static class Explain
             {
                 var a = leafOf[d.From];
                 var b = leafOf[d.To];
-                if (!Identifiers.IsUnder(a, from) || !Identifiers.IsUnder(b, to)) continue;
+                if (!Identifiers.IsWithin(a, from) || !Identifiers.IsWithin(b, to)) continue;
                 if (from != to && a == b) continue;
                 counts[(d.From, d.To)] = counts.GetValueOrDefault((d.From, d.To)) + 1;
             }

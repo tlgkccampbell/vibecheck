@@ -37,19 +37,15 @@ public static partial class Identifiers
         return i < 0 ? id : id[..i];
     }
 
-    /// <summary>Returns the last segment of an identifier.</summary>
-    public static string LastSegmentOf(string id)
-    {
-        var i = id.LastIndexOf('.');
-        return i < 0 ? id : id[(i + 1)..];
-    }
-
     /// <summary>
     /// Reports whether an identifier is equal to an ancestor or lies beneath it. Every
     /// identifier lies beneath <see cref="Root"/>.
     /// </summary>
-    public static bool IsUnder(string id, string ancestor) =>
+    public static bool IsWithin(string id, string ancestor) =>
         ancestor == Root || id == ancestor || id.StartsWith(ancestor + ".", StringComparison.Ordinal);
+
+    /// <summary>Returns the number of segments in an identifier, which is zero for <see cref="Root"/>.</summary>
+    public static int Depth(string id) => id == Root ? 0 : id.Count(c => c == '.') + 1;
 
     /// <summary>
     /// Lifts a pair of distinct leaf identifiers to their lowest common ancestor. The

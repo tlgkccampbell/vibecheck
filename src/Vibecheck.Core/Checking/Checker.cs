@@ -105,7 +105,7 @@ public static class Checker
         var leaves = new Dictionary<string, List<TypePattern>>(StringComparer.Ordinal);
         foreach (var (id, node) in map.Nodes)
         {
-            if (!Identifiers.IsValid(id)) Fail($"\"{id}\" is not a valid identifier");
+            if (!Identifiers.IsValid(id)) Fail($"\"{id}\" is not a valid node identifier");
             if (id == ArchitectureMap.Unsorted || id.StartsWith(ArchitectureMap.Unsorted + ".", StringComparison.Ordinal)) Fail($"\"{id}\" is reserved for the automatic unsorted leaf");
             var parent = Identifiers.ParentOf(id);
             if (parent is not null)
@@ -312,7 +312,7 @@ public static class Checker
         var ids = map.Nodes.Keys.ToList();
         if (leafOf.Values.Contains(ArchitectureMap.Unsorted)) ids.Add(ArchitectureMap.Unsorted);
         var metrics = new SortedDictionary<string, NodeMetrics>(StringComparer.Ordinal);
-        foreach (var id in ids) metrics[id] = MetricsOf(l => Identifiers.IsUnder(l, id), leafEdges, leafOf, boundBy);
+        foreach (var id in ids) metrics[id] = MetricsOf(l => Identifiers.IsWithin(l, id), leafEdges, leafOf, boundBy);
         return metrics;
     }
 

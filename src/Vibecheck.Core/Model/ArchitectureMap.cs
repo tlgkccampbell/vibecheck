@@ -49,7 +49,7 @@ public sealed class ArchitectureMap
 
     /// <summary>Returns the declared leaves beneath a level, or the level itself when it is a leaf.</summary>
     public IEnumerable<string> LeavesUnder(string level) =>
-        Nodes.Where(kv => kv.Value.IsLeaf && Identifiers.IsUnder(kv.Key, level)).Select(kv => kv.Key);
+        Nodes.Where(kv => kv.Value.IsLeaf && Identifiers.IsWithin(kv.Key, level)).Select(kv => kv.Key);
 
     /// <summary>
     /// Returns the category of a node: its own, or else that of its nearest ancestor that has one, or

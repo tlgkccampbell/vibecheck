@@ -159,7 +159,7 @@ public static class ChangesetBuilder
         return result;
     }
 
-    private static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsUnder(l, id));
+    private static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsWithin(l, id));
 
     /// <summary>
     /// Returns how a file's change counts under a node: <c>added</c>, <c>removed</c> or <c>modified</c>, or null when it

@@ -337,7 +337,7 @@ public static class NarrativeWriter
 
     /// <summary>Returns the files whose types bind under a node at base or at head.</summary>
     private static IEnumerable<FileChange> FilesUnder(Changeset changeset, string id) =>
-        changeset.Files.Where(f => f.LeavesHead.Concat(f.LeavesBase).Any(l => Identifiers.IsUnder(l, id)));
+        changeset.Files.Where(f => f.LeavesHead.Concat(f.LeavesBase).Any(l => Identifiers.IsWithin(l, id)));
 
     /// <summary>Returns how many changed files under a node have only trivial edits, as <see cref="TrivialEdits"/> defines them.</summary>
     private static int TrivialUnder(Changeset changeset, string id)

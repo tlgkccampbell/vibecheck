@@ -57,14 +57,14 @@ public static class NarrativePlanner
             var edges = Edges(changeset, Owners(changeset, children), externals: level == Identifiers.Root);
             var nodes = children.Where(c => changeset.Content.TryGetValue(c, out var content) && content.Status != "unchanged")
                 .OrderByDescending(c => Changed(changeset.Content[c])).ThenBy(c => c, StringComparer.Ordinal).ToList();
-            locations.Add(("level", level, Depth(level), edges, nodes));
+            locations.Add(("level", level, Identifiers.Depth(level), edges, nodes));
         }
         foreach (var (id, view) in map.Views)
         {
             var owners = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (groupId, group) in view.Groups)
                 foreach (var leaf in group.Leaves) owners[leaf] = GroupKey(id, groupId);
-            locations.Add(("view", id, Depth(view.Level), Edges(changeset, owners, externals: false), []));
+            locations.Add(("view", id, Identifiers.Depth(view.Level), Edges(changeset, owners, externals: false), []));
         }
 
         var ordered = locations
@@ -143,13 +143,11 @@ public static class NarrativePlanner
         var leaves = changeset.Edges.SelectMany(e => new[] { e.From, e.To }).Distinct(StringComparer.Ordinal);
         foreach (var leaf in leaves)
         {
-            var child = children.FirstOrDefault(c => Identifiers.IsUnder(leaf, c));
+            var child = children.FirstOrDefault(c => Identifiers.IsWithin(leaf, c));
             if (child is not null) owners[leaf] = child;
         }
         return owners;
     }
-
-    private static int Depth(string level) => level == Identifiers.Root ? 0 : level.Count(c => c == '.') + 1;
 
     private static int Changed(NodeContent content) => content.Added + content.Removed + content.Modified;
 }
