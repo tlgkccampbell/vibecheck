@@ -29,6 +29,9 @@
     --on-accent: #ffffff;
     --cat-blue: #2a78d6; --cat-teal: #2a9d8f; --cat-magenta: #c2307f; --cat-orange: #d9711f; --cat-slate: #64748b;
     --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    /* Source code in diffs shows in 11-point Consolas where the system has it. */
+    --code: Consolas, "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --syn-keyword: #8a3fb0; --syn-type: #1f6f8b; --syn-string: #a3461e; --syn-number: #2a7a4a; --syn-comment: #6f7a74; --syn-meta: #8a6a12; --syn-tag: #1f5fae;
     --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   @media (prefers-color-scheme: dark) {
@@ -37,6 +40,7 @@
       --accent: #6fb6d6; --added: #5ccf8a; --removed: #f07763; --modified: #e6b54e; --warn: #cf93ea;
       --added-bg: #16301f; --removed-bg: #3a1c17; --modified-bg: #352b12; --warn-bg: #2d1c38;
       --cat-blue: #3987e5; --cat-teal: #2fa596; --cat-magenta: #c23d84; --cat-orange: #d06b1e; --cat-slate: #8b98a5; --on-accent: #13181b;
+      --syn-keyword: #cf93ea; --syn-type: #6fc3dc; --syn-string: #e8a07a; --syn-number: #8fd6a6; --syn-comment: #84908a; --syn-meta: #dcc06a; --syn-tag: #82aef0;
       color-scheme: dark;
     }
   }
@@ -45,6 +49,7 @@
     --accent: #6fb6d6; --added: #5ccf8a; --removed: #f07763; --modified: #e6b54e; --warn: #cf93ea;
     --added-bg: #16301f; --removed-bg: #3a1c17; --modified-bg: #352b12; --warn-bg: #2d1c38;
     --cat-blue: #3987e5; --cat-teal: #2fa596; --cat-magenta: #c23d84; --cat-orange: #d06b1e; --cat-slate: #8b98a5; --on-accent: #13181b;
+    --syn-keyword: #cf93ea; --syn-type: #6fc3dc; --syn-string: #e8a07a; --syn-number: #8fd6a6; --syn-comment: #84908a; --syn-meta: #dcc06a; --syn-tag: #82aef0;
     color-scheme: dark;
   }
 
@@ -341,8 +346,8 @@
   table.diff.trivial { filter: grayscale(1); opacity: .7; }
   .chip-moved { border-color: var(--warn); color: var(--warn); }
   .diff-scroll { overflow-x: auto; }
-  table.diff { border-collapse: collapse; width: 100%; table-layout: fixed; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
-  table.diff caption { text-align: left; padding: 3px 10px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
+  table.diff { border-collapse: collapse; width: 100%; table-layout: fixed; font-family: var(--code); font-size: 11pt; line-height: 1.4; }
+  table.diff caption { font-family: var(--mono); font-size: 12px; text-align: left; padding: 3px 10px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }
   table.diff td { padding: 0 8px; white-space: pre; vertical-align: top; }
   table.diff td.ln { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--line); font-variant-numeric: tabular-nums; }
   /* A long line wraps within its half, under its own code, so it never widens one side of the split. */
@@ -350,6 +355,14 @@
   table.diff td.del { background: var(--removed-bg); }
   table.diff td.add { background: var(--added-bg); }
   table.diff td.empty { background: var(--grid); }
+  /* Highlight.js marks tokens with hljs-* classes, and each class maps to one of the theme's syntax colors. */
+  .hljs-keyword, .hljs-built_in, .hljs-literal, .hljs-selector-tag { color: var(--syn-keyword); }
+  .hljs-type, .hljs-title, .hljs-attr, .hljs-property { color: var(--syn-type); }
+  .hljs-string, .hljs-regexp, .hljs-char, .hljs-symbol, .hljs-template-variable, .hljs-subst { color: var(--syn-string); }
+  .hljs-number { color: var(--syn-number); }
+  .hljs-comment, .hljs-quote, .hljs-doctag { color: var(--syn-comment); font-style: italic; }
+  .hljs-meta, .hljs-meta .hljs-keyword, .hljs-attribute { color: var(--syn-meta); }
+  .hljs-tag, .hljs-name, .hljs-section { color: var(--syn-tag); }
   table.diff td:nth-child(3) { border-left: 2px solid var(--line); }
   .edge-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 700px) { .edge-cols { grid-template-columns: 1fr; } }
@@ -461,5 +474,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
 <script src="changeset.js"></script>
 <script src="app.js"></script>

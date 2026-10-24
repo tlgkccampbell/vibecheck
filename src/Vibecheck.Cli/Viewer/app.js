@@ -868,29 +868,81 @@
     const m = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(h);
     return { a: m ? +m[1] : 1, b: m ? +m[2] : 1 };
   }
+  // Pairs a hunk's lines into the rows of a split diff. Each side of a row holds the index of its line in the hunk, or
+  // null where that side has no line.
   function pairLines(lines) {
     const rows = [];
     let i = 0;
     while (i < lines.length) {
-      if (lines[i][0] === " ") { rows.push({ l: lines[i][1], r: lines[i][1], kind: "ctx" }); i++; continue; }
+      if (lines[i][0] === " ") { rows.push({ l: i, r: i, kind: "ctx" }); i++; continue; }
       const dels = [], adds = [];
-      while (i < lines.length && lines[i][0] === "-") dels.push(lines[i++][1]);
-      while (i < lines.length && lines[i][0] === "+") adds.push(lines[i++][1]);
+      while (i < lines.length && lines[i][0] === "-") dels.push(i++);
+      while (i < lines.length && lines[i][0] === "+") adds.push(i++);
       const n = Math.max(dels.length, adds.length);
       for (let j = 0; j < n; j++) rows.push({ l: j < dels.length ? dels[j] : null, r: j < adds.length ? adds[j] : null, kind: "chg" });
     }
     return rows;
   }
+
+  // Highlight.js names for file extensions it does not know as aliases of its own.
+  const LANGUAGE_ALIASES = { csproj: "xml", props: "xml", targets: "xml", slnx: "xml", resx: "xml", config: "xml", nuspec: "xml", xaml: "xml" };
+  // Returns the highlight.js language for a file path, or null when highlight.js is not loaded or knows no language
+  // for the file's extension.
+  function languageOf(path) {
+    if (typeof hljs === "undefined") return null;
+    const ext = (/\.([^./\\]+)$/.exec(path) || [])[1];
+    if (!ext) return null;
+    const name = LANGUAGE_ALIASES[ext.toLowerCase()] || ext.toLowerCase();
+    return hljs.getLanguage(name) ? name : null;
+  }
+  // Returns the highlighted HTML of one side of a hunk, one string per hunk line, with null for the lines of the other
+  // side. The side is highlighted as one text, so a comment or string that spans lines is colored on every line it
+  // covers. A span open at a line break closes at the end of that line and opens again at the start of the next.
+  function highlightSide(lines, ops, language) {
+    const picked = lines.map((line, i) => ops.includes(line[0]) ? i : -1).filter((i) => i >= 0);
+    const out = new Array(lines.length).fill(null);
+    if (!picked.length) return out;
+    const html = hljs.highlight(picked.map((i) => lines[i][1]).join("\n"), { language, ignoreIllegals: true }).value;
+    const open = [];
+    let line = "", k = 0;
+    for (const part of html.split(/(<span[^>]*>|<\/span>|\n)/)) {
+      if (part === "\n") { out[picked[k++]] = line + "</span>".repeat(open.length); line = open.join(""); }
+      else if (part.startsWith("<span")) { open.push(part); line += part; }
+      else if (part === "</span>") { open.pop(); line += part; }
+      else line += part;
+    }
+    out[picked[k]] = line;
+    return out;
+  }
+  // Returns the highlighted HTML of every line of a hunk for each side of a split diff, or null when the file's
+  // language is unknown and the lines show as plain text.
+  function highlightHunk(path, lines) {
+    const language = languageOf(path);
+    if (!language) return null;
+    return { left: highlightSide(lines, " -", language), right: highlightSide(lines, " +", language) };
+  }
+
   // Returns a cell of code for one side of a split diff. The line's indentation becomes the cell's left padding, and a
   // line too long for its half wraps with a hanging indent two columns deeper, so a continuation sits under its code.
-  function codeCell(kind, line) {
+  // When html is given, the cell shows that highlighted markup of the line with its indentation removed.
+  function codeCell(kind, line, html) {
     if (line === null) return el("td", { class: "code " + kind });
     const lead = /^[ 	]*/.exec(line)[0];
     const cols = lead.replace(/	/g, "    ").length;
-    return el("td", { class: "code " + kind, style: `padding-left: calc(8px + ${cols + 2}ch); text-indent: -2ch` }, line.slice(lead.length));
+    const td = el("td", { class: "code " + kind, style: `padding-left: calc(8px + ${cols + 2}ch); text-indent: -2ch` });
+    if (!html) { td.append(line.slice(lead.length)); return td; }
+    td.innerHTML = html;
+    let strip = lead.length;
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+    while (strip > 0 && walker.nextNode()) {
+      const node = walker.currentNode, n = Math.min(strip, node.data.length);
+      node.data = node.data.slice(n);
+      strip -= n;
+    }
+    return td;
   }
 
-  function diffTable(hunk) {
+  function diffTable(path, hunk) {
     const nums = parseHeader(hunk.header);
     let la = nums.a, lb = nums.b;
     // The columns are fixed: each line-number column fits the hunk's largest line number, and the two code columns
@@ -902,14 +954,16 @@
     const table = el("table", { class: "diff" + (trivial ? " trivial" : "") }, el("caption", {}, hunk.header + (trivial ? " · no code changed" : "")),
       el("colgroup", {}, ln(), el("col", {}), ln(), el("col", {})));
     const body = el("tbody");
+    const lit = highlightHunk(path, hunk.lines);
+    const text = (i) => i === null ? null : hunk.lines[i][1];
     for (const row of rows) {
       const lk = row.l === null ? "empty" : row.kind === "ctx" ? "ctx" : "del";
       const rk = row.r === null ? "empty" : row.kind === "ctx" ? "ctx" : "add";
       body.append(el("tr", {},
         el("td", { class: "ln " + lk }, row.l === null ? "" : String(la++)),
-        codeCell(lk, row.l),
+        codeCell(lk, text(row.l), lit && row.l !== null ? lit.left[row.l] : null),
         el("td", { class: "ln " + rk }, row.r === null ? "" : String(lb++)),
-        codeCell(rk, row.r)));
+        codeCell(rk, text(row.r), lit && row.r !== null ? lit.right[row.r] : null)));
     }
     table.append(body);
     return el("div", { class: "diff-scroll" }, table);
@@ -965,7 +1019,7 @@
         const fs = fileStatus(path);
         const fileEl = el("div", { class: "file file-" + fs },
           el("div", { class: "file-head" }, el("span", { class: "chip chip-" + fs }, chipText(fs)), el("span", { class: "file-path" }, path)));
-        for (const h of HUNKS.get(path) || []) fileEl.append(diffTable(h));
+        for (const h of HUNKS.get(path) || []) fileEl.append(diffTable(path, h));
         card.append(fileEl);
       }
       wrap.append(card);
