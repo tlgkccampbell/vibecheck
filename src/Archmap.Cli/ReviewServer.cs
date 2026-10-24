@@ -103,11 +103,17 @@ public sealed class ReviewServer : IAsyncDisposable
     public string Begin(string range, string? label = null)
     {
         var (baseCommit, headCommit) = RevisionChangeset.ResolveRange(options.Directory, range);
+        if (baseCommit == headCommit)
+        {
+            throw new ArgumentException(range.Contains(WorkingTree.Name, StringComparison.Ordinal)
+                ? "there are no uncommitted changes to review" : $"{range} compares a commit with itself, so there is nothing to review");
+        }
         var id = $"{baseCommit[..7]}-{headCommit[..7]}";
         lock (reviews)
         {
             // A review that failed is started again, since a failure such as a package restore without a network need not recur.
-            if (!reviews.TryGetValue(id, out var review) || review.Failed) reviews[id] = Start(new Review(id, baseCommit, headCommit, label ?? range));
+            label ??= range == WorkingTree.Name ? WorkingTree.Subject : range;
+            if (!reviews.TryGetValue(id, out var review) || review.Failed) reviews[id] = Start(new Review(id, baseCommit, headCommit, label));
         }
         return $"/reviews/{id}/";
     }

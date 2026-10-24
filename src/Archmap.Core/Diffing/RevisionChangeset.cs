@@ -27,11 +27,13 @@ public static class RevisionChangeset
     /// <summary>
     /// Resolves the revisions a changeset compares to two commit hashes. One argument may be a range: <c>a..b</c>
     /// compares <c>a</c> with <c>b</c>, and <c>a...b</c> compares the merge base of the two with <c>b</c>, as a pull
-    /// request does. An empty side of a range, or a missing head, means <c>HEAD</c>.
+    /// request does. An empty side of a range, or a missing head, means <c>HEAD</c>. <see cref="WorkingTree.Name"/>
+    /// names a snapshot of the uncommitted work, and on its own means the uncommitted work against <c>HEAD</c>.
     /// </summary>
     public static (string Base, string Head) ResolveRange(string dir, string first, string? second = null)
     {
         if (second is not null) return (Commit(dir, first), Commit(dir, second));
+        if (first == WorkingTree.Name) return (Commit(dir, "HEAD"), Commit(dir, first));
         var three = first.IndexOf("...", StringComparison.Ordinal);
         if (three >= 0)
         {
@@ -45,7 +47,7 @@ public static class RevisionChangeset
 
     private static string OrHead(string rev) => rev.Length == 0 ? "HEAD" : rev;
 
-    private static string Commit(string dir, string rev) =>
+    private static string Commit(string dir, string rev) => rev == WorkingTree.Name ? WorkingTree.Snapshot(dir) :
         Git.TryRun(dir, "rev-parse", "--verify", "--quiet", rev + "^{commit}") ?? throw new ArgumentException($"\"{rev}\" does not name a commit");
 
     /// <summary>

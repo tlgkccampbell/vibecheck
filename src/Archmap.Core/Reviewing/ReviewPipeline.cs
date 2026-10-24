@@ -29,8 +29,9 @@ public sealed record ReviewRequest(string Directory, string BaseCommit, string H
 public sealed record ReviewProgress(string Stage, string Message);
 
 /// <summary>
-/// Describes a finished review for the viewer: the solution's name, the range as short hashes, the subject of the
-/// head commit when the range is one commit, where the map came from, and anything the reviewer should know.
+/// Describes a finished review for the viewer: the solution's name, the range as short hashes with a snapshot of the
+/// working tree named as such, the subject of the head commit when the range is one commit, where the map came from,
+/// and anything the reviewer should know.
 /// </summary>
 /// <param name="MapKind">One of <c>repository</c>, <c>file</c> and <c>skeleton</c>.</param>
 public sealed record ReviewInfo(string Solution, string Range, string? Title, string MapKind, string MapSource, IReadOnlyList<string> Warnings);
@@ -76,7 +77,8 @@ public static class ReviewPipeline
             Report("map", $"derived the namespace skeleton: {map.Nodes.Count} nodes");
         }
 
-        var info = new ReviewInfo(Path.GetFileNameWithoutExtension(chosen.Solution), $"{baseCommit[..7]}..{headCommit[..7]}",
+        var headName = WorkingTree.IsSnapshot(top, headCommit) ? "working tree" : headCommit[..7];
+        var info = new ReviewInfo(Path.GetFileNameWithoutExtension(chosen.Solution), $"{baseCommit[..7]}..{headName}",
             Title(top, baseCommit, headCommit), chosen.Kind, chosen.Source, warnings);
         var cached = cache?.ReadChangeset(baseCommit, headCommit, target, mapText!, layoutText);
         if (cached is not null)

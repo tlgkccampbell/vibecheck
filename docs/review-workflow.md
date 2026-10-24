@@ -36,7 +36,8 @@ repositories at once, and any form of enforcement.
    current branch against the default branch, the uncommitted work against `HEAD`,
    recent commits on the current branch, other local branches, and, when the `gh`
    command is available, open pull requests whose commits are present locally. A
-   free-form field takes any range `archmap changeset` accepts.
+   free-form field takes any range `archmap changeset` accepts, and `:worktree` for
+   the uncommitted work (section 4.6).
 3. Choosing a range starts a review. The page shows each stage's progress as it runs
    and draws the changeset as soon as it exists.
 4. Narratives fill in while the reviewer reads. Hovering an edge shows its narrative
@@ -171,9 +172,17 @@ The uncommitted work becomes a commit object without touching the reviewer's ind
 working tree or refs. The tool writes the working tree, tracked and untracked files
 alike and with `.gitignore` honored, through a temporary index file
 (`GIT_INDEX_FILE`) into a tree, and makes a commit of that tree with `HEAD` as its
-parent. No ref points at the commit, so git collects it eventually. Its hash depends
-only on the tree and the parent, apart from the timestamp, so the cache keys it by
-its tree hash and parent instead.
+parent. The real index is copied first, so that git rehashes only the files that
+changed. No ref points at the commit, so git collects it eventually. Its author,
+committer and dates are fixed, so its hash depends only on the tree and the parent:
+the same uncommitted work always gives the same commit, and the caches of section 5
+need no special key for it. When nothing is uncommitted, the snapshot is `HEAD`
+itself.
+
+A range names the uncommitted work as `:worktree`. Git does not allow a colon in a
+ref name, so no branch or tag can have that name. `:worktree` on its own means
+`HEAD..:worktree`, and it can stand on either side of any range, such as
+`main...:worktree`. The viewer shows a snapshot as "working tree" in the range.
 
 ### 4.7 Build the changeset
 
@@ -194,7 +203,7 @@ that clones and worktrees of one repository share a folder.
 
 | Entry | Key | Invalidated by |
 |---|---|---|
-| Analysis | Commit (or tree and parent), build flag, tool version | Never; dropped least recently used. |
+| Analysis | Commit, solution, build flag, tool build | Never; dropped least recently used. |
 | Generated map | Repository | A new version from section 4.5, or the reviewer's "regenerate". |
 | Changeset | Base, head, map hash | Never; it is cheap to rebuild from the analyses. |
 | Narratives | Changeset key, level or view, edge or node, prompt version, model | The reviewer's "regenerate". |
@@ -291,11 +300,12 @@ rebinding, from driving it.
 
 Each phase ends with the tool usable, and with tests that state its new behavior.
 
-1. **Server, picker and caches.** The `review` command and the bare `archmap`
+1. **Server, picker and caches.** (Done.) The `review` command and the bare `archmap`
    command, the server and its events, the viewer moved into the tool, the analysis
    and changeset caches. A repository with a map needs no other command. Without a
    map, the review uses the skeleton.
 2. **Uncommitted work.** The synthetic head of section 4.6 and its picker entry.
+   (Done.)
 3. **Generated maps.** `IClaude`, map generation, placement of new types, the switch
    notice and the save action.
 4. **Narratives.** Inputs, batching, checking, streaming, and the tooltip, panel and

@@ -8,7 +8,7 @@ namespace Archmap.Reviewing;
 /// A range the picker offers: the group it is listed under, a label, the range in the form
 /// <see cref="RevisionChangeset.ResolveRange"/> reads, and a detail line.
 /// </summary>
-/// <param name="Group">One of <c>branch</c> (the current branch), <c>commit</c>, <c>branches</c> and <c>pulls</c>.</param>
+/// <param name="Group">One of <c>worktree</c> (the uncommitted work), <c>branch</c> (the current branch), <c>commit</c>, <c>branches</c> and <c>pulls</c>.</param>
 public sealed record RangeChoice(string Group, string Label, string Range, string? Detail);
 
 /// <summary>Lists the ranges of a repository that a reviewer is likely to want to review. See <c>docs/review-workflow.md</c> section 2.</summary>
@@ -17,12 +17,15 @@ public static class RangeCatalog
     private const char Separator = '\u001f';
 
     /// <summary>
-    /// Returns the current branch against the default branch, the most recent commits on the current branch, and other
-    /// local branches that have commits the default branch lacks, most recently changed first.
+    /// Returns the uncommitted work against <c>HEAD</c> when there is any, the current branch against the default
+    /// branch, the most recent commits on the current branch, and other local branches that have commits the default
+    /// branch lacks, most recently changed first.
     /// </summary>
     public static List<RangeChoice> List(string dir, int commits = 15, int branches = 20)
     {
         var result = new List<RangeChoice>();
+        var changed = WorkingTree.ChangedPaths(dir);
+        if (changed > 0) result.Add(new RangeChoice("worktree", WorkingTree.Subject, WorkingTree.Name, $"{changed} {(changed == 1 ? "path" : "paths")} changed against HEAD"));
         var main = DefaultBranch(dir);
         var current = Git.TryRun(dir, "symbolic-ref", "--quiet", "--short", "HEAD");
         if (main is not null && current is not null && current != main && !main.EndsWith("/" + current, StringComparison.Ordinal))

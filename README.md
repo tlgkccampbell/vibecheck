@@ -67,7 +67,13 @@ command is installed. A range on the command line skips the picker:
 ```
 archmap review main...feature
 archmap review HEAD~3 HEAD
+archmap review :worktree
 ```
+
+`:worktree` names the uncommitted work, tracked and untracked files alike, and on its
+own reviews it against `HEAD`; `main...:worktree` reviews everything since the branch
+left `main`, committed or not. The tool snapshots the work as a commit object without
+touching the index, the files or any ref.
 
 The review checks out both ends into temporary worktrees, builds and analyzes them in
 parallel, and draws the changeset. The map is the `--map` file when given, then the

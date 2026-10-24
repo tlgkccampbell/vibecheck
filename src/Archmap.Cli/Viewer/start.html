@@ -73,10 +73,10 @@
 <main>
   <section id="picker">
     <form id="form">
-      <input type="text" id="range" placeholder="main...feature, abc123..def456, HEAD~3" aria-label="Range to review" autocomplete="off" spellcheck="false">
+      <input type="text" id="range" placeholder="main...feature, abc123..def456, HEAD~3, :worktree" aria-label="Range to review" autocomplete="off" spellcheck="false">
       <button class="primary" type="submit">Review</button>
     </form>
-    <p class="hint">A range is <code>a..b</code>, <code>a...b</code> from the merge base as a pull request compares, or one revision against <code>HEAD</code>.</p>
+    <p class="hint">A range is <code>a..b</code>, <code>a...b</code> from the merge base as a pull request compares, or one revision against <code>HEAD</code>. <code>:worktree</code> names the uncommitted work.</p>
     <div id="pick-error" class="error" hidden></div>
     <div id="groups"><p class="empty">Reading the repository…</p></div>
   </section>
@@ -105,7 +105,7 @@
     return e;
   }
 
-  const GROUPS = [["reviews", "Reviews in this session"], ["branch", "This branch"], ["pulls", "Pull requests"], ["commit", "Recent commits"], ["branches", "Other branches"]];
+  const GROUPS = [["reviews", "Reviews in this session"], ["worktree", "Uncommitted work"], ["branch", "This branch"], ["pulls", "Pull requests"], ["commit", "Recent commits"], ["branches", "Other branches"]];
   const STAGES = [["map", "Map"], ["base", "Base"], ["head", "Head"], ["changeset", "Changeset"]];
   let source = null;
 
