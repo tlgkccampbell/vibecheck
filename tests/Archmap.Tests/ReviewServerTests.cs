@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Archmap.Assist;
 using Archmap.Cli;
 using Archmap.Format;
 using Archmap.Reviewing;
@@ -107,7 +108,9 @@ public class ReviewServerTests
         var before = repo.Commit("one");
         ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
         var after = repo.Commit("two");
-        var claude = new FakeClaude(MapGeneratorTests.Complete);
+        // Narratives are asked for too, and get answers that explain nothing.
+        var claude = new FakeClaude(r => r.Schema == Prompts.Read("map.schema.json") ? MapGeneratorTests.Complete
+            : r.Schema == Prompts.Read("summary.schema.json") ? """{ "text": "", "parts": [] }""" : """{ "edges": [], "nodes": [] }""");
         await using var server = new ReviewServer(Options(repo) with { Cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo")), Claude = claude });
         using var client = Client();
         await client.GetAsync(await server.StartAsync());
@@ -128,7 +131,7 @@ public class ReviewServerTests
         var script = await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js");
         Assert.Contains("\"mapKind\":\"generated\"", script, StringComparison.Ordinal);
         Assert.Contains("\"mapVersion\":1", script, StringComparison.Ordinal);
-        Assert.Equal("claude-opus-5-5", Assert.Single(claude.Requests).Model);
+        Assert.Equal("claude-opus-5-5", Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("map.schema.json")).Model);
 
         var saved = await client.PostAsJsonAsync(api + "/map", new { action = "save" });
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
@@ -151,6 +154,54 @@ public class ReviewServerTests
         await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
         var events = await ReadEventsAsync(client, $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}/events", e => Is(e, "map", "unavailable"));
         Assert.Equal("no claude here", events[^1].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task StreamsCheckedNarrativesWrittenInAWorktreeOfTheHeadAndRegeneratesOne()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/archmap.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("call the service");
+        var seen = new List<string>();
+        var regenerated = false;
+        var claude = new FakeClaude(r =>
+        {
+            seen.Add(File.ReadAllText(Path.Combine(r.WorkingDirectory!, TestData.X1)));
+            if (r.Schema.Contains("\"parts\"", StringComparison.Ordinal)) return """{ "text": "Thing starts using the service.", "parts": ["a", "b"] }""";
+            var text = regenerated ? "Written again." : "Thing now runs the service.";
+            return $$"""{ "edges": [ { "from": "a", "to": "b", "text": "{{text}}", "pairs": [ { "from": "A.X.Thing", "to": "B.Service" } ] } ], "nodes": [] }""";
+        });
+        string worktree;
+        await using (var server = new ReviewServer(Options(repo) with { Directory = Path.Combine(repo.Path, "app"), Claude = claude }))
+        {
+            using var client = Client();
+            await client.GetAsync(await server.StartAsync());
+            var id = $"{before[..7]}-{after[..7]}";
+            var api = $"{server.BaseAddress}/api/reviews/{id}";
+
+            await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+            var events = await ReadEventsAsync(client, api + "/events", e => Is(e, "narratives", "done"));
+
+            var narratives = events.Where(e => e.GetProperty("type").GetString() == "narrative").ToDictionary(e => e.GetProperty("key").GetString()!);
+            Assert.Equal(["edge:a→b", "summary"], narratives.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal("A.X.Thing → B.Service", narratives["edge:a→b"].GetProperty("cites")[0].GetString());
+            Assert.Equal(1, narratives["summary"].GetProperty("run").GetInt32());
+            Assert.All(seen, x1 => Assert.Contains("Service.Run", x1, StringComparison.Ordinal));
+            Assert.All(claude.Requests, r => Assert.Equal("claude-sonnet-5-5", r.Model));
+            worktree = claude.Requests[0].WorkingDirectory!;
+            Assert.Contains("\"run\":1", await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js"), StringComparison.Ordinal);
+
+            regenerated = true;
+            Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync(api + "/narratives", new { key = "edge:b→a" })).StatusCode);
+            Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/narratives", new { key = "edge:a→b" })).StatusCode);
+            var again = await ReadEventsAsync(client, api + "/events", e => e.TryGetProperty("text", out var t) && t.GetString() == "Written again.");
+            Assert.Equal("edge:a→b", again[^1].GetProperty("key").GetString());
+            Assert.True(Directory.Exists(worktree));
+        }
+        Assert.False(Directory.Exists(worktree));
     }
 
     private static bool Is(JsonElement e, string type, string state) =>

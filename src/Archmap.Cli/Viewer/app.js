@@ -755,7 +755,8 @@
         "data-from": e.from, "data-to": e.to,
         onclick: (ev) => clickSelect(ev, e.key),
         onmouseenter: () => hover(e.key), onmouseleave: () => hover(null) });
-      g.append(svg("title", {}, `${nameOf(stripPin(e.from))} → ${nameOf(stripPin(e.to))}: ${e.base === e.head ? e.head : e.base + " → " + e.head} references`));
+      // With narratives, the page's own tooltip shows the counts, and a native one would cover it.
+      if (NARR.state === "off") g.append(svg("title", {}, `${nameOf(stripPin(e.from))} → ${nameOf(stripPin(e.to))}: ${e.base === e.head ? e.head : e.base + " → " + e.head} references`));
       g.append(svg("path", { d, class: "edge-hit" }));
       g.append(svg("path", { d, class: "edge-line", "stroke-width": w, "marker-end": `url(#arrow-${sel ? "selected" : e.status})`, "data-marker": e.status }));
       // Arrowheads that glide from source to target show the direction of the dependency. A removed edge carries none.
@@ -1097,6 +1098,7 @@
     const cur = state.current;
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
+      if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf));
       box.append(el("p", { class: "hint" }, "Changed types show their diffs. Click an edge row to see the type pairs behind it. Esc goes back to the schematic."));
       return;
     }
@@ -1120,6 +1122,7 @@
     if (!sel) {
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
+      if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id));
       const m = metricsOf(id);
       if (m.head) box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
       else if (id === ROOT) box.append(kv("Types", deltaText(CS.types.filter((t) => t.leafBase).length, CS.types.filter((t) => t.leafHead).length)));
@@ -1139,6 +1142,7 @@
       box.append(el("h2", {}, nameOf(child.id)), el("p", { class: "ident" }, child.id), el("p", { class: "purpose" }, purposeOf(child.id)));
       const st = statusOf(child.key);
       box.append(kv("Status", st === "children" ? "contains changes" : st));
+      if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id));
       const m = metricsOf(child.key), content = child.kind === "group" ? groupContent(child) : contentOf(child.key);
       if (m.head) {
         box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
@@ -1183,6 +1187,7 @@
       box.append(kv("Status", edge.status));
       box.append(kv("References", deltaText(edge.base, edge.head)));
       box.append(kv("Leaf pairs", String(edge.members.length)));
+      if (edge.status !== "unchanged") { const n = edgeNarrative(edge); box.append(narrativeBlock(n, n ? n.key : null)); }
       if (edge.members.length > 1 || edge.members[0].from !== from || edge.members[0].to !== to) {
         box.append(el("h3", {}, "Made of"));
         const ul = el("ul", { class: "evidence" });
@@ -1528,6 +1533,7 @@
   function hover(key) {
     if (dragging) return;
     stage().classList.toggle("hovering", markFocus(key, "hot"));
+    showTip(key);
   }
 
   // ---------- Pan and zoom ----------
@@ -1598,6 +1604,160 @@
     apply(read());
   }
 
+  // ---------- Narratives ----------
+
+  // The narratives Claude wrote for this page's result, by key, as the server's narrative events deliver them. A key
+  // is "summary", "node:<id>" or "edge:<from>→<to>", where an end is a node, a group as "g:view/group", or an
+  // external. The state is "off" when no narratives come, because the page was opened without the server or the server
+  // has no Claude, and otherwise "waiting", "writing", "done" or "failed".
+  const NARR = { state: META.review && META.narratives ? "waiting" : "off", items: new Map(), pending: new Set(), errors: new Map(), total: 0, dropped: 0, message: "", expanded: false };
+  const API = META.review ? `/api/reviews/${encodeURIComponent(META.review)}` : null;
+
+  // Returns the parts of a text with each `code` span set in monospace.
+  function richText(text) { return text.split(/`([^`]+)`/).map((part, i) => i % 2 ? el("code", {}, part) : part); }
+
+  // Returns the block a pin stands for, or null for a key that is not a pin.
+  function pinTarget(k) { const m = /^pin:(?:in|out):(.*)$/.exec(k); return m ? m[1] : null; }
+
+  // Returns the narrative of an edge the current location draws, or null. An edge to a pin stands for the edge
+  // between this location and the pin's block, which is explained where both are drawn as blocks, so the block inside,
+  // then the location, then the location's ancestors are tried in its place.
+  function edgeNarrative(e) {
+    const a = pinTarget(e.from), b = pinTarget(e.to);
+    if (!a && !b) return NARR.items.get(`edge:${e.from}→${e.to}`) || null;
+    const l = state.current.level.loc;
+    const anchors = [a ? e.to : e.from];
+    if (l.group) anchors.push(`g:${l.view}/${l.group}`);
+    else for (let x = l.level; x && x !== ROOT; x = parentOf(x)) anchors.push(x);
+    for (const x of anchors) {
+      const n = NARR.items.get(a ? `edge:${a}→${x}` : `edge:${x}→${b}`);
+      if (n) return n;
+    }
+    return null;
+  }
+
+  // Shows a cited type pair by its short names, a file by its path, and a part of the map by its name.
+  function citeText(c) { return c.includes(" → ") ? c.split(" → ").map(shortName).join(" → ") : NODES[c] || c === UNSORTED ? nameOf(c) : c; }
+
+  // Returns the details panel's block for a narrative: its text marked as Claude's, the evidence it rests on and a
+  // regenerate action. While narratives are being written and this one has not arrived, it says so. Otherwise it is null.
+  function narrativeBlock(n, key = n && n.key) {
+    if (NARR.state === "off") return null;
+    const busy = key && NARR.pending.has(key);
+    if (!n && !busy && NARR.state !== "writing" && NARR.state !== "waiting") return key && NARR.errors.has(key) ? el("p", { class: "warn" }, NARR.errors.get(key)) : null;
+    const box = el("section", { class: "narrative" }, el("h3", {}, "Why it changed"));
+    if (n) {
+      box.append(el("p", { class: "narrative-text" }, ...richText(n.text)));
+      if (n.cites.length) {
+        const ul = el("ul", { class: "evidence cites" });
+        for (const c of n.cites.slice(0, 12)) ul.append(el("li", { title: c }, el("span", {}, citeText(c))));
+        box.append(el("div", { class: "by" }, "Rests on"), ul);
+      }
+    }
+    if (busy) box.append(el("p", { class: "hint" }, el("span", { class: "spin", "aria-hidden": "true" }), " Claude is writing it again…"));
+    else if (!n) box.append(el("p", { class: "hint" }, "Claude is writing an explanation…"));
+    if (key && NARR.errors.has(key)) box.append(el("p", { class: "warn" }, NARR.errors.get(key)));
+    if (n) box.append(el("div", { class: "narrative-foot" }, el("span", { class: "by" }, "Written by Claude; check it against the code."),
+      el("button", { class: "link", disabled: busy, onclick: () => regenerate(key) }, "Regenerate")));
+    return box;
+  }
+
+  async function regenerate(key) {
+    NARR.pending.add(key); NARR.errors.delete(key); showNarratives();
+    const r = await fetch(`${API}/narratives`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
+    if (!r.ok) { NARR.pending.delete(key); NARR.errors.set(key, (await r.json().catch(() => ({}))).message || "It could not be written again."); showNarratives(); }
+  }
+
+  async function regenerateAll() {
+    NARR.state = "waiting"; showNarratives();
+    await fetch(`${API}/narratives`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  }
+
+  // Records a narrative event of this page's run. A "writing" event starts the narratives afresh, since it follows a
+  // regeneration of all of them as well as the first writing.
+  function narrativeEvent(e) {
+    if (e.run !== META.run) return;
+    if (e.type === "narratives") {
+      NARR.state = e.state; NARR.message = e.message || "";
+      if (e.state === "writing") { NARR.items.clear(); NARR.errors.clear(); NARR.total = e.total; }
+      if (e.state === "done") NARR.dropped = e.dropped;
+    } else if (e.failed) {
+      NARR.pending.delete(e.key); NARR.errors.set(e.key, e.message);
+    } else {
+      NARR.items.set(e.key, { key: e.key, text: e.text, cites: e.cites || [] });
+      NARR.pending.delete(e.key); NARR.errors.delete(e.key);
+    }
+    showNarratives();
+  }
+
+  // Redraws what shows narratives once per frame, however many events arrive in it.
+  let narrativeFrame = 0;
+  function showNarratives() {
+    if (narrativeFrame) return;
+    narrativeFrame = requestAnimationFrame(() => {
+      narrativeFrame = 0;
+      renderSummary();
+      if (state.current || loc().leaf) renderDetails();
+      if (tipKey) showTip(tipKey);
+    });
+  }
+
+  // Shows the summary of the whole changeset above the drawing, with how far the other narratives have come.
+  function renderSummary() {
+    const box = $("#summary");
+    if (NARR.state === "off") { box.hidden = true; return; }
+    const n = NARR.items.get("summary");
+    const writing = NARR.state === "writing" || NARR.state === "waiting";
+    const others = [...NARR.items.keys()].filter((k) => k !== "summary").length;
+    const status = writing ? `${others} of ${NARR.total ? NARR.total - 1 : "…"} explanations so far`
+      : NARR.state === "done" ? `${others} explanations` + (NARR.dropped ? `; ${NARR.dropped} failed their check and are not shown` : "") : "";
+    const head = el("div", { class: "summary-head" }, el("span", { class: "summary-label" }, "Summary"), el("span", { class: "by" }, "written by Claude"),
+      writing ? el("span", { class: "spin", "aria-hidden": "true" }) : null, el("span", { class: "by" }, status), el("span", { class: "spacer" }),
+      el("button", { class: "link", disabled: writing, onclick: regenerateAll, title: "Write every explanation of this changeset again" }, "Regenerate all"));
+    box.replaceChildren(head);
+    if (n) {
+      box.append(el("p", { class: "summary-text" }, ...richText(n.text)));
+      const parts = n.cites.filter((c) => NODES[c]);
+      // The summary shows its first lines until the reader expands it, so that the drawing keeps its room.
+      const more = el("button", { class: "link", onclick: () => { NARR.expanded = !NARR.expanded; renderSummary(); } }, NARR.expanded ? "Less" : "More");
+      box.append(el("div", { class: "summary-parts" }, more, parts.length ? el("span", { class: "by" }, "Rests on") : null,
+        ...parts.map((c) => el("button", { class: "link", onclick: () => showInContext(c) }, nameOf(c)))));
+    } else if (NARR.state === "failed") box.append(el("p", { class: "warn" }, NARR.message));
+    else if (writing) box.append(el("p", { class: "hint" }, "Claude is reading the change."));
+    if (NARR.errors.has("summary")) box.append(el("p", { class: "warn" }, NARR.errors.get("summary")));
+    box.classList.toggle("clamped", !NARR.expanded);
+    box.hidden = false;
+  }
+
+  // Shows an edge's narrative, or its counts until the narrative arrives, in a tooltip that follows the pointer.
+  let tipKey = null;
+  function showTip(key) {
+    const tip = $("#tip");
+    const e = key && key.startsWith("edge:") && state.current ? state.current.level.edges.find((x) => x.key === key) : null;
+    tipKey = e ? key : null;
+    if (!e) { tip.hidden = true; return; }
+    const n = NARR.state === "off" ? null : edgeNarrative(e);
+    tip.replaceChildren(el("div", { class: "tip-head" }, el("span", {}, `${nameOf(stripPin(e.from))} → ${nameOf(stripPin(e.to))}`),
+      el("span", { class: "n" }, e.base === e.head ? `${e.head} refs` : `${e.base} → ${e.head} refs`)));
+    if (n) tip.append(el("p", {}, ...richText(n.text)), el("div", { class: "by" }, "Written by Claude"));
+    else if (e.status !== "unchanged" && (NARR.state === "writing" || NARR.state === "waiting")) tip.append(el("div", { class: "by" }, "Claude is writing an explanation…"));
+    tip.hidden = false;
+  }
+
+  // Keeps the tooltip beside the pointer and inside the drawing.
+  function installTip() {
+    const wrap = $("#stage").parentElement, tip = $("#tip");
+    wrap.addEventListener("pointermove", (ev) => {
+      if (tip.hidden) return;
+      const b = wrap.getBoundingClientRect();
+      const x = ev.clientX - b.left, y = ev.clientY - b.top;
+      const left = x + 16 + tip.offsetWidth > b.width ? x - 16 - tip.offsetWidth : x + 16;
+      const top = y + 16 + tip.offsetHeight > b.height ? y - 16 - tip.offsetHeight : y + 16;
+      tip.style.left = Math.max(4, left) + "px"; tip.style.top = Math.max(4, top) + "px";
+    });
+    wrap.addEventListener("pointerleave", () => showTip(null));
+  }
+
   // ---------- Map notices ----------
 
   // Follows the review's event stream when the archmap server serves the page. A concept map that Claude is making, or
@@ -1639,6 +1799,7 @@
     const source = new EventSource(`${api}/events`);
     source.onmessage = (m) => {
       const e = JSON.parse(m.data);
+      if (e.type === "narrative" || e.type === "narratives") { narrativeEvent(e); return; }
       const fresh = e.seq >= META.events;
       if (e.type === "ready" && fresh) { source.close(); location.reload(); }
       else if (e.type === "stage" && fresh && switching) show("busy", "switch", spinner(), el("span", {}, `Switching to the concept map: ${e.message}`));
@@ -1663,6 +1824,8 @@
       $("#pr code").after(el("span", {}, META.mapKind === "skeleton" ? " · skeleton map" : " · map"));
       $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
     }
+    renderSummary();
+    installTip();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
     $("#trivial").addEventListener("change", async (ev) => { rememberView(); state.opts.trivial = ev.target.checked; const m = await mount(); if (m) setViewBox(arrive(m)); });

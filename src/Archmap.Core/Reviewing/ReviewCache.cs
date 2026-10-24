@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using Archmap.Analysis;
+using Archmap.Assist;
 using Archmap.Checking;
 using Archmap.Diffing;
 
@@ -19,7 +20,7 @@ public sealed record AnalysisTarget(string Root, string Solution, bool Build);
 /// at a range, or at a range that shares a commit with one seen before, costs no compilation. Every cache of every
 /// repository shares one size limit. See <c>docs/review-workflow.md</c> section 5.
 /// </summary>
-public sealed class ReviewCache
+public sealed class ReviewCache : INarrativeCache
 {
     /// <summary>The size the caches of all repositories may reach together before the least recently used entries are evicted.</summary>
     public const long DefaultLimit = 2L * 1024 * 1024 * 1024;
@@ -134,6 +135,14 @@ public sealed class ReviewCache
             return version;
         }
     }
+
+    /// <summary>Returns the checked narratives stored under a request key, or <see langword="null"/> when there are none.</summary>
+    public IReadOnlyList<Narrative>? ReadNarratives(string key) => Read<List<Narrative>>(NarrativePath(key));
+
+    /// <summary>Stores the checked narratives of a request under its key, replacing any stored before.</summary>
+    public void WriteNarratives(string key, IReadOnlyList<Narrative> narratives) => Write(NarrativePath(key), narratives.ToList());
+
+    private string NarrativePath(string key) => Path.Combine(Directory, "narratives", key + ".json.gz");
 
     private string GeneratedMapDirectory(AnalysisTarget target) => Path.Combine(Directory, "maps", Hash(target.Root, target.Solution));
 

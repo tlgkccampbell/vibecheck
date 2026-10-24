@@ -82,9 +82,35 @@
   .notice.ready { border-color: var(--added); background: var(--added-bg); }
   .notice.error { border-color: var(--removed); background: var(--removed-bg); }
   .notice .close { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 4px; }
-  .notice .spin { width: 12px; height: 12px; flex: none; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: notice-spin 0.9s linear infinite; }
+  .spin { display: inline-block; vertical-align: -1px; width: 12px; height: 12px; flex: none; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: notice-spin 0.9s linear infinite; }
   @keyframes notice-spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .notice .spin { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+  /* Narratives, which Claude writes and the archmap server streams: the summary under the top bar, the tooltip on an
+     edge, and a block in the details panel. Each is marked as written by a model. */
+  .summary { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface); font-size: 13px; }
+  .summary-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .summary-label { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+  .summary-text { margin: 6px 0 0; max-width: 110ch; }
+  .summary.clamped .summary-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .summary-parts { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin-top: 4px; }
+  .summary .spacer { flex: 1; }
+  .summary .warn { margin: 6px 0 0; }
+  .by { color: var(--muted); font-size: 12px; }
+  .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: 12.5px; }
+  .link:hover:not(:disabled) { text-decoration: underline; }
+  .link:disabled { color: var(--muted); cursor: default; }
+  .narrative { border-left: 3px solid var(--accent); padding: 2px 0 2px 10px; margin: 10px 0; }
+  .narrative h3 { margin-top: 0; }
+  .narrative-text { margin: 0 0 6px; }
+  .narrative .cites { margin: 2px 0 6px; }
+  .narrative-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+  .summary code, .narrative code, .tip code { font-family: var(--mono); font-size: .92em; }
+  .tip { position: absolute; z-index: 5; max-width: 360px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface);
+    box-shadow: 0 4px 14px rgb(0 0 0 / .14); font-size: 12.5px; pointer-events: none; }
+  .tip p { margin: 4px 0; }
+  .tip-head { display: flex; gap: 10px; font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+  .tip-head .n { margin-left: auto; color: var(--muted); font-weight: 400; white-space: nowrap; }
   .nav-buttons { display: inline-flex; gap: 8px; flex: none; }
   .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .crumb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
@@ -368,6 +394,7 @@
   </div>
 </div>
 <div class="notice" id="notice" role="status" hidden></div>
+<div class="summary" id="summary" aria-live="polite" hidden></div>
 
 <div class="main">
   <aside>
@@ -396,6 +423,7 @@
         <rect id="paper" x="0" y="0" width="1200" height="700" fill="url(#dots)"></rect>
       </svg>
       <div class="status-line" id="statusline"></div>
+      <div class="tip" id="tip" role="tooltip" hidden></div>
     </div>
     <div id="leafview" hidden></div>
   </div>

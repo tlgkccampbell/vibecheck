@@ -606,7 +606,6 @@ builds from scratch. `check`, `facts`, `why` and `units` do not use the cache ye
   attributes cover the cases seen so far.
 - Multiple solutions or repositories.
 - Runtime, configuration or process-boundary dependencies.
-- Narrative summaries.
 
 ## 9. Open questions
 

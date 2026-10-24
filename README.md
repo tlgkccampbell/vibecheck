@@ -8,8 +8,8 @@ schematic that reviewers drill into. The map is proposed by a language model fro
 listing of the code's types and verified against the dependency graph.
 
 The design is in [docs/archmap-spec.md](docs/archmap-spec.md). The one-step review
-workflow, with generated maps and narratives to come, is in
-[docs/review-workflow.md](docs/review-workflow.md); its first phase is built.
+workflow, with generated maps and narratives, is in
+[docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
 
 ## Layout
 
@@ -88,10 +88,19 @@ the viewer offers to switch to it when it is ready. The generated map is kept an
 reused for later reviews, and a review that finds types it does not place asks
 Claude to place them, which makes a new version. "Save to repository" writes the
 map as `archmap.json` beside the solution. The calls run on your own Claude account,
-with no tools, settings or MCP servers. Map generation uses Claude Opus 5.5 and
-placement uses Claude Sonnet 5.5, whatever your Claude Code default is; `--model`
-names one model for every call, and `--no-ai` turns the calls off. The terminal logs
-each call's model, time and cost.
+with none of your settings or MCP servers, and these two get no tools. Map generation
+uses Claude Opus 5.5 and placement uses Claude Sonnet 5.5, whatever your Claude Code
+default is.
+
+Once the changeset is drawn, Claude explains it: a summary above the drawing, and two
+or three sentences on why each changed edge and part changed, in a tooltip on the edge
+and in the details panel. Each explanation cites the type pairs or files it rests on,
+and one that cites anything outside the changeset is discarded. Claude reads the code
+at head, in a worktree of its own, with read-only tools. Narratives use Claude Sonnet
+5.5 and are cached, so a second look at a range costs nothing.
+
+`--model` names one model for every call, and `--no-ai` turns the calls off. The
+terminal logs each call's model, time and cost.
 
 Each commit's analysis, and each changeset, is cached under `%LOCALAPPDATA%\archmap`
 on Windows and `~/.cache/archmap` elsewhere, or under `ARCHMAP_CACHE` when it is set.

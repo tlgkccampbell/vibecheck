@@ -138,9 +138,10 @@ public sealed class ReviewServer : IAsyncDisposable
     {
         await stopping.CancelAsync();
         Task?[] tasks;
-        lock (mapJobs) tasks = [.. reviews.Values.Select(r => r.Task), .. mapJobs.Values.Select(j => j.Task)];
+        lock (mapJobs) tasks = [.. reviews.Values.Select(r => r.Task), .. reviews.Values.Select(r => r.Narratives?.Task), .. mapJobs.Values.Select(j => j.Task)];
         var running = tasks.Where(t => t is not null).Cast<Task>().ToArray();
         await Task.WhenAny(Task.WhenAll(running), Task.Delay(TimeSpan.FromSeconds(15)));
+        foreach (var r in reviews.Values) r.Worktree?.Dispose();
         if (app is not null)
         {
             await app.StopAsync();
@@ -174,11 +175,13 @@ public sealed class ReviewServer : IAsyncDisposable
         };
         try
         {
-            review.Result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
-            foreach (var w in review.Result.Info.Warnings) options.Log?.Invoke($"  {review.Id} warning: {w}");
+            var result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
+            review.Publish(result);
+            foreach (var w in result.Info.Warnings) options.Log?.Invoke($"  {review.Id} warning: {w}");
             options.Log?.Invoke($"  {review.Id} ready");
             review.Add(new { type = "ready", url = $"/reviews/{review.Id}/" });
-            ImproveMap(review, review.Result);
+            ImproveMap(review, result);
+            Explain(review, regenerate: false);
         }
         catch (Exception ex)
         {
@@ -263,6 +266,84 @@ public sealed class ReviewServer : IAsyncDisposable
             lock (mapJobs) mapJobs.Remove(key);
             job.Report(new { type = "map", state = "failed", message = (job.State == "generating" ? "Claude could not generate a concept map: " : "Claude could not place the new types: ") + message });
         }
+    }
+
+    /// <summary>
+    /// Starts writing the narratives of a review's current result, in the background, and cancels any narratives still
+    /// being written for an earlier result. Each narrative that passes its check is sent as a <c>narrative</c> event,
+    /// and the job's progress as <c>narratives</c> events, all carrying the run of the result they explain. Claude reads
+    /// the code in a worktree of the head commit, which is kept for the life of the review. See
+    /// <c>docs/review-workflow.md</c> section 6.
+    /// </summary>
+    private void Explain(Review review, bool regenerate)
+    {
+        if (options.Claude is null) return;
+        var (result, run) = review.Current;
+        if (result is null) return;
+        var job = new NarrativeJob(run, CancellationTokenSource.CreateLinkedTokenSource(stopping.Token));
+        lock (review)
+        {
+            review.Narratives?.Cancel();
+            review.Narratives = job;
+        }
+        job.Task = Task.Run(async () =>
+        {
+            var ct = job.Cancellation.Token;
+            try
+            {
+                var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
+                lock (review) review.Worktree ??= Reviewing.Worktree.Add(top, review.Head);
+                job.Context = new NarrativeContext(result.Changeset, result.BaseAnalysis, result.HeadAnalysis, NarrativeContext.ReadCommits(top, review.Base, review.Head))
+                {
+                    WorkingDirectory = Path.GetFullPath(Path.Combine(review.Worktree.Path, result.Target.Root)),
+                    Model = options.Models.Narrative,
+                };
+                job.Plan = NarrativePlanner.Plan(result.Changeset);
+                var total = job.Plan.Sum(b => b.Keys.Count());
+                options.Log?.Invoke($"  {review.Id} narratives: {total} in {job.Plan.Count} request(s)");
+                review.Add(new { type = "narratives", run, state = "writing", total, message = $"Claude is explaining the changes: {total} narratives." });
+                var tally = await NarrativeWriter.RunAsync(job.Plan, job.Context, options.Claude, options.Cache,
+                    n => review.Add(new { type = "narrative", run, key = n.Key, text = n.Text, cites = n.Cites }), regenerate, ct);
+                foreach (var f in tally.Failures) options.Log?.Invoke($"  {review.Id} narratives failed: {f}");
+                options.Log?.Invoke($"  {review.Id} narratives: {tally.Written} written, {tally.Dropped} dropped");
+                review.Add(new { type = "narratives", run, state = "done", written = tally.Written, dropped = tally.Dropped, failures = tally.Failures });
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer result, a regeneration or the server's shutdown took over.
+            }
+            catch (Exception ex)
+            {
+                options.Log?.Invoke($"  {review.Id} narratives failed: {ex.Message}");
+                review.Add(new { type = "narratives", run, state = "failed", message = "Claude could not explain the changes: " + ex.Message });
+            }
+        });
+    }
+
+    /// <summary>
+    /// Writes one narrative of a review anew, in the background, and sends it as a <c>narrative</c> event, or sends a
+    /// <c>narrative</c> event with <c>failed</c> set when it cannot be written. Returns a value indicating whether the
+    /// key names a narrative of the review's current plan.
+    /// </summary>
+    private bool Regenerate(Review review, string key)
+    {
+        var job = review.Narratives;
+        var batch = job?.Plan?.FirstOrDefault(b => b.Keys.Contains(key));
+        if (job is null || batch is null || job.Context is null || options.Claude is null) return false;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var n = await NarrativeWriter.RegenerateAsync(batch, key, job.Context, options.Claude, options.Cache, job.Cancellation.Token);
+                if (n is not null) review.Add(new { type = "narrative", run = job.Run, key = n.Key, text = n.Text, cites = n.Cites });
+                else review.Add(new { type = "narrative", run = job.Run, key, failed = true, message = "The new narrative failed its check, so the old one stays." });
+            }
+            catch (Exception ex) when (ex is ClaudeException or OperationCanceledException)
+            {
+                review.Add(new { type = "narrative", run = job.Run, key, failed = true, message = ex is ClaudeException ? "Claude could not write it: " + ex.Message : "cancelled" });
+            }
+        });
+        return true;
     }
 
     /// <summary>
@@ -407,6 +488,19 @@ public sealed class ReviewServer : IAsyncDisposable
             }
         });
 
+        web.MapPost("/api/reviews/{id}/narratives", async (string id, HttpContext ctx) =>
+        {
+            if (!reviews.TryGetValue(id, out var review) || review.Result is null) return Results.NotFound();
+            if (options.Claude is null) return Results.BadRequest(new { message = "Claude is not available, so there are no narratives." });
+            var body = await JsonSerializer.DeserializeAsync<NarrativesBody>(ctx.Request.Body, FactsJson.Options);
+            if (body?.Key is null)
+            {
+                Explain(review, regenerate: true);
+                return Results.Accepted();
+            }
+            return Regenerate(review, body.Key) ? Results.Accepted() : Results.NotFound(new { message = $"{body.Key} is not among the review's narratives." });
+        });
+
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
             reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
 
@@ -423,14 +517,17 @@ public sealed class ReviewServer : IAsyncDisposable
         web.MapGet("/reviews/{id}/app.js", (string id) => Page("app.js", "text/javascript; charset=utf-8"));
         web.MapGet("/reviews/{id}/changeset.js", (string id) =>
         {
-            if (!reviews.TryGetValue(id, out var r) || r.Result is null) return Results.NotFound();
-            var info = r.Result.Info;
+            if (!reviews.TryGetValue(id, out var r)) return Results.NotFound();
+            var (result, run) = r.Current;
+            if (result is null) return Results.NotFound();
+            var info = result.Info;
             var meta = new
             {
                 solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
-                mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count,
+                mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
+                narratives = options.Claude is not null,
             };
-            var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(r.Result.Changeset)}";
+            var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
             return Results.Text(script, "text/javascript; charset=utf-8");
         });
     }
@@ -449,6 +546,24 @@ public sealed class ReviewServer : IAsyncDisposable
     private sealed record BeginBody(string? Range, string? Label);
 
     private sealed record MapBody(string? Action);
+
+    private sealed record NarrativesBody(string? Key);
+
+    /// <summary>
+    /// Represents the writing of one result's narratives: the run of the result, the plan and its inputs once they are
+    /// ready, and the cancellation that a newer job uses to stop it.
+    /// </summary>
+    private sealed class NarrativeJob(int run, CancellationTokenSource cancellation)
+    {
+        public int Run { get; } = run;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public Task? Task { get; set; }
+        public List<NarrativeBatch>? Plan { get; set; }
+        public NarrativeContext? Context { get; set; }
+
+        /// <summary>Cancels the job. Its token source is left for its task to observe, and is collected with it.</summary>
+        public void Cancel() => Cancellation.Cancel();
+    }
 
     /// <summary>Reports progress on the calling thread as it arrives.</summary>
     private sealed class ImmediateProgress(Action<string> report) : IProgress<string>
@@ -511,9 +626,31 @@ public sealed class ReviewServer : IAsyncDisposable
         public string Label { get; } = label;
         public DateTime Started { get; } = DateTime.UtcNow;
         public Task? Task { get; set; }
-        public ReviewResult? Result { get; set; }
+        public ReviewResult? Result { get; private set; }
         public bool Failed { get; set; }
         public bool Rerunning { get; set; }
+
+        /// <summary>Gets the number of results the review has had. Narrative events carry it, so that a page ignores those of an earlier result.</summary>
+        public int Run { get; private set; }
+
+        /// <summary>Gets or sets the narratives being written for the current result, or <see langword="null"/>.</summary>
+        public NarrativeJob? Narratives { get; set; }
+
+        /// <summary>Gets or sets the worktree of the head commit that narratives read, or <see langword="null"/> before the first needs it.</summary>
+        public Worktree? Worktree { get; set; }
+
+        /// <summary>Gets the current result together with its run, read at one moment.</summary>
+        public (ReviewResult? Result, int Run) Current { get { lock (this) return (Result, Run); } }
+
+        /// <summary>Records a new result, which starts a new run.</summary>
+        public void Publish(ReviewResult result)
+        {
+            lock (this)
+            {
+                Result = result;
+                Run++;
+            }
+        }
 
         /// <summary>Gets the number of events recorded so far.</summary>
         public int Count { get { lock (events) return events.Count; } }

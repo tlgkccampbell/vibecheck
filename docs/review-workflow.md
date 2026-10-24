@@ -56,7 +56,8 @@ the cache of section 5, and serves the viewer and a small JSON API. The viewer i
 the page that was in `mock/`, moved into the tool. It still reads
 `window.CHANGESET`, which the server sets from a `changeset.js` it serves beside
 each review's page, so the same page also opens from a file and publishes as an
-artifact. Phase 4 adds an event stream to the viewer for narratives.
+artifact. Narratives reach the page through the review's event stream, and a page
+opened from a file shows none.
 
 ```
 browser ── viewer (static files, embedded in the tool)
@@ -78,13 +79,15 @@ The API has these endpoints:
 | `GET /api/reviews/{id}/events` | Streams the review's progress and results as server-sent events. |
 | `GET /api/reviews/{id}/changeset` | Returns the current changeset document. |
 | `POST /api/reviews/{id}/map` | Switches the review to another map, or saves the generated map into the repository. Phase 3. |
-| `POST /api/reviews/{id}/narratives` | Regenerates the narratives, or one of them. Phase 4. |
+| `POST /api/reviews/{id}/narratives` | Writes every narrative again, or, given a `key`, one of them. |
 
 The event stream opens with a `review` event that names the range, and carries
 `stage` events (a stage reported progress), a `ready` event when the changeset is
-ready, or a `failed` event with the reason. Later phases add a `map` event when a
-better map is available, and a `narrative` event for each narrative that passes its
-check. The pages never poll.
+ready, or a `failed` event with the reason. A `map` event reports the generation of a
+better map, a `narratives` event the progress of the narratives (`writing`, `done` or
+`failed`), and a `narrative` event carries each narrative that passes its check. A
+review is rerun when it switches maps, so narrative events carry the run they explain,
+and a page ignores those of another run. The pages never poll.
 
 The tool exits when the reviewer closes the terminal or presses Ctrl+C. Jobs that
 are still running are cancelled, and their worktrees are removed.
@@ -111,9 +114,10 @@ parallel, as `archmap changeset` does now. The result of this stage is the
 Caching the analysis rather than the facts means that a change of map, such as the
 switch from skeleton to concept map, costs a check of each end and no compilation.
 
-The head worktree is kept for the life of the review, because narratives read the
-code at head (section 6.2). It is removed when the review closes, and recreated
-from the commit if a later narrative needs it.
+Narratives read the code at head (section 6.2), so a review checks out its head into
+a worktree of its own when its narratives start, since the analysis usually comes from
+the cache and has no worktree to keep. The worktree lasts as long as the review and is
+removed when the tool exits.
 
 ### 4.3 Choose the map
 
@@ -219,7 +223,7 @@ that clones and worktrees of one repository share a folder.
 | Analysis | Commit, solution, build flag, tool build | Never; dropped least recently used. |
 | Generated map | Repository | A new version from section 4.5, or the reviewer's "regenerate". |
 | Changeset | Base, head, map hash | Never; it is cheap to rebuild from the analyses. |
-| Narratives | Changeset key, level or view, edge or node, prompt version, model | The reviewer's "regenerate". |
+| Narratives | The request: its prompt, which holds the inputs and the template, its schema and its model | The reviewer's "regenerate". |
 
 Each generated map version is kept, so that an older review can be reopened with the
 map it was drawn with. An analysis of a large solution is tens of megabytes, so the
@@ -237,25 +241,40 @@ changed, not only what changed. Counts and diffs already say what.
 - Each changed edge that some level or view of the viewer draws. The viewer
   aggregates leaf-pair edges to the blocks of the level it draws, so an edge between
   two top-level components and an edge between two leaves inside one of them are
-  different edges with different narratives.
-- Each changed node, shown in the details panel.
+  different edges with different narratives. An edge is known by its two blocks, so
+  it is explained once, at the level whose children they are, or in the view whose
+  groups they are, and shows its narrative wherever it is drawn. Edges from the top
+  level's components to externals are explained there.
+- Each changed node, at the level whose child it is, shown in the details panel when
+  the node is selected or open. A view's groups get no narrative of their own, since a
+  group is a regrouping of leaves the levels already explain.
 
 Edges to the tabs on a level's frame have no narrative of their own. The edge they
-stand for has one at the enclosing level.
+stand for has one at the enclosing level, and the viewer shows that one. An edge
+between two leaves of one group that are not siblings in the tree has no narrative.
+
+`NarrativePlanner` in `src/Archmap.Core/Assist` repeats the viewer's aggregation to
+decide what each level and view explains.
 
 ### 6.2 Inputs
 
 Narratives are requested in batches of one level or one view, so that the narratives
-a reader sees side by side were written together. A batch contains:
+a reader sees side by side were written together. A level or view with more than 24
+changed edges and nodes is split into batches of 24. A batch contains:
 
 - The commit messages in the range, which in a change a model wrote often state the
-  intent outright.
+  intent outright. A range of more than 60 commits lists its latest 60.
 - For each edge, the evidence pairs with their counts at base and head, the largest
-  changes first, up to a limit; and for each pair, the changed reference sites, with
-  symbol, file and line, which the builder takes from the two ends' facts.
-- For each node, its changed files with their hunks, trivial hunks left out, up to a
-  limit.
+  changes first, up to eight; and for each pair, up to four added and four removed
+  reference sites, with kind, symbol, file and line, taken from the two ends'
+  analyses. A site counts as added or removed when the other end has no site of the
+  same kind and symbol in the same file, since edits move lines.
+- For each node, its changed files, up to thirty, with up to 160 lines of their
+  hunks, trivial hunks left out.
 - The names and purposes of the nodes involved, from the map.
+
+The summary is a request of its own, with the commit messages, the changed files under
+each top-level node, and the changed edges of the level the viewer opens on.
 
 Claude runs with the head worktree as its working directory and the read-only tools
 Read, Grep and Glob, so that it can look past the limits when an edge needs it.
@@ -266,18 +285,24 @@ four requests run at once.
 
 ### 6.3 Checking
 
-Each narrative states the evidence it rests on: the type pairs for an edge, and the
-files for a node. A narrative that names a pair not in the edge's evidence, or a file
-not under the node, is discarded and requested once more on its own. If the second
-answer fails too, the edge keeps its counts and shows no narrative. The check is
-cheap and catches the most damaging failure, an explanation of a dependency that is
+Each narrative states the evidence it rests on: the type pairs for an edge, the files
+for a node, and the nodes for the summary. A narrative that cites nothing, names a pair
+not in the edge's evidence, a file not under the node or a node not in the map, or that
+the answer leaves out, is discarded. The discarded narratives of a batch are requested
+once more together, apart from the rest, with the reason each was discarded. If the
+second answer fails too, the edge keeps its counts and shows no narrative. The check
+is cheap and catches the most damaging failure, an explanation of a dependency that is
 not in the changeset.
 
 ### 6.4 Presentation
 
-Narratives are marked as written by a model. An edge's narrative appears in a
-tooltip on hover and in the details panel when the edge is selected, with its cited
-pairs. The summary has a "regenerate" action, and so does each narrative.
+Narratives are marked as written by a model. The summary sits under the top bar,
+showing its first two lines until the reader expands it, with the parts it cites as
+links and the progress of the other narratives. An edge's narrative appears in a
+tooltip on hover, and in the details panel when the edge is selected, with its cited
+pairs. A node's appears in the details panel with its cited files. The summary has a
+"regenerate all" action, and each narrative a "regenerate" action that writes it again
+on its own and stores it in place of the old one.
 
 ## 7. Calling Claude
 
@@ -313,14 +338,30 @@ Opus wrote the clearest map, with concepts that cut across namespaces where the
 code does; Sonnet's followed namespaces more closely, and Haiku's merged unrelated
 parts. Opus and Sonnet placed the new types identically. A map is generated once per
 solution and every later review draws with it, so map generation uses
-`claude-opus-5-5`; placement uses `claude-sonnet-5-5`. Narratives will be measured
-the same way in phase 4.
+`claude-opus-5-5`; placement uses `claude-sonnet-5-5`.
+
+Narratives were measured on the same range, drawn with the generated map: 35
+narratives (the summary, 17 edges and 17 nodes) in five requests, four at a time.
+
+| Model | Cost | Longest request | Dropped |
+|---|---|---|---|
+| `claude-opus-5-5` | $1.21 | 49 s | 0 |
+| `claude-sonnet-5-5` | $0.32 | 22 s | 0 |
+| `claude-haiku-5-5` | $0.04 | 81 s, a retry | 1 |
+
+All three were accurate on this range. Opus wrote the most, often past the two or
+three sentences asked for; Sonnet kept closest to the brief. Haiku was the cheapest by
+far but needed a second request for narratives that failed their check, which made it
+the slowest. The reviewer waits on narratives, so they use `claude-sonnet-5-5`.
+
+Each narrative request is abandoned after five minutes and counts as failed, so that
+one hung call cannot keep the narratives from finishing.
 
 The calls go through one interface, `IClaude`, with the real implementation and a
 canned one that tests use. Prompts and schemas are files in the tool, versioned
 together. A generated map is kept until it is regenerated, whatever the prompt
-version, since its stability is the point; narratives will key their cache by the
-prompt version.
+version, since its stability is the point; narratives key their cache by the
+whole request, which includes the prompt template.
 
 If `claude` is not on the path or not signed in, the review proceeds without the
 steps that need it. The skeleton serves as the map, the viewer shows counts, and a
@@ -347,7 +388,7 @@ Each phase ends with the tool usable, and with tests that state its new behavior
 3. **Generated maps.** `IClaude`, map generation, placement of new types, the switch
    notice and the save action. (Done.)
 4. **Narratives.** Inputs, batching, checking, streaming, and the tooltip, panel and
-   summary in the viewer.
+   summary in the viewer. (Done.)
 5. **Claude Code integration.** An `/archmap` skill that opens a review of the
    current session's changes.
 
@@ -359,12 +400,14 @@ smoke script exercises the real command line against the sample.
 These land in [archmap-spec.md](archmap-spec.md) with the phase that makes them true:
 
 - Section 1 gains the cache and the generated map as places a map can come from.
-- Section 6 gains the `narratives` member of the changeset document.
+- Section 6 gains the `narratives` member of the changeset document. (Not done in
+  phase 4: narratives stream as events beside the changeset, so a changeset published
+  as an artifact carries none.)
 - Section 7 gains `archmap review` and the bare `archmap` command. The other
   commands stay as building blocks for scripts. (Done in phase 1.)
 - Section 7.1 describes the analysis cache, which replaces the manual
   `facts --out` workaround. (Done in phase 1.)
-- Section 8 no longer lists narrative summaries as out of scope.
+- Section 8 no longer lists narrative summaries as out of scope. (Done in phase 4.)
 - The viewer moves from `mock/` into the tool. `mock/` keeps a sample `changeset.js` for opening the viewer without the server. (Done in phase 1.)
 
 ## 11. Open questions

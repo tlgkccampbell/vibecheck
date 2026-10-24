@@ -8,18 +8,31 @@ using Xunit;
 
 namespace Archmap.Tests;
 
-/// <summary>Stands in for Claude: answers each request with the next canned answer, and records the requests.</summary>
-internal sealed class FakeClaude(params string[] answers) : IClaude
+/// <summary>Stands in for Claude: answers each request with the next canned answer, or with an answer made from the request, and records the requests.</summary>
+internal sealed class FakeClaude : IClaude
 {
-    private readonly Queue<string> answers = new(answers);
+    private readonly Queue<string> answers = new();
+    private readonly Func<ClaudeRequest, string>? answer;
+
+    /// <summary>Creates a fake that answers the requests with the answers given, in order, and fails once they run out.</summary>
+    public FakeClaude(params string[] answers) => this.answers = new(answers);
+
+    /// <summary>Creates a fake that answers each request with what a function returns for it, in any order.</summary>
+    public FakeClaude(Func<ClaudeRequest, string> answer) => this.answer = answer;
 
     public List<ClaudeRequest> Requests { get; } = [];
 
     public Task<JsonElement> AskAsync(ClaudeRequest request, CancellationToken ct = default)
     {
-        lock (Requests) Requests.Add(request);
-        if (answers.Count == 0) throw new ClaudeException("no answer left");
-        return Task.FromResult(JsonDocument.Parse(answers.Dequeue()).RootElement.Clone());
+        string text;
+        lock (Requests)
+        {
+            Requests.Add(request);
+            if (answer is not null) text = answer(request);
+            else if (answers.Count == 0) throw new ClaudeException("no answer left");
+            else text = answers.Dequeue();
+        }
+        return Task.FromResult(JsonDocument.Parse(text).RootElement.Clone());
     }
 }
 
@@ -83,7 +96,7 @@ public class MapGeneratorTests
 
         Assert.Equal(["opus", "opus", "haiku"], claude.Requests.Select(r => r.Model));
         Assert.Equal(("claude-opus-5-5", "claude-sonnet-5-5"), (ClaudeModels.Default.Map, ClaudeModels.Default.Placement));
-        Assert.Equal(new ClaudeModels("sonnet", "sonnet"), ClaudeModels.All("sonnet"));
+        Assert.Equal(new ClaudeModels("sonnet", "sonnet", "sonnet"), ClaudeModels.All("sonnet"));
     }
 
     [Fact]

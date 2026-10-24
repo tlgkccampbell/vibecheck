@@ -18,13 +18,16 @@ public sealed record ClaudeRequest(string Prompt, string Schema)
 
     /// <summary>Gets the model to use, or <see langword="null"/> for the Claude Code default.</summary>
     public string? Model { get; init; }
+
+    /// <summary>Gets how long the request may take before it is abandoned as failed, or <see langword="null"/> for no limit.</summary>
+    public TimeSpan? Timeout { get; init; }
 }
 
 /// <summary>Asks Claude for an answer of a known shape. <see cref="ClaudeCli"/> is the real one, and tests supply canned answers.</summary>
 public interface IClaude
 {
     /// <summary>Sends a request and returns the answer, which follows the request's schema.</summary>
-    /// <exception cref="ClaudeException">Claude could not be started, failed, or gave no structured answer.</exception>
+    /// <exception cref="ClaudeException">Claude could not be started, failed, took longer than the request allows, or gave no structured answer.</exception>
     Task<JsonElement> AskAsync(ClaudeRequest request, CancellationToken ct = default);
 }
 
@@ -66,7 +69,18 @@ public sealed class ClaudeCli(string executable = "claude", Action<string>? log 
         var empty = request.WorkingDirectory is null ? Directory.CreateTempSubdirectory("archmap-claude-").FullName : null;
         try
         {
-            var (code, output, error) = await RunAsync(args, request.Prompt, request.WorkingDirectory ?? empty, ct);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (request.Timeout is { } timeout) limit.CancelAfter(timeout);
+            int code;
+            string output, error;
+            try
+            {
+                (code, output, error) = await RunAsync(args, request.Prompt, request.WorkingDirectory ?? empty, limit.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new ClaudeException($"claude gave no answer within {request.Timeout!.Value.TotalSeconds:F0} s");
+            }
             JsonElement envelope;
             try
             {

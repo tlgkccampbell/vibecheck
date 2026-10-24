@@ -7,15 +7,16 @@ namespace Archmap.Assist;
 /// </summary>
 /// <param name="Map">The model that proposes and revises a concept map.</param>
 /// <param name="Placement">The model that places the types a generated map leaves unsorted.</param>
-public sealed record ClaudeModels(string Map, string Placement)
+/// <param name="Narrative">The model that writes the narratives of a changeset.</param>
+public sealed record ClaudeModels(string Map, string Placement, string Narrative)
 {
     /// <summary>
     /// Gets the default model for each kind of request. A map is generated once per solution and every later review
     /// draws with it, so it gets the strongest model. Placement is a small judgment that Sonnet makes as well as Opus,
     /// faster and for less.
     /// </summary>
-    public static ClaudeModels Default { get; } = new("claude-opus-5-5", "claude-sonnet-5-5");
+    public static ClaudeModels Default { get; } = new("claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-5-5");
 
     /// <summary>Returns the models that use one model, an alias such as <c>sonnet</c> or an exact identifier, for every kind of request.</summary>
-    public static ClaudeModels All(string model) => new(model, model);
+    public static ClaudeModels All(string model) => new(model, model, model);
 }
