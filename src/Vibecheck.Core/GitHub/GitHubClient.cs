@@ -57,7 +57,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
         var checks = CheckList(pr.GetProperty("lastCommit"));
         var latest = pr.GetProperty("viewerLatestReview");
         var reviewed = latest.ValueKind == JsonValueKind.Object;
-        var timeline = new List<PullItem> { new("description", "description", Login(pr), Time(pr, "createdAt"), Str(pr, "url")) { BodyHtml = Str(pr, "bodyHTML") } };
+        var timeline = new List<PullItem> { new("description", "description", Login(pr), Time(pr, "createdAt"), Str(pr, "url")) { BodyHtml = Str(pr, "bodyHTML"), Avatar = Avatar(pr, "author") } };
         var threads = new List<ReviewThread>();
         var pending = pr.GetProperty("pending").GetProperty("nodes").EnumerateArray()
             .Select(r => new PendingReview(Str(r, "id")!, r.GetProperty("comments").GetProperty("totalCount").GetInt32())).FirstOrDefault();
@@ -99,15 +99,25 @@ public sealed class GitHubClient : IGitHub, IDisposable
     private static ReviewThread Thread(JsonElement t)
     {
         var comments = t.GetProperty("comments").GetProperty("nodes").EnumerateArray().Select(c => new ThreadComment(Str(c, "id")!, Login(c), Str(c, "bodyHTML") ?? "",
-            Time(c, "createdAt") ?? default, Str(c, "url")!, Str(c, "state") == "PENDING", Obj(c, "pullRequestReview") is { } r ? Str(r, "id") : null, Str(c, "diffHunk"))).ToList();
+            Time(c, "createdAt") ?? default, Str(c, "url")!, Str(c, "state") == "PENDING", Obj(c, "pullRequestReview") is { } r ? Str(r, "id") : null, Str(c, "diffHunk")) { Avatar = Avatar(c, "author") }).ToList();
         var first = t.GetProperty("comments").GetProperty("nodes").EnumerateArray().FirstOrDefault();
         return new ReviewThread(Str(t, "id")!, Str(t, "path")!, Str(t, "diffSide") ?? "RIGHT", Int(t, "line"), Int(t, "startLine"), Int(t, "originalLine"), Int(t, "originalStartLine"),
             Str(t, "subjectType") == "FILE", t.GetProperty("isResolved").GetBoolean(), t.GetProperty("isOutdated").GetBoolean(), Obj(t, "resolvedBy") is { } by ? Str(by, "login") : null,
             Obj(first, "originalCommit") is { } oc ? Str(oc, "oid") : null, comments);
     }
 
-    /// <summary>Reads one timeline entry, or returns null for a review that is still pending, which the timeline does not show.</summary>
+    /// <summary>Reads one timeline entry with its author's avatar, or returns null for a review that is still pending, which the timeline does not show.</summary>
     private static PullItem? Item(JsonElement n)
+    {
+        var item = Entry(n);
+        if (item is null) return null;
+        // A commit's author is a git identity, which has an avatar of its own when it matches no GitHub account.
+        var commitAuthor = Obj(Obj(n, "commit"), "author");
+        return item with { Avatar = Avatar(n, "author") ?? Avatar(n, "actor") ?? Avatar(commitAuthor, "user") ?? (commitAuthor is { } c ? Str(c, "avatarUrl") : null) };
+    }
+
+    /// <summary>Reads one timeline entry without its avatar, or returns null for a pending review or an entry of another kind.</summary>
+    private static PullItem? Entry(JsonElement n)
     {
         var id = Str(n, "id")!;
         var actor = Obj(n, "actor") is { } a ? Str(a, "login") : null;
@@ -334,6 +344,9 @@ public sealed class GitHubClient : IGitHub, IDisposable
     private static string? Checks(JsonElement commits) =>
         commits.GetProperty("nodes").EnumerateArray().Select(n => n.GetProperty("commit").GetProperty("statusCheckRollup"))
             .Where(r => r.ValueKind == JsonValueKind.Object).Select(r => Str(r, "state")).FirstOrDefault();
+
+    /// <summary>Returns the avatar address of the actor an element names under a property, such as its author, or null.</summary>
+    private static string? Avatar(JsonElement? e, string property) => Obj(e, property) is { } who ? Str(who, "avatarUrl") : null;
 
     private static string? Login(JsonElement pr) => pr.GetProperty("author") is { ValueKind: JsonValueKind.Object } a ? Str(a, "login") : null;
 

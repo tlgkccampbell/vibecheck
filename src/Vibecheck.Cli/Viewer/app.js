@@ -2170,10 +2170,17 @@
   const when = (at) => at ? new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
   const shortOid = (oid) => oid ? oid.slice(0, 7) : "";
 
-  // Returns a comment with its author, its time, whether it is pending, and its body.
+  // Returns a person's avatar from GitHub, or a circle with the initial of their name when GitHub gives none. Only an
+  // https address is loaded, and without a referrer, as images in bodies are.
+  function avatar(url, who) {
+    if (url && url.startsWith("https://")) return el("img", { class: "avatar", src: url, alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
+    return el("span", { class: "avatar avatar-none", "aria-hidden": "true" }, (who || "?").slice(0, 1).toUpperCase());
+  }
+
+  // Returns a comment with its author and their avatar, its time, whether it is pending, and its body.
   function commentBox(c) {
     return el("div", { class: "comment" + (c.pending ? " pending" : "") },
-      el("div", { class: "comment-head" }, el("b", {}, c.author || "ghost"), el("a", { class: "when", href: c.url, target: "_blank", rel: "noopener" }, when(c.at)),
+      el("div", { class: "comment-head" }, avatar(c.avatar, c.author), el("b", {}, c.author || "ghost"), el("a", { class: "when", href: c.url, target: "_blank", rel: "noopener" }, when(c.at)),
         c.pending ? el("span", { class: "pill wait" }, "pending") : null),
       el("div", { class: "body" }, safeBody(c.bodyHtml)));
   }
@@ -2257,16 +2264,16 @@
   // Returns one entry of the timeline. A description, comment or review is a card with its body, and a review lists
   // the threads that started in it. Any other entry is one line.
   function timelineEntry(item, threads) {
-    const who = el("b", {}, item.author || "ghost");
+    const face = avatar(item.avatar, item.author), who = el("b", {}, item.author || "ghost");
     const time = item.url ? el("a", { class: "when", href: item.url, target: "_blank", rel: "noopener" }, when(item.at)) : el("span", { class: "when" }, when(item.at));
-    const line = (...kids) => el("div", { class: "talk-event" }, who, " ", ...kids, time);
+    const line = (...kids) => el("div", { class: "talk-event" }, face, who, " ", ...kids, time);
     switch (item.kind) {
       case "description":
       case "comment":
       case "review": {
         const verb = item.kind === "description" ? ["opened this pull request", ""] : item.kind === "comment" ? ["commented", ""] : REVIEW_TEXT[item.state] || ["reviewed", ""];
         const card = el("section", { class: "card" + (item.kind === "review" ? " review st-" + (item.state || "").toLowerCase() : "") },
-          el("header", {}, who, el("span", { class: verb[1] ? "verb " + verb[1] : "verb" }, verb[0]), item.kind === "review" && item.commit ? el("code", {}, shortOid(item.commit)) : null, time));
+          el("header", {}, face, who, el("span", { class: verb[1] ? "verb " + verb[1] : "verb" }, verb[0]), item.kind === "review" && item.commit ? el("code", {}, shortOid(item.commit)) : null, time));
         if (item.bodyHtml && item.bodyHtml.trim()) card.append(el("div", { class: "body" }, safeBody(item.bodyHtml)));
         else if (item.kind === "description") card.append(el("div", { class: "body hint" }, "No description provided."));
         if (threads.length) card.append(el("div", { class: "card-threads" }, ...threads.map((t) => threadBox(t, { away: true }))));
@@ -2287,7 +2294,7 @@
   function pushEntry(commits) {
     const authors = [...new Set(commits.map((c) => c.author || "ghost"))];
     const list = el("ul", { class: "talk-commits" }, ...commits.map((c) => el("li", {}, el("a", { href: c.url, target: "_blank", rel: "noopener" }, el("code", {}, shortOid(c.commit))), " ", c.text || "")));
-    return el("div", { class: "talk-event" }, el("b", {}, authors.join(", ")), ` pushed ${plural(commits.length, "commit", "commits")}`, el("span", { class: "when" }, when(commits[commits.length - 1].at)), list);
+    return el("div", { class: "talk-event" }, avatar(commits[0].avatar, authors[0]), el("b", {}, authors.join(", ")), ` pushed ${plural(commits.length, "commit", "commits")}`, el("span", { class: "when" }, when(commits[commits.length - 1].at)), list);
   }
 
   // Shows the Conversation tab: the checks, then the timeline, oldest first, starting with the description. Each

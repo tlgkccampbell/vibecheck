@@ -9,7 +9,8 @@
     "state": "MERGED",
     "isDraft": false,
     "author": {
-     "login": "user-3"
+     "login": "user-3",
+     "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
     },
     "bodyHTML": "<h3 dir=\"auto\">Description</h3>\n<p dir=\"auto\">This is a follow-up to the refreshable (short-lived) OAuth token stack (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456385910\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14450\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14450/hovercard\" href=\"https://github.com/cli/cli/pull/14450\">#14450</a> through <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456387139\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14456\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14456/hovercard\" href=\"https://github.com/cli/cli/pull/14456\">#14456</a>). It collects the fixes made in response to review feedback on those PRs into a single branch on top of the stack tip (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456387139\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14456\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14456/hovercard\" href=\"https://github.com/cli/cli/pull/14456\">#14456</a>), so the series history stays readable while the fixes land together.</p>\n<p dir=\"auto\">Because the feedback spanned every PR in the stack, the changes here touch the public HTTP client, the config storage layer, the auth login/refresh/token/status flows, the git credential helper path, agent-task and CAPI per-request refresh, and the guided verification scripts. None of it changes the externally documented behavior of the feature; it corrects edge cases, concurrency safety, and backward compatibility that surfaced during review.</p>\n<p dir=\"auto\">The sections below explain each commit. They are grouped by the PR in the stack that the feedback came from.</p>\n<h3 dir=\"auto\">Changes</h3>\n<h4 dir=\"auto\">Foundation (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456385910\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14450\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14450/hovercard\" href=\"https://github.com/cli/cli/pull/14450\">#14450</a>)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(api): keep public HTTP client token config backward compatible</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/9c664a5de7fb239bbd43080e8b4afa9952221fa2/hovercard\" href=\"https://github.com/cli/cli/commit/9c664a5de7fb239bbd43080e8b4afa9952221fa2\"><tt>9c664a5</tt></a>)<br>\nThe exported <code class=\"notranslate\">api</code> seam no longer speaks the internal <code class=\"notranslate\">gh</code> types. The primitive <code class=\"notranslate\">config</code> interface keeps its original shape (<code class=\"notranslate\">ActiveToken(string) (string, string)</code> plus <code class=\"notranslate\">HostForAPIHost</code>) and <code class=\"notranslate\">AddAuthTokenHeader</code> keeps its original signature, so existing downstream consumers compile unchanged. Refresh now lives on a separate, refresh-aware seam: <code class=\"notranslate\">HTTPClientOptions</code> gains two mutually exclusive fields, the primitive <code class=\"notranslate\">Config</code> and a new <code class=\"notranslate\">RefreshingConfig</code>, and the credential and refresh types move to a new public <code class=\"notranslate\">pkg/auth</code> package. Regression tests cover the primitive path.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">test(config): pin intentional active-token lookup behavior</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/1844179a1e656c8e0d2c976686f30b83a863240e/hovercard\" href=\"https://github.com/cli/cli/commit/1844179a1e656c8e0d2c976686f30b83a863240e\"><tt>1844179</tt></a>)<br>\n<code class=\"notranslate\">ActiveToken</code> has one narrow state that diverges from older gh (per-user config <code class=\"notranslate\">oauth_token</code>, no per-user keyring slot, an unkeyed keyring token present, no host-level <code class=\"notranslate\">oauth_token</code>). This change keeps the new, more correct behavior as the groundwork for the refreshable per-user slot, adds a code comment explaining why that state is rare in practice, and pins it with a test so it is not later mistaken for a regression.</p>\n<h4 dir=\"auto\">Domain (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456386118\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14451\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14451/hovercard\" href=\"https://github.com/cli/cli/pull/14451\">#14451</a>)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(config): purge refreshable record on non-refreshable login</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/739aa7253f7a2f35b2452f41c6ce0cd28c3dfd1c/hovercard\" href=\"https://github.com/cli/cli/commit/739aa7253f7a2f35b2452f41c6ce0cd28c3dfd1c\"><tt>739aa72</tt></a>)<br>\nA plain <code class=\"notranslate\">Login</code> used to leave a stale refreshable record behind, so a user could hold both a refreshable and a non-expiring credential at once. <code class=\"notranslate\">Login</code> now removes the user's refreshable record (both keyring and config forms) before completing, mirroring what <code class=\"notranslate\">loginRefreshable</code> already does in reverse, so <code class=\"notranslate\">activateUser</code> falls through to the non-expiring path and copies the new token into the host-level <code class=\"notranslate\">oauth_token</code> slot that go-gh reads for extensions.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(config): align TokenForUser precedence with setActiveCredential</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/6ea35dd006426686326678d4c3458c2f4c4c4c15/hovercard\" href=\"https://github.com/cli/cli/commit/6ea35dd006426686326678d4c3458c2f4c4c4c15\"><tt>6ea35dd</tt></a>)<br>\n<code class=\"notranslate\">TokenForUser</code> now checks the refreshable credential first, then the non-refreshable keyring token, then the non-refreshable config token, matching <code class=\"notranslate\">setActiveCredential</code>, so activation and resolution can never disagree about which credential is current even if a mixed state ever slips through. The purge above makes that state unreachable in normal flows, but keeping the order identical is cheap insurance.</p>\n<h4 dir=\"auto\">Login, refresh, and git credential helper (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456386307\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14452\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14452/hovercard\" href=\"https://github.com/cli/cli/pull/14452\">#14452</a>)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth refresh): avoid printing short-lived downgrade warning twice</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/5676a4133d2e60cfc43e5814d75da9cee992379b/hovercard\" href=\"https://github.com/cli/cli/commit/5676a4133d2e60cfc43e5814d75da9cee992379b\"><tt>5676a41</tt></a>)<br>\nThe post-completion summary no longer repeats the \"Original token was short-lived; pass --short-lived to preserve it\" line. It is still printed once up front, before the browser prompt, so the user can abort early.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth refresh): preserve scopes when refreshing an expired refreshable token</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/f4f010f59966384ff8001956415a9705facead71/hovercard\" href=\"https://github.com/cli/cli/commit/f4f010f59966384ff8001956415a9705facead71\"><tt>f4f010f</tt></a>)<br>\nWith the old <code class=\"notranslate\">ActiveToken</code> read, refreshing a credential whose access token had already expired handed back the stale token, so <code class=\"notranslate\">GetScopes</code> got a 401 and the refreshed credential came back with no scopes. The refresh now uses <code class=\"notranslate\">ActiveTokenWithRefresh</code>, so the token is renewed and persisted first and scopes are read off a live token. When scopes genuinely cannot be read, it prints a non-blocking stderr warning telling the user to re-add scopes with <code class=\"notranslate\">--scopes</code> rather than failing the whole refresh.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth/shared): offer to set up gh when a non-gh helper meets a refreshable token</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/4840e2e8041c781b37886a88dfb7c1ce21ef3e2d/hovercard\" href=\"https://github.com/cli/cli/commit/4840e2e8041c781b37886a88dfb7c1ce21ef3e2d\"><tt>4840e2e</tt></a>)<br>\nWhen the auth flow returns a refreshable token and a non-gh credential helper is configured, gh now explains the problem and offers to set itself up as the helper for the host. Accepting lets gh refresh the token transparently; declining keeps the previous behavior of rejecting the existing credential and warning. This prompt lives at the post-auth setup step because that is the earliest point where both facts are known (the token is refreshable and the helper is non-gh).</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth/shared): force web flow for short-lived interactive login</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/669ab0c6f029ef5c372e96302eba0a875a3a5e1e/hovercard\" href=\"https://github.com/cli/cli/commit/669ab0c6f029ef5c372e96302eba0a875a3a5e1e\"><tt>669ab0c</tt></a>)<br>\nA pasted personal access token can never be refreshable, so <code class=\"notranslate\">--short-lived</code> now forces the web flow and no longer offers the \"Paste an authentication token\" choice.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth/shared): clarify warning when declining gh helper setup</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/e47b82d93c74f3bde1c4b40e9620f70710f87086/hovercard\" href=\"https://github.com/cli/cli/commit/e47b82d93c74f3bde1c4b40e9620f70710f87086\"><tt>e47b82d</tt></a>)<br>\nThe reject warning now states that the credential was not stored and that git operations may prompt or fail on the next attempt, rather than framing it as a failure only after expiry. This branch is now only reached when the user declines the new setup prompt above.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">refactor(authflow): extract authResultFromToken for test coverage</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/870382c18679ae72bd12757b06887aea498b92a6/hovercard\" href=\"https://github.com/cli/cli/commit/870382c18679ae72bd12757b06887aea498b92a6\"><tt>870382c</tt></a>)<br>\nThe mapping from the OAuth flow result to <code class=\"notranslate\">AuthResult</code> now lives in <code class=\"notranslate\">authResultFromToken</code>, tested directly for both responses: with refresh metadata (refreshable credential populated, expiry anchored at the request instant) and without (plain token, <code class=\"notranslate\">Refreshable</code> nil).</p>\n<h4 dir=\"auto\">gh auth token (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456386501\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14453\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14453/hovercard\" href=\"https://github.com/cli/cli/pull/14453\">#14453</a>)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">refactor(auth/token): drop redundant RefreshStatusDone check under --secure-storage</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/6c1e258e334b2f548723af8aef4597155dbbfa9f/hovercard\" href=\"https://github.com/cli/cli/commit/6c1e258e334b2f548723af8aef4597155dbbfa9f\"><tt>6c1e258</tt></a>)<br>\n<code class=\"notranslate\">RefreshStatusDone</code> is only ever produced after validation that requires a non-empty refresh token, so the credential already satisfies <code class=\"notranslate\">IsRefreshable()</code> by then. The <code class=\"notranslate\">|| refreshStatus == gh.RefreshStatusDone</code> disjunct was dead code; the condition is simplified to <code class=\"notranslate\">cred.IsRefreshable()</code> with no behavior change.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth/token): restore legacy unkeyed keyring lookup when --user is omitted</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/de38197a76945e2c4e809f393369e22e96143bbe/hovercard\" href=\"https://github.com/cli/cli/commit/de38197a76945e2c4e809f393369e22e96143bbe\"><tt>de38197</tt></a>)<br>\nThe non-refreshable keyring fallback was keyed on the resolved active username, so when only the legacy unkeyed keyring slot existed but an active user was recorded, it read the empty per-user slot and reported no token found. It now keys the fallback on the <code class=\"notranslate\">--user</code> flag value, so omitting <code class=\"notranslate\">--user</code> reads the legacy unkeyed slot exactly as the original <code class=\"notranslate\">--secure-storage</code> behavior did. Pinned by two <code class=\"notranslate\">TestTokenRunSecureStorage</code> states that fail against the pre-fix code.</p>\n<h4 dir=\"auto\">gh auth status (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456386701\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14454\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14454/hovercard\" href=\"https://github.com/cli/cli/pull/14454\">#14454</a>)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(auth/status): handle rejected refresh token without an empty-token request</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/f3a64124d308b7b5539187a234adfe83dac52ac0/hovercard\" href=\"https://github.com/cli/cli/commit/f3a64124d308b7b5539187a234adfe83dac52ac0\"><tt>f3a6412</tt></a>)<br>\nOn a rejected refresh token the credential is removed during resolution, and the old code carried on with an empty token and sent the scope request with <code class=\"notranslate\">Authorization: token </code> (nothing after it), surfacing a confusing generic failure. <code class=\"notranslate\">buildEntry</code> now short-circuits on <code class=\"notranslate\">RefreshStatusExpired</code>: it skips the scope request, sets a dedicated <code class=\"notranslate\">refresh_expired</code> entry state, and prints a clear reason plus the re-authenticate instruction. The entry stays a non-success state, so <code class=\"notranslate\">gh auth status</code> still exits non-zero and routes to stderr.</p>\n<h4 dir=\"auto\">agent-task and CAPI (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456386922\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14455\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14455/hovercard\" href=\"https://github.com/cli/cli/pull/14455\">#14455</a>)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">test(agent-task/capi): assert per-request token refresh in CAPI transport</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/c13b3f42c8eb89e09299fbcb759c6e032e89c5d0/hovercard\" href=\"https://github.com/cli/cli/commit/c13b3f42c8eb89e09299fbcb759c6e032e89c5d0\"><tt>c13b3f4</tt></a>)<br>\nThe existing tests supplied a fixed empty credential, so a regression back to a construction-time lookup would have passed unnoticed. A new <code class=\"notranslate\">client_test.go</code> exercises the transport directly: one test wires a fake source returning a different token per call and asserts each freshly resolved token becomes that request's header, and another covers the best-effort behavior where the request still proceeds with the last stored token when refresh errors.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(agent-task): accept plaintext refreshable OAuth credentials</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/dab337767039a2a90c73826f79c47670179cd875/hovercard\" href=\"https://github.com/cli/cli/commit/dab337767039a2a90c73826f79c47670179cd875\"><tt>dab3377</tt></a>)<br>\nThe agent-task preflight only recognized the <code class=\"notranslate\">oauth_token</code> and <code class=\"notranslate\">keyring</code> sources as device-flow logins. A short-lived login whose credential falls back to plaintext config is tagged <code class=\"notranslate\">refreshable_oauth_token</code>, so the preflight rejected a supported account before the CAPI refresh path could run. The preflight now accepts the refreshable source alongside the other two.</p>\n<h4 dir=\"auto\">Concurrency safety and robustness (config)</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(config): run logout under the shared refresh lock</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/5c4be83fd7200400eadb64026ec0fd249d4ceec1/hovercard\" href=\"https://github.com/cli/cli/commit/5c4be83fd7200400eadb64026ec0fd249d4ceec1\"><tt>5c4be83</tt></a>)<br>\n<code class=\"notranslate\">Logout</code> now runs its whole body under the same best-effort refresh lock a concurrent refresh uses, reloading fresh config first, so a logout racing an in-flight refresh cannot be undone by the refresher persisting a renewed credential after the user logged out. Logout wins in both interleavings.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(config): skip destructive refresh cleanup when the lock is unavailable</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/9f9121e93edbc876918b26c8e9e54fded734fe49/hovercard\" href=\"https://github.com/cli/cli/commit/9f9121e93edbc876918b26c8e9e54fded734fe49\"><tt>9f9121e</tt></a>)<br>\nWhen a refresh token is rejected, the dead credential is normally removed. Without the refresh lock a rejection is ambiguous: a peer process may have already spent the same single-use refresh token and be about to persist the renewed one, so deleting could discard the peer's valid credential. The destructive cleanup is now gated on actually holding the lock; skipping it is self-healing because the next invocation reads the peer's renewed credential.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(config): don't fail refresh when the config dir can't be created</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/3687fefa44ded40c7c5bec5df36205cbc9bbddd1/hovercard\" href=\"https://github.com/cli/cli/commit/3687fefa44ded40c7c5bec5df36205cbc9bbddd1\"><tt>3687fef</tt></a>)<br>\nAcquiring the refresh lock first ensures the config directory exists. If that creation fails (for example on a read-only filesystem), the refresh now degrades to running without the lock, exactly like a failed lock acquisition, instead of failing outright. The lock is already best effort, and if control reached a refresh the credential was already read, so proceeding is strictly better than erroring. The common case (an existing directory) is unaffected.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(config): run login under the shared refresh lock</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/24d96ddc578040649c4c406e0ad458ae2986e239/hovercard\" href=\"https://github.com/cli/cli/commit/24d96ddc578040649c4c406e0ad458ae2986e239\"><tt>24d96dd</tt></a>)<br>\n<code class=\"notranslate\">Login</code> now runs its whole body under the same best-effort refresh lock that <code class=\"notranslate\">LoginRefreshable</code> and <code class=\"notranslate\">Logout</code> use, reloading fresh config first, so a plain login racing an in-flight refresh wins in both interleavings: a refresh that persists first is superseded by the credential stored here, and a refresh still waiting on the lock reloads afterwards, finds the refreshable record removed, and bails without resurrecting it. The lock stays best effort, so login still proceeds when it cannot be acquired. This commit also surfaces a genuine failure to purge the user's refreshable record during a non-refreshable login: a surviving record outranks the freshly stored token during activation, so a silently failed removal would let login report success while the stale credential stayed active. The check verifies the post-condition by re-reading rather than inspecting the delete error, so it stays silent in environments without a working keyring (an unavailable keyring resolves to not found) and only surfaces when a record provably survives removal.</p>\n<h4 dir=\"auto\">Guided verification scripts (<a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456387139\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14456\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14456/hovercard\" href=\"https://github.com/cli/cli/pull/14456\">#14456</a>) and housekeeping</h4>\n<p dir=\"auto\"><strong><code class=\"notranslate\">docs(script): clarify refreshable-token e2e scripts</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/858cab79446db763a171017bb0b7870b2720ff46/hovercard\" href=\"https://github.com/cli/cli/commit/858cab79446db763a171017bb0b7870b2720ff46\"><tt>858cab7</tt></a>)<br>\nReworded the script header to describe the scenarios inline instead of linking a note that never shipped, and removed an orphaned <code class=\"notranslate\"># NEW SYSTEM</code> banner that had no counterpart.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">fix(script): declare authtype capability in gitcredential e2e on git 2.46+</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/940a11d979873841fcaa1d50f6e42a4ab2c73160/hovercard\" href=\"https://github.com/cli/cli/commit/940a11d979873841fcaa1d50f6e42a4ab2c73160\"><tt>940a11d</tt></a>)<br>\nDeclaring <code class=\"notranslate\">capability[]=authtype</code> on git 2.46 and newer makes the <code class=\"notranslate\">credential fill</code> steps exercise the same path real fetch and push take, so gh marks the credential ephemeral and the step asserts <code class=\"notranslate\">ephemeral=1</code> deterministically instead of leaving it to the eye.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">docs(script): prompt reviewer to confirm git auth during gitcredential e2e login</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/567cea418bde7f381a752bd2ae06ff85c2d0b1b8/hovercard\" href=\"https://github.com/cli/cli/commit/567cea418bde7f381a752bd2ae06ff85c2d0b1b8\"><tt>567cea4</tt></a>)<br>\nAdded a bold reviewer-action note at the login step so the reviewer knows to confirm the \"Authenticate Git with your GitHub credentials?\" prompt, which exercises the credential-helper setup path for the host.</p>\n<p dir=\"auto\"><strong><code class=\"notranslate\">chore: fix formatting</code></strong> (<a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/cli/cli/commit/f7b5fbd69df429ae391d5a926856b359821860fd/hovercard\" href=\"https://github.com/cli/cli/commit/f7b5fbd69df429ae391d5a926856b359821860fd\"><tt>f7b5fbd</tt></a>)<br>\ngofmt struct-field alignment in <code class=\"notranslate\">api/client_test.go</code> after the longer <code class=\"notranslate\">RefreshingConfig</code> field name. No behavior change.</p>\n<h3 dir=\"auto\">How did you test this change?</h3>\n<p dir=\"auto\">I rebuilt gh from this branch and ran both guided end-to-end verification scripts against a real host, confirming every scenario behaved as expected.</p>\n<p dir=\"auto\">With <code class=\"notranslate\">script/refreshable-token-e2e.sh</code> I walked through short-lived login, an ordinary command refreshing an expired token on demand, the <code class=\"notranslate\">GH_TOKEN</code> environment path, and <code class=\"notranslate\">gh auth status</code> both refreshing and with <code class=\"notranslate\">--no-refresh</code>. Refreshes were confirmed from gh's <code class=\"notranslate\">GH_DEBUG=api</code> request log and from <code class=\"notranslate\">auth status</code> output. I ran this for both the secure keyring theme and the insecure config theme.</p>\n<p dir=\"auto\">With <code class=\"notranslate\">script/refreshable-token-gitcredential-e2e.sh</code> I set this build as my git credential helper and exercised resolving a credential, refreshing an expired one through git, and the warning path. My local git is 2.43, so this run exercised the older-git stale-helper warning path rather than the git 2.46 non-cacheable \"ephemeral\" attribute path.</p>\n<h3 dir=\"auto\">Key points</h3>\n<p dir=\"auto\">The fixes are kept as focused, individually reviewable commits so each one can be read against the PR it responds to. The single-branch approach was chosen over amending each stacked PR in place to avoid repeatedly rewriting the history of the whole stack during review.</p>\n<p dir=\"auto\">The guided e2e scripts carry testing-only env hacks (for example <code class=\"notranslate\">GH_AT_EXPIRES_IN</code>) used to force expiry on demand. These are intentionally retained here so the scripts remain runnable, and will be removed in a dedicated wrap-up PR on top of this one.</p>\n<h3 dir=\"auto\">Notes for reviewers</h3>\n<p dir=\"auto\">Start from the config storage changes in <code class=\"notranslate\">internal/config</code> (<code class=\"notranslate\">config.go</code>, <code class=\"notranslate\">refreshable.go</code>), which carry the concurrency-safety and robustness fixes, then follow the per-area commits outward into the auth command packages.</p>\n<p dir=\"auto\">This PR targets <code class=\"notranslate\">user-3/refresh-token-e2e</code> (the tip of the stack, <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"5456387139\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/14456\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14456/hovercard\" href=\"https://github.com/cli/cli/pull/14456\">#14456</a>), not trunk. Review it after the underlying stack.</p>\n<h3 dir=\"auto\">Authorship and follow-up</h3>\n<p dir=\"auto\">Who wrote this:</p>\n<ul class=\"contains-task-list\">\n<li class=\"task-list-item\"><input type=\"checkbox\" id=\"\" disabled=\"\" class=\"task-list-item-checkbox\" aria-label=\"Incomplete task\"> A human wrote it.</li>\n<li class=\"task-list-item\"><input type=\"checkbox\" id=\"\" disabled=\"\" class=\"task-list-item-checkbox\" aria-label=\"Completed task\" checked=\"\"> An agent wrote it under close human direction.</li>\n<li class=\"task-list-item\"><input type=\"checkbox\" id=\"\" disabled=\"\" class=\"task-list-item-checkbox\" aria-label=\"Incomplete task\"> An agent wrote it independently, and no human has guided the implementation beyond the initial prompt.</li>\n</ul>\n<p dir=\"auto\">Who answers review comments:</p>\n<ul class=\"contains-task-list\">\n<li class=\"task-list-item\"><input type=\"checkbox\" id=\"\" disabled=\"\" class=\"task-list-item-checkbox\" aria-label=\"Completed task\" checked=\"\"> <a class=\"user-mention notranslate\" data-hovercard-type=\"user\" data-hovercard-url=\"/users/user-3/hovercard\" data-octo-click=\"hovercard-link-click\" data-octo-dimensions=\"link_type:self\" href=\"https://github.com/user-3\">@user-3</a> will read and reply directly.</li>\n<li class=\"task-list-item\"><input type=\"checkbox\" id=\"\" disabled=\"\" class=\"task-list-item-checkbox\" aria-label=\"Incomplete task\"> An agent will draft replies and <a class=\"user-mention notranslate\" data-hovercard-type=\"user\" data-hovercard-url=\"/users/user-3/hovercard\" data-octo-click=\"hovercard-link-click\" data-octo-dimensions=\"link_type:self\" href=\"https://github.com/user-3\">@user-3</a> will read them before they are posted.</li>\n<li class=\"task-list-item\"><input type=\"checkbox\" id=\"\" disabled=\"\" class=\"task-list-item-checkbox\" aria-label=\"Incomplete task\"> Nobody has explicitly committed to replying.</li>\n</ul>",
     "createdAt": "2026-10-13T16:29:44Z",
@@ -30,7 +31,402 @@
        "commit": {
         "oid": "153adc66eef2af5fe51715ea7f571f3514c50bec",
         "statusCheckRollup": {
-         "state": "SUCCESS"
+         "state": "SUCCESS",
+         "contexts": {
+          "nodes": [
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49Ncw",
+            "databaseId": 119177956723,
+            "name": "CodeQL-Build (go, manual, ./.github/codeql/codeql-config.yml)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:48:24Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907338/job/119177956723",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Code Scanning"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49Mow",
+            "databaseId": 119177956515,
+            "name": "lint",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:48:23Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907376/job/119177956515",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Lint"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49Kkg",
+            "databaseId": 119177955986,
+            "name": "build (ubuntu-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:49:38Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907329/job/119177955986",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49L8w",
+            "databaseId": 119177956339,
+            "name": "CodeQL-Build (actions, none, security-and-quality)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:46:13Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907338/job/119177956339",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Code Scanning"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49MWg",
+            "databaseId": 119177956442,
+            "name": "build (windows-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:55:47Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907329/job/119177956442",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49Mtg",
+            "databaseId": 119177956534,
+            "name": "build (macos-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:33Z",
+            "completedAt": "2026-10-21T10:52:44Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907329/job/119177956534",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times.",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49K3g",
+            "databaseId": 119177956062,
+            "name": "govulncheck",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:45:51Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907376/job/119177956062",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Lint"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49MHA",
+            "databaseId": 119177956380,
+            "name": "integration-tests (ubuntu-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:46:48Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907329/job/119177956380",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49M7g",
+            "databaseId": 119177956590,
+            "name": "integration-tests (windows-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:28Z",
+            "completedAt": "2026-10-21T10:47:14Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907329/job/119177956590",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv49MGA",
+            "databaseId": 119177956376,
+            "name": "integration-tests (macos-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:45:33Z",
+            "completedAt": "2026-10-21T10:46:59Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/39586907329/job/119177956376",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times.",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAAbv5NvIw",
+            "databaseId": 119178227491,
+            "name": "CodeQL",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-10-21T10:46:04Z",
+            "completedAt": "2026-10-21T10:46:07Z",
+            "detailsUrl": "https://github.com/cli/cli/runs/119178227491",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Advanced Security"
+             },
+             "workflowRun": null
+            },
+            "annotations": {
+             "nodes": []
+            }
+           }
+          ]
+         }
         }
        }
       }
@@ -62,7 +458,8 @@
          {
           "id": "PRRC_kwDODKw3uc79_50S",
           "author": {
-           "login": "user-1"
+           "login": "user-1",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">🛑 Requirement: Make this credential-kind replacement atomic and verify that the purge succeeds. <code class=\"notranslate\">Login</code> runs outside the refresh lock and discards failure from deleting the refreshable keyring record. A refresh already in flight can therefore re-persist its rotated record after this deletion, or a failed delete can leave the old record in place; because <code class=\"notranslate\">TokenForUser</code> now prioritizes refreshable credentials, <code class=\"notranslate\">Login</code> can report success while the old short-lived credential remains authoritative. Serialize the full replacement with refresh and propagate non-not-found purge failures before completing login.</p>",
           "createdAt": "2026-10-13T16:38:21Z",
@@ -96,7 +493,8 @@
          {
           "id": "PRRC_kwDODKw3uc79_52g",
           "author": {
-           "login": "user-1"
+           "login": "user-1",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">🛑 Requirement: Do not perform logout's destructive write when the cross-process lock was not acquired. <code class=\"notranslate\">withFreshConfigForRefresh</code> deliberately invokes this callback with <code class=\"notranslate\">lockHeld == false</code> after a timeout or unsupported lock, but this callback ignores that signal. A peer refresh can then finish after logout and persist a renewed credential, undoing a logout that already returned success. Require serialization for logout, or use a conflict-safe retry/error path when the lock is unavailable.</p>",
           "createdAt": "2026-10-13T16:38:22Z",
@@ -130,7 +528,8 @@
          {
           "id": "PRRC_kwDODKw3uc79_54j",
           "author": {
-           "login": "user-1"
+           "login": "user-1",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">🛑 Requirement: This message can falsely claim the credential was removed. The new lock-unavailable path intentionally leaves it stored, and even the lock-held cleanup ignores deletion/write failures. Report only that the credential can no longer be refreshed unless cleanup success is carried into the entry state.</p>",
           "createdAt": "2026-10-13T16:38:22Z",
@@ -164,7 +563,8 @@
          {
           "id": "PRRC_kwDODKw3uc79_553",
           "author": {
-           "login": "user-1"
+           "login": "user-1",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">🛑 Requirement: <code class=\"notranslate\">RefreshStatusExpired</code> does not guarantee that storage cleanup succeeded: cleanup is skipped without the lock and its errors are ignored when attempted. This JSON error therefore exposes a false script-facing claim. Keep the error limited to the confirmed rejection unless the refresh API starts reporting cleanup success.</p>",
           "createdAt": "2026-10-13T16:38:23Z",
@@ -198,7 +598,8 @@
          {
           "id": "PRRC_kwDODKw3uc79_58C",
           "author": {
-           "login": "user-1"
+           "login": "user-1",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">💭 Commentary: Answering this first prompt does not always configure gh. When a non-gh helper already exists, the new <code class=\"notranslate\">Setup</code> branch asks a second confirmation before calling <code class=\"notranslate\">ConfigureOurs</code>; declining it leaves gh unconfigured. Since this step is meant to exercise helper setup, tell the reviewer to accept the follow-up prompt too.</p>",
           "createdAt": "2026-10-13T16:38:23Z",
@@ -232,7 +633,8 @@
          {
           "id": "PRRC_kwDODKw3uc7-elH1",
           "author": {
-           "login": "user-2"
+           "login": "user-2",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
           },
           "bodyHTML": "<p dir=\"auto\"><strong>Food For Thought</strong></p>\n<p dir=\"auto\">Doing a keyring lookup here adds 30ms (on MacOS) for every API request, which in nearly all cases (since most people aren't using refreshable tokens) is totally unneeded.</p>\n<p dir=\"auto\">Firstly, we should look into caching the token (non-blocking for this PR) but also, it seems really lame that every user is going to pay this extra cost for 1 request commands. Not really sure what to do about it except reverse the order here and in <code class=\"notranslate\">setActiveCredential</code> to optimise for the more common case.</p>\n<p dir=\"auto\">WDYT?</p>",
           "createdAt": "2026-10-14T10:07:36Z",
@@ -266,7 +668,8 @@
          {
           "id": "PRRC_kwDODKw3uc7-eoJE",
           "author": {
-           "login": "user-2"
+           "login": "user-2",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">I think they take the lock now?</p>",
           "createdAt": "2026-10-14T10:08:54Z",
@@ -300,7 +703,8 @@
          {
           "id": "PRRC_kwDODKw3uc7-gKw1",
           "author": {
-           "login": "user-2"
+           "login": "user-2",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
           },
           "bodyHTML": "<p dir=\"auto\"><strong>Concern</strong></p>\n<p dir=\"auto\">I don't think the <code class=\"notranslate\">ConfigDir</code> is the right place to put the lock. All our <code class=\"notranslate\">nix</code> <code class=\"notranslate\">home-manager</code> friends (and similar projects) have immutable config dirs so locking is always going to fail.</p>",
           "createdAt": "2026-10-14T10:53:12Z",
@@ -334,7 +738,8 @@
          {
           "id": "PRRC_kwDODKw3uc7-gbPF",
           "author": {
-           "login": "user-2"
+           "login": "user-2",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
           },
           "bodyHTML": "<p dir=\"auto\"><strong>Question</strong></p>\n<p dir=\"auto\">Just help me clarify my understanding.</p>\n<p dir=\"auto\"><strong>Given</strong> I'm logged in with <code class=\"notranslate\">gh auth login --short-lived</code><br>\n<strong>And Given</strong> my setup can't take the lock (e.g. network mount)<br>\n<strong>And Given</strong> my refresh token is dead, because I revoked the app's authorization or it passed its ~6 month lifetime<br>\n<strong>And Given</strong> my access token has expired<br>\n<strong>When</strong> I run <code class=\"notranslate\">gh pr list</code><br>\n<strong>Then</strong> gh sends a refresh request with the dead token, and the server rejects it<br>\n<strong>And</strong> the credential stays stored, because <code class=\"notranslate\">lockHeld</code> is false<br>\n<strong>And</strong> this request goes out with no token, which is a 401, or an anonymous call for public data<br>\n<strong>When</strong> I run any other gh command, or git uses gh as its credential helper<br>\n<strong>Then</strong> the same thing happens again: a refresh request is rejected and nothing changes in storage<br>\n<strong>And</strong> this repeats on every request until I run <code class=\"notranslate\">gh auth login</code></p>\n<p dir=\"auto\">?</p>",
           "createdAt": "2026-10-14T11:00:44Z",
@@ -351,7 +756,8 @@
          {
           "id": "PRRC_kwDODKw3uc8AAAABATiGHQ",
           "author": {
-           "login": "user-3"
+           "login": "user-3",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">Yep, your walkthrough is correct. When we can't take the lock we leave the stored credential in place, so every subsequent request (including git going through gh as a credential helper) re-attempts the same doomed refresh, gets rejected, and resolves to no usable token, right up until the user re-authenticates. 👍</p>\n<p dir=\"auto\">One precision on \"goes out with no token\": we don't send an empty token, we drop the <code class=\"notranslate\">Authorization</code> header entirely. The rejection path returns an empty <code class=\"notranslate\">gh.Credential{}</code>, and the round tripper only sets the header when the token is non-empty:</p>\n<div class=\"highlight highlight-source-go notranslate position-relative overflow-auto\" dir=\"auto\" data-snippet-clipboard-copy-content=\"if token != &quot;&quot; {\n    req.Header.Set(authorization, fmt.Sprintf(&quot;token %s&quot;, token))\n}\"><pre class=\"notranslate\"><span class=\"pl-k\">if</span> <span class=\"pl-s1\">token</span> <span class=\"pl-c1\">!=</span> <span class=\"pl-s\">\"\"</span> {\n    <span class=\"pl-s1\">req</span>.<span class=\"pl-c1\">Header</span>.<span class=\"pl-c1\">Set</span>(<span class=\"pl-s1\">authorization</span>, <span class=\"pl-s1\">fmt</span>.<span class=\"pl-c1\">Sprintf</span>(<span class=\"pl-s\">\"token %s\"</span>, <span class=\"pl-s1\">token</span>))\n}</pre></div>\n<p dir=\"auto\">So the request is genuinely header-less (anonymous), not <code class=\"notranslate\">Authorization: token </code> with an empty value. That distinction matters because the empty-value form returns <code class=\"notranslate\">Bad credentials</code>, whereas a header-less request returns <code class=\"notranslate\">Requires authentication</code> (or an anonymous public-data response).</p>\n<p dir=\"auto\">The small upside is that for REST endpoints the API response does hint at the failure: a <code class=\"notranslate\">401 Requires authentication</code>, which we follow with a <code class=\"notranslate\">Try authenticating with: ...</code> line. One wrinkle there: because the now-useless credential is still stored and still looks refreshable, that hint currently points at <code class=\"notranslate\">gh auth refresh</code> rather than <code class=\"notranslate\">gh auth login</code>. It does still recover, since <code class=\"notranslate\">gh auth refresh</code> re-runs the OAuth flow, but the wording is a little misleading given the refresh token is the dead part.</p>\n<p dir=\"auto\">One caveat for completeness: GraphQL is less friendly, since an unauthenticated GraphQL request comes back as a <code class=\"notranslate\">403</code> rate-limit (anonymous limit is 0), so the 401 hint never fires and the user just sees a rate-limit message with no pointer to re-auth.</p>\n<p dir=\"auto\">My take: I think this edge case is fine to accept. It only bites users who haven't run <code class=\"notranslate\">gh</code> for a long time, and there's a good chance they can self-correct from the messaging we already surface (and we could add similar messaging for failed GraphQL calls to tighten this further). The alternative, cleaning up the expired tokens (refresh plus auth) in this state, would reintroduce exactly the concurrency problem we were trying to avoid: racing refresh requests in an environment without flock support. And I suspect that concurrent case is only going to get more common as parallel working agents become a thing.</p>",
           "createdAt": "2026-10-19T15:07:55Z",
@@ -380,7 +786,8 @@
        "__typename": "PullRequestReview",
        "id": "PRR_kwDODKw3uc8AAAABSDx7tw",
        "author": {
-        "login": "user-1"
+        "login": "user-1",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
        },
        "state": "COMMENTED",
        "bodyHTML": "\n<h3 dir=\"auto\">🟡 Changes recommended</h3>\n<p dir=\"auto\">Credential replacement and logout can still race refreshes, and rejected-token status can falsely claim successful cleanup.</p>\n<details open=\"\">\n<summary><strong>5 open findings</strong></summary>\n<ul dir=\"auto\">\n<li><themed-picture data-catalyst-inline=\"true\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://camo.githubusercontent.com/43fbf07c25e7694e97d3fcace6a3182c39ad7aee99e1210696467115c743c023/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f686967682d76322d6461726b2e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://camo.githubusercontent.com/da5c5f6a1143eea4055229ff1427ed6b4a5f3a138220746b38239b6d12642482/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f686967682d76322d6c696768742e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://camo.githubusercontent.com/3a45afe3f70ffe1b8bd7e55cd010b3cfdea3251a5d0661ebd6237ecb6846bcb6/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f686967682d76322d6c696768742e706e67\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\"></picture></themed-picture> <a href=\"https://github.com/cli/cli/pull/14663#discussion_r4261387538\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14663/hovercard\">Serialize credential replacement and propagate purge failures</a> · New</li>\n<li><themed-picture data-catalyst-inline=\"true\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://camo.githubusercontent.com/43fbf07c25e7694e97d3fcace6a3182c39ad7aee99e1210696467115c743c023/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f686967682d76322d6461726b2e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://camo.githubusercontent.com/da5c5f6a1143eea4055229ff1427ed6b4a5f3a138220746b38239b6d12642482/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f686967682d76322d6c696768742e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://camo.githubusercontent.com/3a45afe3f70ffe1b8bd7e55cd010b3cfdea3251a5d0661ebd6237ecb6846bcb6/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f686967682d76322d6c696768742e706e67\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\"></picture></themed-picture> <a href=\"https://github.com/cli/cli/pull/14663#discussion_r4261387680\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14663/hovercard\">Prevent logout writes when refresh lock is unavailable</a> · New</li>\n<li><themed-picture data-catalyst-inline=\"true\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://camo.githubusercontent.com/cb6d10b2182e7341312004e938462213d9cb31e1f1e7987fb021c38e31c6d974/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6d656469756d2d76322d6461726b2e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://camo.githubusercontent.com/053055dd9104a64ca12152416e8fb067a751f78a33db1dd70dfcc6d69fc0e752/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6d656469756d2d76322d6c696768742e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://camo.githubusercontent.com/61bc3f51460c23a17b60ad45bd0941ac833960ebf1f0f46c74b915e68f750e93/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6d656469756d2d76322d6c696768742e706e67\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\"></picture></themed-picture> <a href=\"https://github.com/cli/cli/pull/14663#discussion_r4261387811\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14663/hovercard\">Do not claim credential removal without confirmed cleanup</a> · New</li>\n<li><themed-picture data-catalyst-inline=\"true\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://camo.githubusercontent.com/cb6d10b2182e7341312004e938462213d9cb31e1f1e7987fb021c38e31c6d974/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6d656469756d2d76322d6461726b2e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://camo.githubusercontent.com/053055dd9104a64ca12152416e8fb067a751f78a33db1dd70dfcc6d69fc0e752/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6d656469756d2d76322d6c696768742e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://camo.githubusercontent.com/61bc3f51460c23a17b60ad45bd0941ac833960ebf1f0f46c74b915e68f750e93/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6d656469756d2d76322d6c696768742e706e67\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\"></picture></themed-picture> <a href=\"https://github.com/cli/cli/pull/14663#discussion_r4261387895\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14663/hovercard\">Avoid claiming refresh cleanup succeeded without confirmation</a> · New</li>\n<li><themed-picture data-catalyst-inline=\"true\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://camo.githubusercontent.com/f2d593585e93a18c598f6c46fd19979473c9100201d552142c450e03a3db7816/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6c6f772d76322d6461726b2e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://camo.githubusercontent.com/a84a579de753f1898c230531524baa5b5711cb20e1b8154681f124cb7aac777c/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6c6f772d76322d6c696768742e737667\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.svg\"><img src=\"https://camo.githubusercontent.com/0ed7919ac116f938883e9a187291a1081d863ad712697b774e141f8e4192685e/68747470733a2f2f6769746875622e6769746875626173736574732e636f6d2f7374617469632f696d616765732f69636f6e732f636f70696c6f742d636f64652d7265766965772f6c6f772d76322d6c696768742e706e67\" alt=\"Low severity\" width=\"62\" height=\"18\" align=\"texttop\" data-canonical-src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.png\"></picture></themed-picture> <a href=\"https://github.com/cli/cli/pull/14663#discussion_r4261388034\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/cli/cli/pull/14663/hovercard\">Ensure helper setup completes when an existing helper is present</a> · New</li>\n</ul>\n</details>\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n<p dir=\"auto\">This follow-up consolidates review fixes for the refreshable OAuth token stack across API clients, credential storage, authentication commands, and verification tooling.</p>\n<p dir=\"auto\"><strong>Changes:</strong></p>\n<ul dir=\"auto\">\n<li>Restores public API compatibility while adding a separate refresh-aware client seam.</li>\n<li>Refines credential precedence, refresh handling, logout synchronization, and authentication UX.</li>\n<li>Expands regression tests and guided end-to-end verification.</li>\n</ul>\n<markdown-accessiblity-table><table role=\"table\">\n<thead>\n<tr>\n<th>File</th>\n<th>Description</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><code class=\"notranslate\">script/​refreshable-token-gitcredential-e2e.sh</code></td>\n<td>Improves git credential verification.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">script/​refreshable-token-e2e.sh</code></td>\n<td>Clarifies script documentation.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​factory/​default.go</code></td>\n<td>Wires refresh-aware HTTP configuration.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​token/​token.go</code></td>\n<td>Restores legacy keyring fallback.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​token/​token_test.go</code></td>\n<td>Tests legacy secure-storage behavior.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​status/​status.go</code></td>\n<td>Handles rejected refresh tokens.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​status/​status_test.go</code></td>\n<td>Tests rejected-token status output.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​shared/​login_flow.go</code></td>\n<td>Forces web flow for short-lived login.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​shared/​login_flow_test.go</code></td>\n<td>Tests forced web authentication.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​shared/​git_credential.go</code></td>\n<td>Offers gh helper configuration.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​shared/​git_credential_test.go</code></td>\n<td>Tests helper prompt outcomes.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​refresh/​refresh.go</code></td>\n<td>Preserves scopes through refresh.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​auth/​refresh/​refresh_test.go</code></td>\n<td>Tests scope preservation failures.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​api/​api.go</code></td>\n<td>Uses refresh-aware API authentication.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​agent-task/​capi/​client_test.go</code></td>\n<td>Tests per-request CAPI refresh.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​agent-task/​agent_task.go</code></td>\n<td>Accepts plaintext refreshable credentials.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​cmd/​agent-task/​agent_task_test.go</code></td>\n<td>Tests refreshable source acceptance.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">pkg/​auth/​credential.go</code></td>\n<td>Adds public credential types.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​gh/​gh.go</code></td>\n<td>Aliases internal credential types.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​config/​refreshable.go</code></td>\n<td>Adjusts locking and refresh cleanup.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​config/​refreshable_test.go</code></td>\n<td>Expands storage and locking coverage.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​config/​config.go</code></td>\n<td>Updates login, logout, and precedence.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​config/​auth_config_test.go</code></td>\n<td>Pins active-token precedence.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​authflow/​refresh.go</code></td>\n<td>Extracts OAuth result mapping.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​authflow/​refresh_test.go</code></td>\n<td>Tests OAuth result mapping.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​authflow/​flow.go</code></td>\n<td>Uses extracted and refresh-aware helpers.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">internal/​attachments/​client_test.go</code></td>\n<td>Updates authentication test wiring.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">api/​request_test.go</code></td>\n<td>Updates request authentication tests.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">api/​http_client.go</code></td>\n<td>Splits primitive and refresh-aware seams.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">api/​http_client_test.go</code></td>\n<td>Tests compatibility and exclusivity.</td>\n</tr>\n<tr>\n<td><code class=\"notranslate\">api/​client_test.go</code></td>\n<td>Updates client authentication setup.</td>\n</tr>\n</tbody>\n</table></markdown-accessiblity-table>\n</details>\n<p dir=\"auto\">🧠 <strong>Review effort:</strong> Balanced</p>\n<hr>\n<p dir=\"auto\">💡 Configure MCP servers for context-aware, tailored reviews. <a href=\"https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills\">Learn more in the docs.</a></p>",
@@ -395,7 +802,8 @@
        "__typename": "PullRequestReview",
        "id": "PRR_kwDODKw3uc8AAAABSMvzVg",
        "author": {
-        "login": "user-2"
+        "login": "user-2",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
        },
        "state": "COMMENTED",
        "bodyHTML": "",
@@ -410,7 +818,8 @@
        "__typename": "PullRequestReview",
        "id": "PRR_kwDODKw3uc8AAAABTPurhQ",
        "author": {
-        "login": "user-2"
+        "login": "user-2",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
        },
        "state": "APPROVED",
        "bodyHTML": "",
@@ -425,7 +834,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4Htfgg",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T09:34:23Z",
        "beforeCommit": {
@@ -439,7 +849,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4ImwgQ",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T09:46:20Z",
        "beforeCommit": {
@@ -453,7 +864,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4JjrKA",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T09:58:32Z",
        "beforeCommit": {
@@ -467,7 +879,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4Ks52A",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T10:13:40Z",
        "beforeCommit": {
@@ -481,7 +894,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4LgK5w",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T10:24:35Z",
        "beforeCommit": {
@@ -495,7 +909,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4MJA3w",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T10:33:40Z",
        "beforeCommit": {
@@ -515,6 +930,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -531,6 +947,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -547,6 +964,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -563,6 +981,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -579,6 +998,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -595,6 +1015,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -611,6 +1032,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -627,6 +1049,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -643,6 +1066,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -659,6 +1083,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -675,6 +1100,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -691,6 +1117,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -707,6 +1134,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -723,6 +1151,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -739,6 +1168,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -755,6 +1185,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -771,6 +1202,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -787,6 +1219,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -803,6 +1236,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -819,6 +1253,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -835,6 +1270,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -851,6 +1287,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -867,6 +1304,7 @@
         "committedDate": "2026-10-21T10:45:09Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4",
          "user": {
           "login": "user-3"
          }
@@ -877,7 +1315,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABW7tYY88AAAAH4M8rfg",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T10:45:21Z",
        "beforeCommit": {
@@ -891,7 +1330,8 @@
        "__typename": "MergedEvent",
        "id": "ME_lADODKw3uc8AAAABW7tYY88AAAAH4NuFKg",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T10:56:14Z",
        "commit": {
@@ -903,7 +1343,8 @@
        "__typename": "ClosedEvent",
        "id": "CE_lADODKw3uc8AAAABW7tYY88AAAAH4NuF-g",
        "actor": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-10-21T10:56:14Z"
       }

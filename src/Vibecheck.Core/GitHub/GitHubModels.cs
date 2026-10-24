@@ -61,6 +61,9 @@ public sealed record PullItem(string Kind, string Id, string? Author, DateTimeOf
     /// <summary>Gets the HTML of a description, comment or review, or <see langword="null"/> for any other entry.</summary>
     public string? BodyHtml { get; init; }
 
+    /// <summary>Gets the address of the author's avatar on GitHub, or <see langword="null"/> when GitHub gives none.</summary>
+    public string? Avatar { get; init; }
+
     /// <summary>Gets a review's state, such as <c>APPROVED</c>, <c>CHANGES_REQUESTED</c>, <c>COMMENTED</c> or <c>DISMISSED</c>.</summary>
     public string? State { get; init; }
 
@@ -97,7 +100,11 @@ public sealed record ReviewThread(string Id, string Path, string Side, int? Line
 /// it. The diff hunk is the part of the diff the thread was written against, ending at its line.
 /// </summary>
 /// <param name="Review">The identifier of the review the comment belongs to, or null.</param>
-public sealed record ThreadComment(string Id, string? Author, string BodyHtml, DateTimeOffset At, string Url, bool Pending, string? Review, string? DiffHunk);
+public sealed record ThreadComment(string Id, string? Author, string BodyHtml, DateTimeOffset At, string Url, bool Pending, string? Review, string? DiffHunk)
+{
+    /// <summary>Gets the address of the author's avatar on GitHub, or <see langword="null"/> when GitHub gives none.</summary>
+    public string? Avatar { get; init; }
+}
 
 /// <summary>The viewer's pending review: its identifier, which later writes add to, and how many comments it holds.</summary>
 public sealed record PendingReview(string Id, int Comments);

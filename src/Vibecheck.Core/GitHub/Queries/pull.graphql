@@ -7,7 +7,7 @@ query($owner: String!, $name: String!, $number: Int!, $threads: Boolean = true, 
       url
       state
       isDraft
-      author { login }
+      author { login avatarUrl(size: 64) }
       bodyHTML
       createdAt
       headRefName
@@ -66,7 +66,7 @@ query($owner: String!, $name: String!, $number: Int!, $threads: Boolean = true, 
           comments(first: 100) {
             nodes {
               id
-              author { login }
+              author { login avatarUrl(size: 64) }
               bodyHTML
               createdAt
               url
@@ -82,16 +82,16 @@ query($owner: String!, $name: String!, $number: Int!, $threads: Boolean = true, 
         pageInfo { hasNextPage endCursor }
         nodes {
           __typename
-          ... on IssueComment { id author { login } bodyHTML createdAt url }
-          ... on PullRequestReview { id author { login } state bodyHTML createdAt submittedAt url commit { oid } }
-          ... on PullRequestCommit { id url commit { oid messageHeadline committedDate author { name user { login } } } }
-          ... on HeadRefForcePushedEvent { id actor { login } createdAt beforeCommit { oid } afterCommit { oid } }
-          ... on BaseRefChangedEvent { id actor { login } createdAt previousRefName currentRefName }
-          ... on ReadyForReviewEvent { id actor { login } createdAt }
-          ... on ConvertToDraftEvent { id actor { login } createdAt }
-          ... on ClosedEvent { id actor { login } createdAt }
-          ... on ReopenedEvent { id actor { login } createdAt }
-          ... on MergedEvent { id actor { login } createdAt commit { oid } mergeRefName }
+          ... on IssueComment { id author { login avatarUrl(size: 64) } bodyHTML createdAt url }
+          ... on PullRequestReview { id author { login avatarUrl(size: 64) } state bodyHTML createdAt submittedAt url commit { oid } }
+          ... on PullRequestCommit { id url commit { oid messageHeadline committedDate author { name avatarUrl(size: 64) user { login } } } }
+          ... on HeadRefForcePushedEvent { id actor { login avatarUrl(size: 64) } createdAt beforeCommit { oid } afterCommit { oid } }
+          ... on BaseRefChangedEvent { id actor { login avatarUrl(size: 64) } createdAt previousRefName currentRefName }
+          ... on ReadyForReviewEvent { id actor { login avatarUrl(size: 64) } createdAt }
+          ... on ConvertToDraftEvent { id actor { login avatarUrl(size: 64) } createdAt }
+          ... on ClosedEvent { id actor { login avatarUrl(size: 64) } createdAt }
+          ... on ReopenedEvent { id actor { login avatarUrl(size: 64) } createdAt }
+          ... on MergedEvent { id actor { login avatarUrl(size: 64) } createdAt commit { oid } mergeRefName }
         }
       }
     }

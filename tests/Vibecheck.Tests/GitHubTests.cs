@@ -64,6 +64,10 @@ public class GitHubTests
         Assert.All(discussion.Timeline.Where(i => i.Kind == "force-push"), i => Assert.True(i.From is { Length: 40 } && i.Commit is { Length: 40 }));
         Assert.All(discussion.Timeline.Where(i => i.Kind == "commit"), i => Assert.True(i.Commit is { Length: 40 } && !string.IsNullOrEmpty(i.Text)));
 
+        // Every entry and comment has its author's avatar, a pushed commit by its git identity's when it has no account.
+        Assert.All(discussion.Timeline, i => Assert.StartsWith("https://avatars.githubusercontent.com/", i.Avatar));
+        Assert.All(discussion.Threads.SelectMany(t => t.Comments), c => Assert.StartsWith("https://avatars.githubusercontent.com/", c.Avatar));
+
         Assert.Null(discussion.Pending);
         Assert.Equal(9, discussion.Threads.Count);
         Assert.Equal(2, discussion.Threads.Count(t => t.IsOutdated));

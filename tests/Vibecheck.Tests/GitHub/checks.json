@@ -9,7 +9,8 @@
     "state": "OPEN",
     "isDraft": false,
     "author": {
-     "login": "user-2"
+     "login": "user-2",
+     "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
     },
     "bodyHTML": "<h2 dir=\"auto\">Summary</h2>\n<p dir=\"auto\"><span class=\"issue-keyword tooltipped tooltipped-se\" aria-label=\"This pull request closes issue #13546.\">Fixes</span> <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4549277326\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/13546\" data-hovercard-type=\"issue\" data-hovercard-url=\"/cli/cli/issues/13546/hovercard\" href=\"https://github.com/cli/cli/issues/13546\">#13546</a></p>\n<p dir=\"auto\"><code class=\"notranslate\">DisplayURL</code> was using <code class=\"notranslate\">u.Path</code> which is the unescaped version of the URL path. This caused branch names with special characters (like quotes) to be displayed incorrectly in the terminal when using <code class=\"notranslate\">gh pr create --web</code>.</p>\n<p dir=\"auto\">For example, a branch named <code class=\"notranslate\">test-\"quoted\"-branch-pr</code> would display as:</p>\n<div class=\"snippet-clipboard-content notranslate position-relative overflow-auto\" data-snippet-clipboard-copy-content=\"https://github.com/OWNER/REPO/compare/...test-&quot;quoted&quot;-branch-pr\"><pre class=\"notranslate\"><code class=\"notranslate\">https://github.com/OWNER/REPO/compare/...test-\"quoted\"-branch-pr\n</code></pre></div>\n<p dir=\"auto\">Instead of the correct:</p>\n<div class=\"snippet-clipboard-content notranslate position-relative overflow-auto\" data-snippet-clipboard-copy-content=\"https://github.com/OWNER/REPO/compare/...test-%22quoted%22-branch-pr\"><pre class=\"notranslate\"><code class=\"notranslate\">https://github.com/OWNER/REPO/compare/...test-%22quoted%22-branch-pr\n</code></pre></div>\n<h2 dir=\"auto\">Changes</h2>\n<p dir=\"auto\">Uses <code class=\"notranslate\">u.RawPath</code> (when available) instead of <code class=\"notranslate\">u.Path</code> to preserve the original percent-encoding from the URL.</p>",
     "createdAt": "2026-07-03T10:12:24Z",
@@ -411,7 +412,8 @@
          {
           "id": "PRRC_kwDODKw3uc7XvAEI",
           "author": {
-           "login": "user-3"
+           "login": "user-3",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
           },
           "bodyHTML": "<p dir=\"auto\">u.RawPath is only populated when the raw path differs from the default escaping of u.Path, so this misses the common case. e.g. <a href=\"https://x/a%20b\" rel=\"nofollow\">https://x/a%20b</a> decodes Path to \"a b\" whose canonical escape is \"a%20b\", which matches raw, so RawPath stays \"\" and you fall back to the decoded Path. u.EscapedPath() handles both and is what you want here.</p>",
           "createdAt": "2026-07-21T04:26:13Z",
@@ -440,7 +442,8 @@
        "__typename": "IssueComment",
        "id": "IC_kwDODKw3uc8AAAABIpSWGA",
        "author": {
-        "login": "user-1"
+        "login": "user-1",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
        },
        "bodyHTML": "<p dir=\"auto\">Thanks for your pull request! While it doesn't meet all of our standard requirements, it appears to be a small, focused contribution and has been routed to the team for review.</p>\n<p dir=\"auto\"><strong>Note:</strong> We still encourage linking to an issue with the <code class=\"notranslate\">help wanted</code> label when possible, as it helps us prioritize and track contributions.</p>",
        "createdAt": "2026-07-03T10:12:40Z",
@@ -456,6 +459,7 @@
         "committedDate": "2026-07-03T11:15:33Z",
         "author": {
          "name": "Author 1",
+         "avatarUrl": "https://avatars.githubusercontent.com/u/4?v=4",
          "user": {
           "login": "user-2"
          }
@@ -466,7 +470,8 @@
        "__typename": "HeadRefForcePushedEvent",
        "id": "HRFPE_lADODKw3uc8AAAABHkGZ_88AAAAGaLDbgg",
        "actor": {
-        "login": "user-2"
+        "login": "user-2",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "createdAt": "2026-07-03T11:15:36Z",
        "beforeCommit": {
@@ -480,7 +485,8 @@
        "__typename": "IssueComment",
        "id": "IC_kwDODKw3uc8AAAABIpxRRA",
        "author": {
-        "login": "user-2"
+        "login": "user-2",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"
        },
        "bodyHTML": "<p dir=\"auto\">The build failures on macOS/Windows/Ubuntu appear to be pre-existing infrastructure issues unrelated to this change. The lint, govulncheck, and all integration tests pass. The change is local to <code class=\"notranslate\">internal/text/text.go</code> and only affects the DisplayURL helper function.</p>",
        "createdAt": "2026-07-03T11:23:37Z",
@@ -490,7 +496,8 @@
        "__typename": "PullRequestReview",
        "id": "PRR_kwDODKw3uc8AAAABGplw5Q",
        "author": {
-        "login": "user-3"
+        "login": "user-3",
+        "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
        },
        "state": "COMMENTED",
        "bodyHTML": "",
