@@ -1,4 +1,4 @@
-# archviz
+# vibecheck
 
 Tooling for reviewing large, generated pull requests at the architecture level. An
 architecture map binds types to logical components by namespace pattern,
