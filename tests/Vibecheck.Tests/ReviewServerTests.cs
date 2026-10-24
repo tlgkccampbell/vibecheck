@@ -100,6 +100,30 @@ public class ReviewServerTests
         Assert.Contains("\"reviewed\":{\"" + TestData.X1 + "\":\"reviewer\"}", await client.GetStringAsync(server.BaseAddress + url + "changeset.js"), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task StopsPromptlyWhileAReviewPageHoldsItsEventStreamOpen()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        await using var server = new ReviewServer(Options(repo));
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        await ReadEventsAsync(client, api + "/events");
+
+        // An open page keeps its stream open until the server ends it.
+        using var stream = await client.GetAsync(api + "/events", HttpCompletionOption.ResponseHeadersRead);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        server.Stop();
+        await server.WaitForShutdownAsync();
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"stopping took {stopwatch.Elapsed}");
+    }
+
     /// <summary>
     /// Returns a pull request's snapshot with a head and a base. Its base branch is <c>main</c>, it holds the
     /// commits given, and its other fields are fixed.
