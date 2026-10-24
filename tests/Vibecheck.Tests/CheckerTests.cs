@@ -273,8 +273,8 @@ public class CheckerTests
         var pairs = Explain.Pairs(facts, "a", "shared");
         Assert.Equal(2, pairs.Count);
         Assert.All(pairs, p => Assert.Equal(1, p.Count));
-        Assert.Equal((TestData.Thing, "Ext.Sdk", 1), Assert.Single(Explain.Pairs(facts, "a", "ext")));
-        Assert.Equal((TestData.Thing, TestData.Helper, 1), Assert.Single(Explain.Pairs(facts, "a.x", "a.x")));
+        Assert.Equal(new TypePair(TestData.Thing, "Ext.Sdk", 1), Assert.Single(Explain.Pairs(facts, "a", "ext")));
+        Assert.Equal(new TypePair(TestData.Thing, TestData.Helper, 1), Assert.Single(Explain.Pairs(facts, "a.x", "a.x")));
         Assert.Empty(Explain.Pairs(facts, "shared", "a"));
     }
 

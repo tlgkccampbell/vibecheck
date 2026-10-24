@@ -12,7 +12,7 @@ public static class Explain
     /// be an external. A pair inside one leaf is reported only when both identifiers
     /// name that leaf.
     /// </summary>
-    public static List<(string FromType, string ToType, int Count)> Pairs(Facts facts, string from, string to)
+    public static List<TypePair> Pairs(Facts facts, string from, string to)
     {
         var leafOf = facts.Types.ToDictionary(t => t.Name, t => t.Leaf, StringComparer.Ordinal);
         var counts = new Dictionary<(string, string), int>();
@@ -35,8 +35,11 @@ public static class Explain
                 counts[(d.From, d.To)] = counts.GetValueOrDefault((d.From, d.To)) + 1;
             }
         }
-        return counts.Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value))
-            .OrderByDescending(p => p.Item3).ThenBy(p => p.Item1, StringComparer.Ordinal).ThenBy(p => p.Item2, StringComparer.Ordinal)
+        return counts.Select(kv => new TypePair(kv.Key.Item1, kv.Key.Item2, kv.Value))
+            .OrderByDescending(p => p.Count).ThenBy(p => p.FromType, StringComparer.Ordinal).ThenBy(p => p.ToType, StringComparer.Ordinal)
             .ToList();
     }
 }
+
+/// <summary>The references from one type to another, or to one external assembly, behind an edge.</summary>
+public sealed record TypePair(string FromType, string ToType, int Count);

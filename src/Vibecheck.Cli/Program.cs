@@ -228,7 +228,7 @@ public static class Program
         var pairs = Explain.Pairs(facts, from, to);
         var total = pairs.Sum(p => p.Count);
         Console.WriteLine($"{from} → {to}: {total} reference(s) across {pairs.Count} type pair(s)");
-        foreach (var (a, b, n) in pairs.Take(limit)) Console.WriteLine($"{n,6}  {a} → {b}");
+        foreach (var p in pairs.Take(limit)) Console.WriteLine($"{p.Count,6}  {p.FromType} → {p.ToType}");
         return 0;
     }
 

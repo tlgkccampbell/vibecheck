@@ -224,8 +224,8 @@ public static class ChangesetBuilder
     private static List<PairChange> Evidence(Facts baseFacts, Facts headFacts, string from, string to)
     {
         var pairs = new Dictionary<(string, string), (int Base, int Head)>();
-        foreach (var (f, t, n) in Explain.Pairs(baseFacts, from, to)) pairs[(f, t)] = (n, 0);
-        foreach (var (f, t, n) in Explain.Pairs(headFacts, from, to)) pairs[(f, t)] = (pairs.GetValueOrDefault((f, t)).Base, n);
+        foreach (var p in Explain.Pairs(baseFacts, from, to)) pairs[(p.FromType, p.ToType)] = (p.Count, 0);
+        foreach (var p in Explain.Pairs(headFacts, from, to)) pairs[(p.FromType, p.ToType)] = (pairs.GetValueOrDefault((p.FromType, p.ToType)).Base, p.Count);
         return pairs.Where(p => p.Value.Base != p.Value.Head)
             .Select(p => new PairChange(p.Key.Item1, p.Key.Item2, p.Value.Base, p.Value.Head))
             .OrderByDescending(p => Math.Abs(p.Head - p.Base)).ThenBy(p => p.From, StringComparer.Ordinal).ThenBy(p => p.To, StringComparer.Ordinal)
