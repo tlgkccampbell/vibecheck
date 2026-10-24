@@ -246,14 +246,17 @@
   }
   function viewsAt(level) { return Object.keys(VIEWS).filter((v) => VIEWS[v].level === level); }
 
-  // The children a location draws, each with the leaves it stands for.
+  // The children a location draws, each with the leaves it stands for. A view's groups partition the map's leaves, so
+  // a view of the top level also draws the blocks that stand outside the map, unsorted and Other files, as the tree does.
   function drawnChildren(loc) {
+    const tree = (c) => ({ key: c, id: c, kind: c === UNSORTED ? "unsorted" : "node", leaves: leavesUnder(c) });
     if (loc.group) return VIEWS[loc.view].groups[loc.group].leaves.map((l) => ({ key: l, id: l, kind: "node", leaves: [l] }));
     if (loc.view) {
       const v = VIEWS[loc.view];
-      return Object.keys(v.groups).map((g) => ({ key: `g:${loc.view}/${g}`, id: `g:${loc.view}/${g}`, kind: "group", leaves: v.groups[g].leaves }));
+      const groups = Object.keys(v.groups).map((g) => ({ key: `g:${loc.view}/${g}`, id: `g:${loc.view}/${g}`, kind: "group", leaves: v.groups[g].leaves }));
+      return loc.level === ROOT ? groups.concat(childrenOf(ROOT).filter((c) => c === UNSORTED || c === OTHER).map(tree)) : groups;
     }
-    return childrenOf(loc.level).map((c) => ({ key: c, id: c, kind: c === UNSORTED ? "unsorted" : "node", leaves: leavesUnder(c) }));
+    return childrenOf(loc.level).map(tree);
   }
 
   // Lifts an endpoint outside the drawn children to the thing a pin is named after.
@@ -2201,7 +2204,8 @@
 
   // Returns a review thread with its comments. A resolved thread is collapsed to one line. A thread listed at the top
   // of its file, or shown in the conversation, says where it was written and shows the hunk it was written against.
-  // The options are top, for the list at the top of a file, and away, for the conversation.
+  // Wherever it is shown, it takes replies and resolutions while the pull request is open. The options are top, for
+  // the list at the top of a file, and away, for the conversation.
   function threadBox(t, opts = {}) {
     const placed = PULL.places[t.id];
     const why = t.isResolved ? "resolved" + (t.resolvedBy ? " by " + t.resolvedBy : "") : t.isOutdated ? "outdated"
@@ -2216,7 +2220,7 @@
     if (opts.away && placed) box.append(el("button", { class: "link thread-show", onclick: () => openThread(t) }, "Show in the diff"));
     if ((opts.top || opts.away) && !t.onFile && t.comments[0] && t.comments[0].diffHunk) box.append(hunkTail(t.comments[0].diffHunk, 4));
     for (const c of t.comments) box.append(commentBox(c));
-    if (!opts.away && canWrite()) box.append(threadControls(t));
+    if (canWrite()) box.append(threadControls(t));
     return box;
   }
 
