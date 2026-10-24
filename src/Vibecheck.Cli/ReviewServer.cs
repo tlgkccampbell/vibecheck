@@ -79,10 +79,15 @@ public sealed class ReviewServer : IAsyncDisposable
     private readonly ConcurrentDictionary<string, Review> reviews = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MapJob> mapJobs = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource stopping = new();
+    private readonly ReviewedFiles reviewed;
     private WebApplication? app;
     private int port;
 
-    public ReviewServer(ReviewServerOptions options) => this.options = options;
+    public ReviewServer(ReviewServerOptions options)
+    {
+        this.options = options;
+        reviewed = new ReviewedFiles(options.Cache?.ReviewedPath);
+    }
 
     /// <summary>Gets the address the server listens on, without the token.</summary>
     public string BaseAddress => $"http://127.0.0.1:{port}";
@@ -367,7 +372,8 @@ public sealed class ReviewServer : IAsyncDisposable
     /// <summary>
     /// Rejects a request whose <c>Host</c> header does not name the loopback address and port, which stops DNS
     /// rebinding, and a request without the token, which stops other pages in the browser. A request that carries the
-    /// token in its query sets the cookie and is sent on without it. A POST must send JSON, which a cross-site form cannot.
+    /// token in its query sets the cookie and is sent on without it. A request that writes, such as a POST or a DELETE,
+    /// must send JSON, which a cross-site form cannot.
     /// </summary>
     private async Task GuardAsync(HttpContext ctx, RequestDelegate next)
     {
@@ -391,7 +397,9 @@ public sealed class ReviewServer : IAsyncDisposable
             await ctx.Response.WriteAsync("Open the link that the vibecheck command printed.");
             return;
         }
-        if (HttpMethods.IsPost(ctx.Request.Method) && ctx.Request.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) != true)
+        var method = ctx.Request.Method;
+        var writes = !(HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method));
+        if (writes && ctx.Request.ContentType?.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) != true)
         {
             ctx.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
             return;
@@ -501,6 +509,18 @@ public sealed class ReviewServer : IAsyncDisposable
             return Regenerate(review, body.Key) ? Results.Accepted() : Results.NotFound(new { message = $"{body.Key} is not among the review's narratives." });
         });
 
+        web.MapPost("/api/reviews/{id}/reviewed", async (string id, HttpContext ctx) =>
+        {
+            if (!reviews.TryGetValue(id, out var review) || review.Result is not { } result) return Results.NotFound();
+            var body = await JsonSerializer.DeserializeAsync<ReviewedBody>(ctx.Request.Body, FactsJson.Options);
+            if (body?.Paths is not { Count: > 0 } || body.Reviewed is not { } mark) return Results.BadRequest(new { message = "paths and reviewed are required" });
+            var keys = reviewed.Set(result.Changeset, result.Target.Root, body.Paths, mark);
+            options.Log?.Invoke($"  {review.Id} {(mark ? "marked" : "unmarked")} {keys.Count} file(s) reviewed");
+            // Every review that shows one of the same changes is told, so that the pages open on any of them agree.
+            foreach (var r in reviews.Values) AnnounceMarks(r, keys);
+            return Results.Json(new { marks = reviewed.Marks(result.Changeset, result.Target.Root) }, FactsJson.Options);
+        });
+
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
             reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
 
@@ -525,11 +545,25 @@ public sealed class ReviewServer : IAsyncDisposable
             {
                 solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
                 mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
-                narratives = options.Claude is not null,
+                narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root),
             };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
             return Results.Text(script, "text/javascript; charset=utf-8");
         });
+    }
+
+    /// <summary>
+    /// Sends a review a <c>reviewed</c> event with the current marks of its files whose changes have one of the given
+    /// keys. Each mark is the reason the file is reviewed, or empty when it is not. A review that shows none of the
+    /// changes is sent nothing.
+    /// </summary>
+    private void AnnounceMarks(Review review, HashSet<string> keys)
+    {
+        if (review.Result is not { } result) return;
+        var paths = ReviewedFiles.Keys(result.Changeset, result.Target.Root).Where(k => keys.Contains(k.Value)).Select(k => k.Key).ToList();
+        if (paths.Count == 0) return;
+        var marks = reviewed.Marks(result.Changeset, result.Target.Root);
+        review.Add(new { type = "reviewed", marks = paths.ToDictionary(p => p, p => marks.GetValueOrDefault(p) ?? "", StringComparer.Ordinal) });
     }
 
     private IResult Page(string name, string contentType) => Results.Text(ReadViewer(name), contentType);
@@ -548,6 +582,8 @@ public sealed class ReviewServer : IAsyncDisposable
     private sealed record MapBody(string? Action);
 
     private sealed record NarrativesBody(string? Key);
+
+    private sealed record ReviewedBody(List<string>? Paths, bool? Reviewed);
 
     /// <summary>
     /// Represents the writing of one result's narratives: the run of the result, the plan and its inputs once they are

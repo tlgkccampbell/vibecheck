@@ -7,26 +7,30 @@ namespace Vibecheck.Diffing;
 public static class ChangesetBuilder
 {
     /// <summary>
-    /// Combines a base and a head facts document into a changeset document, with the hunks of every changed file read
-    /// by <see cref="GitHunks.Collect"/> between two revisions. File paths are relative to <paramref name="repo"/>.
+    /// Combines a base and a head facts document into a changeset document, with every file that git reports as changed
+    /// between two revisions and the hunks of each, read by <see cref="GitHunks"/>. File paths are relative to
+    /// <paramref name="repo"/>.
     /// </summary>
     public static Changeset Build(Facts baseFacts, Facts headFacts, string repo, string baseRev, string headRev)
     {
-        var changed = DiffFiles(baseFacts, headFacts).Where(f => f.Status != "unchanged").Select(f => f.Path);
-        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changed));
+        var changes = GitHunks.Changes(repo, baseRev, headRev);
+        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changes), changes);
     }
 
-    /// <summary>Combines a base and a head facts document into a changeset document, attaching the hunks given, if any.</summary>
-    public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null)
+    /// <summary>
+    /// Combines a base and a head facts document into a changeset document, attaching the hunks given, if any. The git
+    /// changes, when given, pair renamed files and add the changed files that neither analysis lists.
+    /// </summary>
+    public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null, IReadOnlyList<GitChange>? changes = null)
     {
-        var files = DiffFiles(baseFacts, headFacts);
+        var files = DiffFiles(baseFacts, headFacts, changes ?? []);
         return new Changeset
         {
             Base = baseFacts.Commit,
             Head = headFacts.Commit,
             Map = headFacts.Map,
             Structural = DiffStructure(baseFacts, headFacts),
-            Content = Rollup(baseFacts.Map, headFacts.Map, files, (hunks ?? []).Where(h => h.Trivial == true).Select(h => h.Path).ToHashSet(StringComparer.Ordinal)),
+            Content = Rollup(baseFacts.Map, headFacts.Map, files),
             Files = files,
             Types = DiffTypes(baseFacts, headFacts),
             Edges = DiffEdges(baseFacts, headFacts),
@@ -122,44 +126,78 @@ public static class ChangesetBuilder
     private static bool SeqEq(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.SequenceEqual(b, StringComparer.Ordinal));
 
-    private static List<FileChange> DiffFiles(Facts baseFacts, Facts headFacts)
+    /// <summary>
+    /// Returns the change of every file that either analysis lists, and of every other file that git reports as
+    /// changed. A rename that git reports joins the file's entries at its two paths into one, and git's status stands
+    /// for a file that the analyses find unchanged.
+    /// </summary>
+    private static List<FileChange> DiffFiles(Facts baseFacts, Facts headFacts, IReadOnlyList<GitChange> changes)
     {
         var baseFiles = baseFacts.Files.ToDictionary(f => f.Path, StringComparer.Ordinal);
         var headFiles = headFacts.Files.ToDictionary(f => f.Path, StringComparer.Ordinal);
+        var git = changes.ToDictionary(c => c.Path, StringComparer.Ordinal);
+        var previous = changes.Where(c => c.PreviousPath is not null).Select(c => c.PreviousPath!).ToHashSet(StringComparer.Ordinal);
         var result = new List<FileChange>();
-        foreach (var path in baseFiles.Keys.Union(headFiles.Keys).OrderBy(p => p, StringComparer.Ordinal))
+        foreach (var path in baseFiles.Keys.Union(headFiles.Keys).Union(git.Keys).OrderBy(p => p, StringComparer.Ordinal))
         {
+            // The base path of a rename is part of the entry at its head path.
+            if (previous.Contains(path)) continue;
             baseFiles.TryGetValue(path, out var b);
             headFiles.TryGetValue(path, out var h);
-            var status = b is null ? "added" : h is null ? "removed" : b.Hash != h.Hash ? "modified" : "unchanged";
-            result.Add(new FileChange(path, status, b?.Leaves ?? [], h?.Leaves ?? []));
+            git.TryGetValue(path, out var g);
+            if (g?.PreviousPath is { } old)
+            {
+                baseFiles.TryGetValue(old, out b);
+                result.Add(new FileChange(path, "renamed", b?.Leaves ?? [], h?.Leaves ?? []) { PreviousPath = old, BlobBase = g.BlobBase, BlobHead = g.BlobHead });
+                continue;
+            }
+            var status = b is null && h is null ? g!.Status : b is null ? "added" : h is null ? "removed" : b.Hash != h.Hash ? "modified" : g?.Status ?? "unchanged";
+            result.Add(new FileChange(path, status, b?.Leaves ?? [], h?.Leaves ?? []) { BlobBase = g?.BlobBase, BlobHead = g?.BlobHead });
         }
         return result;
     }
 
+    private static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsUnder(l, id));
+
+    /// <summary>
+    /// Returns how a file's change counts under a node: <c>added</c>, <c>removed</c> or <c>modified</c>, or null when it
+    /// does not count there. A renamed file counts by the leaves it has at each end, as <see cref="NodeContent"/> says.
+    /// </summary>
+    private static string? StatusUnder(FileChange file, string id)
+    {
+        bool atBase = Under(file.LeavesBase, id), atHead = Under(file.LeavesHead, id);
+        return file.Status switch
+        {
+            "added" => atHead ? "added" : null,
+            "removed" => atBase ? "removed" : null,
+            "modified" => atHead ? "modified" : null,
+            "renamed" => atBase && atHead ? "modified" : atBase ? "removed" : atHead ? "added" : null,
+            _ => null,
+        };
+    }
+
     /// <summary>
     /// Rolls file changes up through the hierarchy. A file counts under every node that contains any leaf its types bind
-    /// to. The trivial paths are the modified files whose edits are all trivial.
+    /// to, as <see cref="StatusUnder"/> decides.
     /// </summary>
-    private static SortedDictionary<string, NodeContent> Rollup(ArchitectureMap baseMap, ArchitectureMap headMap, List<FileChange> files, HashSet<string> trivial)
+    private static SortedDictionary<string, NodeContent> Rollup(ArchitectureMap baseMap, ArchitectureMap headMap, List<FileChange> files)
     {
-        static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsUnder(l, id));
         var content = new SortedDictionary<string, NodeContent>(StringComparer.Ordinal);
         var ids = new[] { Identifiers.Root }.Concat(headMap.Nodes.Keys.Union(baseMap.Nodes.Keys)).ToList();
         if (files.Any(f => f.LeavesBase.Contains(ArchitectureMap.Unsorted) || f.LeavesHead.Contains(ArchitectureMap.Unsorted))) ids.Add(ArchitectureMap.Unsorted);
         foreach (var id in ids.Distinct().OrderBy(k => k, StringComparer.Ordinal))
         {
             var total = files.Count(f => Under(f.LeavesHead, id));
-            var added = files.Count(f => f.Status == "added" && Under(f.LeavesHead, id));
-            var removed = files.Count(f => f.Status == "removed" && Under(f.LeavesBase, id));
-            var modified = files.Count(f => f.Status == "modified" && Under(f.LeavesHead, id));
-            var trivialCount = files.Count(f => f.Status == "modified" && trivial.Contains(f.Path) && Under(f.LeavesHead, id));
+            var counted = files.Select(f => StatusUnder(f, id)).ToList();
+            var added = counted.Count(s => s == "added");
+            var removed = counted.Count(s => s == "removed");
+            var modified = counted.Count(s => s == "modified");
             string status;
             if (id != Identifiers.Root && id != ArchitectureMap.Unsorted && !baseMap.Nodes.ContainsKey(id)) status = "added";
             else if (id != Identifiers.Root && id != ArchitectureMap.Unsorted && !headMap.Nodes.ContainsKey(id)) status = "removed";
             else if (added + removed + modified == 0) status = "unchanged";
             else status = headMap.IsContainer(id) ? "children" : "modified";
-            content[id] = new NodeContent(total, added, removed, modified, status, trivialCount);
+            content[id] = new NodeContent(total, added, removed, modified, status);
         }
         return content;
     }

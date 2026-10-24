@@ -51,8 +51,40 @@ public class GitHunksTests
         var before = repo.Commit("one");
         repo.Write("sub/A.cs", "// A comment.\nclass A { }\n");
         var after = repo.Commit("two");
-        var file = GitHunks.Collect(Path.Combine(repo.Path, "sub"), before, after, ["A.cs"]).Single();
+        var dir = Path.Combine(repo.Path, "sub");
+        var file = GitHunks.Collect(dir, before, after, GitHunks.Changes(dir, before, after)).Single();
         Assert.Equal("A.cs", file.Path);
         Assert.True(file.Trivial);
+    }
+
+    [Fact]
+    public void AMovedFileIsOneRenameWithItsEditsAsHunks()
+    {
+        using var repo = new TempRepo();
+        var lines = Enumerable.Range(1, 12).Select(i => $"    int F{i};").ToList();
+        repo.Write("src/Old.cs", "class C\n{\n" + string.Join("\n", lines) + "\n}\n");
+        repo.Write("src/Same.cs", "class Same { }\n");
+        var before = repo.Commit("one");
+        File.Delete(Path.Combine(repo.Path, "src/Old.cs"));
+        lines[5] = "    int Changed;";
+        repo.Write("lib/New.cs", "class C\n{\n" + string.Join("\n", lines) + "\n}\n");
+        File.Move(Path.Combine(repo.Path, "src/Same.cs"), Path.Combine(repo.Path, "lib/Same.cs"));
+        repo.Write("docs/notes.md", "Notes.\n");
+        var after = repo.Commit("two");
+
+        var changes = GitHunks.Changes(repo.Path, before, after).ToDictionary(c => c.Path);
+        Assert.Equal(["docs/notes.md", "lib/New.cs", "lib/Same.cs"], changes.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(("renamed", "src/Old.cs"), (changes["lib/New.cs"].Status, changes["lib/New.cs"].PreviousPath));
+        Assert.NotEqual(changes["lib/New.cs"].BlobBase, changes["lib/New.cs"].BlobHead);
+        Assert.Equal(("renamed", "src/Same.cs"), (changes["lib/Same.cs"].Status, changes["lib/Same.cs"].PreviousPath));
+        Assert.Equal(changes["lib/Same.cs"].BlobBase, changes["lib/Same.cs"].BlobHead);
+        Assert.Equal(("added", null), (changes["docs/notes.md"].Status, changes["docs/notes.md"].BlobBase));
+
+        var hunks = GitHunks.Collect(repo.Path, before, after, changes.Values.ToList()).ToDictionary(f => f.Path);
+        // The moved file's diff holds the one line that changed, not every line deleted and added again.
+        Assert.Equal([["-", "    int F6;"], ["+", "    int Changed;"]], hunks["lib/New.cs"].Hunks.SelectMany(h => h.Lines).Where(l => l[0] != " "));
+        Assert.Null(hunks["lib/New.cs"].Trivial);
+        Assert.False(hunks.ContainsKey("lib/Same.cs"));
+        Assert.True(hunks.ContainsKey("docs/notes.md"));
     }
 }

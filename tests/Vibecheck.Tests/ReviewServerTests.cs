@@ -56,6 +56,8 @@ public class ReviewServerTests
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(server.BaseAddress + "/api/ranges")).StatusCode);
         using var form = new StringContent("range=HEAD", Encoding.UTF8, "application/x-www-form-urlencoded");
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, (await client.PostAsync(server.BaseAddress + "/api/reviews", form)).StatusCode);
+        // Every method that writes must send JSON, not only POST.
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, (await client.DeleteAsync(server.BaseAddress + "/api/reviews/x/reviewed")).StatusCode);
     }
 
     [Fact]
@@ -86,6 +88,15 @@ public class ReviewServerTests
         Assert.Contains("\"mapKind\":\"repository\"", script, StringComparison.Ordinal);
         Assert.Contains("window.CHANGESET = {", script, StringComparison.Ordinal);
         Assert.Contains("(function () {", await client.GetStringAsync(server.BaseAddress + url + "app.js"), StringComparison.Ordinal);
+        Assert.Contains("\"reviewed\":{}", script, StringComparison.Ordinal);
+
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        var marked = await client.PostAsJsonAsync(api + "/reviewed", new { paths = new[] { TestData.X1 }, reviewed = true });
+        var marks = (await marked.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("marks");
+        Assert.Equal("reviewer", marks.GetProperty(TestData.X1).GetString());
+        var announced = await ReadEventsAsync(client, api + "/events", e => e.GetProperty("type").GetString() == "reviewed");
+        Assert.Equal("reviewer", announced[^1].GetProperty("marks").GetProperty(TestData.X1).GetString());
+        Assert.Contains("\"reviewed\":{\"" + TestData.X1 + "\":\"reviewer\"}", await client.GetStringAsync(server.BaseAddress + url + "changeset.js"), StringComparison.Ordinal);
     }
 
     private static ReviewServerOptions Options(TempRepo repo) => new()

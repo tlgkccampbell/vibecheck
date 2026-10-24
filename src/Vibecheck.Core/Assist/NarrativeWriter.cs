@@ -339,6 +339,13 @@ public static class NarrativeWriter
     private static IEnumerable<FileChange> FilesUnder(Changeset changeset, string id) =>
         changeset.Files.Where(f => f.LeavesHead.Concat(f.LeavesBase).Any(l => Identifiers.IsUnder(l, id)));
 
+    /// <summary>Returns how many changed files under a node have only trivial edits, as <see cref="TrivialEdits"/> defines them.</summary>
+    private static int TrivialUnder(Changeset changeset, string id)
+    {
+        var trivial = changeset.Hunks.Where(h => h.Trivial == true).Select(h => h.Path).ToHashSet(StringComparer.Ordinal);
+        return FilesUnder(changeset, id).Count(f => f.Status != "unchanged" && trivial.Contains(f.Path));
+    }
+
     // ---------- Prompts ----------
 
     /// <summary>Returns the prompt of a batch. It holds no path of this machine, so that it can serve as the batch's cache key.</summary>
@@ -362,7 +369,7 @@ public static class NarrativeWriter
         var cs = context.Changeset;
         var changedFiles = cs.Files.Where(f => f.Status != "unchanged").ToList();
         var sb = new StringBuilder();
-        sb.Append($"{changedFiles.Count} files changed: {changedFiles.Count(f => f.Status == "added")} added, {changedFiles.Count(f => f.Status == "removed")} removed, {changedFiles.Count(f => f.Status == "modified")} modified. ");
+        sb.Append($"{changedFiles.Count} files changed: {changedFiles.Count(f => f.Status == "added")} added, {changedFiles.Count(f => f.Status == "removed")} removed, {changedFiles.Count(f => f.Status == "modified")} modified, {changedFiles.Count(f => f.Status == "renamed")} renamed. ");
         sb.Append($"{cs.Types.Count(t => t.Status == "added")} types were added, {cs.Types.Count(t => t.Status == "removed")} removed and {cs.Types.Count(t => t.Status == "moved")} moved to another part.\n\n");
         sb.Append("The parts of the map, with the files that changed under each:\n");
         var tops = cs.Map.Nodes.Keys.Where(id => Identifiers.ParentOf(id) is null).Append(ArchitectureMap.Unsorted).Where(cs.Content.ContainsKey);
@@ -370,7 +377,8 @@ public static class NarrativeWriter
         {
             var c = cs.Content[id];
             var changed = c.Added + c.Removed + c.Modified;
-            sb.Append($"- {Describe(cs.Map, id)} {(changed == 0 ? "Unchanged." : $"{c.Added} added, {c.Removed} removed, {c.Modified} modified{(c.Trivial > 0 ? $" ({c.Trivial} with only trivial edits)" : "")}.")}\n");
+            var trivial = TrivialUnder(cs, id);
+            sb.Append($"- {Describe(cs.Map, id)} {(changed == 0 ? "Unchanged." : $"{c.Added} added, {c.Removed} removed, {c.Modified} modified{(trivial > 0 ? $" ({trivial} with only trivial edits)" : "")}.")}\n");
         }
         var home = cs.Map.Views.FirstOrDefault(v => v.Value.Level == Identifiers.Root);
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -435,7 +443,8 @@ public static class NarrativeWriter
         var c = cs.Content[id];
         var sb = new StringBuilder();
         sb.Append($"### `{id}`, {NameOf(cs.Map, id)}\n\n{c.Added} files added, {c.Removed} removed and {c.Modified} modified");
-        sb.Append(c.Trivial > 0 ? $", {c.Trivial} of them with only trivial edits to comments, whitespace or layout.\n" : ".\n");
+        var trivial = TrivialUnder(cs, id);
+        sb.Append(trivial > 0 ? $", {trivial} of them with only trivial edits to comments, whitespace or layout.\n" : ".\n");
         var hunks = cs.Hunks.ToDictionary(h => h.Path, StringComparer.Ordinal);
         var changed = FilesUnder(cs, id).Where(f => f.Status != "unchanged")
             .OrderBy(f => hunks.TryGetValue(f.Path, out var h) && h.Trivial == true ? 1 : 0).ThenBy(f => f.Path, StringComparer.Ordinal).ToList();

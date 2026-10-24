@@ -174,4 +174,68 @@ public class ChangesetTests
         Assert.Equal("y", back.Hunks[0].Hunks[0].Lines[1][1]);
         Assert.Equal(cs.Edges.Count, back.Edges.Count);
     }
+
+    private const string Renamed = "src/A/Y/Renamed.cs";
+
+    [Fact]
+    public void ARenameGitReportsIsOneFileThatCountsAsModifiedWhereItStays()
+    {
+        var head = TestData.Analysis() with
+        {
+            Files = TestData.Analysis().Files.Select(f => f.Path == TestData.Y1 ? f with { Path = Renamed } : f).ToList(),
+            Types = TestData.Analysis().Types.Select(t => t.Name == TestData.Other ? t with { Files = [Renamed] } : t).ToList(),
+        };
+        var changes = new List<GitChange> { new(Renamed, "renamed", TestData.Y1, "b1", "b1") };
+        var cs = ChangesetBuilder.Build(Base(), Checker.Run(TestData.Map(), head), [], changes);
+
+        Assert.DoesNotContain(cs.Files, f => f.Path == TestData.Y1);
+        var file = cs.Files.Single(f => f.Path == Renamed);
+        Assert.Equal(("renamed", TestData.Y1, "b1", "b1"), (file.Status, file.PreviousPath, file.BlobBase, file.BlobHead));
+        Assert.Equal(["a.y"], file.LeavesBase);
+        Assert.Equal(["a.y"], file.LeavesHead);
+        Assert.Equal((0, 0, 1, "modified"), (cs.Content["a.y"].Added, cs.Content["a.y"].Removed, cs.Content["a.y"].Modified, cs.Content["a.y"].Status));
+        Assert.Equal(1, cs.Content["root"].Modified);
+    }
+
+    [Fact]
+    public void ARenamedFileCountsAsRemovedWhereItLeftAndAddedWhereItArrived()
+    {
+        const string moved = "src/B/Other.cs";
+        var head = TestData.Analysis() with
+        {
+            Files = TestData.Analysis().Files.Select(f => f.Path == TestData.Y1 ? f with { Path = moved } : f).ToList(),
+            Types = TestData.Analysis().Types.Select(t => t.Name == TestData.Other ? t with { Name = "B.Other", Files = [moved] } : t).ToList(),
+            Dependencies = TestData.Analysis().Dependencies.Where(d => d.ToType != TestData.Other).ToList(),
+        };
+        var changes = new List<GitChange> { new(moved, "renamed", TestData.Y1, "b1", "b2") };
+        var cs = ChangesetBuilder.Build(Base(), Checker.Run(TestData.Map(), head), [], changes);
+
+        var file = cs.Files.Single(f => f.Path == moved);
+        Assert.Equal(["a.y"], file.LeavesBase);
+        Assert.Equal(["b"], file.LeavesHead);
+        Assert.Equal((0, 1, 0), (cs.Content["a.y"].Added, cs.Content["a.y"].Removed, cs.Content["a.y"].Modified));
+        Assert.Equal((0, 1, 0), (cs.Content["a"].Added, cs.Content["a"].Removed, cs.Content["a"].Modified));
+        Assert.Equal((1, 0, 0), (cs.Content["b"].Added, cs.Content["b"].Removed, cs.Content["b"].Modified));
+        Assert.Equal((0, 0, 1), (cs.Content["root"].Added, cs.Content["root"].Removed, cs.Content["root"].Modified));
+    }
+
+    [Fact]
+    public void AChangedFileThatNoTypeBindsIsListedWithoutLeaves()
+    {
+        var changes = new List<GitChange> { new("README.md", "modified", null, "r1", "r2"), new("docs/old.md", "removed", null, "d1", null) };
+        var cs = ChangesetBuilder.Build(Base(), Base(), [new FileHunks("README.md", [new Hunk("@@ -1 +1 @@", [["-", "x"], ["+", "y"]])])], changes);
+
+        var readme = cs.Files.Single(f => f.Path == "README.md");
+        Assert.Equal(("modified", 0, 0, "r1", "r2"), (readme.Status, readme.LeavesBase.Count, readme.LeavesHead.Count, readme.BlobBase, readme.BlobHead));
+        Assert.Equal("removed", cs.Files.Single(f => f.Path == "docs/old.md").Status);
+        Assert.Equal("unchanged", cs.Content["root"].Status);
+    }
+
+    [Fact]
+    public void GitsStatusStandsForAFileTheAnalysesFindUnchanged()
+    {
+        var cs = ChangesetBuilder.Build(Base(), Base(), [], [new GitChange(TestData.B1, "modified", null, "b1", "b2")]);
+        Assert.Equal("modified", cs.Files.Single(f => f.Path == TestData.B1).Status);
+        Assert.Equal("modified", cs.Content["b"].Status);
+    }
 }

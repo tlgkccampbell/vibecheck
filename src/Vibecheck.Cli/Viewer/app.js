@@ -24,9 +24,24 @@
 
   const NODES = MAP.nodes, EXTERNALS = MAP.externals, VIEWS = MAP.views;
   const isExternal = (id) => !!EXTERNALS[id];
-  const isLeaf = (id) => id === UNSORTED || !!(NODES[id] && NODES[id].bind);
-  const parentOf = (id) => id === ROOT ? null : id.lastIndexOf(".") < 0 ? ROOT : id.slice(0, id.lastIndexOf("."));
-  const isUnder = (id, anc) => anc === ROOT || id === anc || id.startsWith(anc + ".");
+
+  // The Other files block holds the changed files that no type binds, such as project files, documents and workflows.
+  // It has one leaf for each top-level folder that holds such files and one for the files at the top, or is itself the
+  // leaf when every such file is in one of those places. Its identifiers hold a "~" and a "/", which no map
+  // identifier can, so they never collide with the map's. See docs/pull-requests.md section 4.4.
+  const OTHER = "~other";
+  const OTHER_FILES = CS.files.filter((f) => f.status !== "unchanged" && !f.leavesBase.length && !f.leavesHead.length);
+  const otherGroupOf = (path) => OTHER + "/" + (path.includes("/") ? path.slice(0, path.indexOf("/")) : "");
+  const OTHER_GROUPS = [...new Set(OTHER_FILES.map((f) => otherGroupOf(f.path)))].sort();
+  const OTHER_LEAVES = OTHER_GROUPS.length > 1 ? OTHER_GROUPS : OTHER_FILES.length ? [OTHER] : [];
+  const isOther = (id) => id === OTHER || id.startsWith(OTHER + "/");
+  // Returns the Other files leaf that holds a path.
+  const otherLeafOf = (path) => OTHER_LEAVES.length === 1 ? OTHER : otherGroupOf(path);
+  const otherFilesOf = (id) => OTHER_FILES.filter((f) => id === OTHER || otherGroupOf(f.path) === id);
+
+  const isLeaf = (id) => id === UNSORTED || OTHER_LEAVES.includes(id) || !!(NODES[id] && NODES[id].bind);
+  const parentOf = (id) => id === ROOT ? null : id.startsWith(OTHER + "/") ? OTHER : id.lastIndexOf(".") < 0 ? ROOT : id.slice(0, id.lastIndexOf("."));
+  const isUnder = (id, anc) => anc === ROOT || id === anc || id.startsWith(anc + (anc === OTHER ? "/" : "."));
   const shortName = (type) => type.replace(/^.*::/, "").split(".").pop();
   const namespaceOf = (type) => { const t = type.replace(/^.*::/, ""); const i = t.lastIndexOf("."); return i < 0 ? "" : t.slice(0, i); };
 
@@ -34,9 +49,11 @@
   const CHILDREN = {};
   for (const id of Object.keys(NODES)) (CHILDREN[parentOf(id)] = CHILDREN[parentOf(id)] || []).push(id);
   if (hasUnsorted) (CHILDREN[ROOT] = CHILDREN[ROOT] || []).push(UNSORTED);
+  if (OTHER_FILES.length) (CHILDREN[ROOT] = CHILDREN[ROOT] || []).push(OTHER);
+  if (OTHER_GROUPS.length > 1) CHILDREN[OTHER] = OTHER_GROUPS.slice();
   for (const k of Object.keys(CHILDREN)) CHILDREN[k].sort();
   const childrenOf = (id) => CHILDREN[id] || [];
-  const ALL_LEAVES = Object.keys(NODES).filter(isLeaf).concat(hasUnsorted ? [UNSORTED] : []);
+  const ALL_LEAVES = Object.keys(NODES).filter(isLeaf).concat(hasUnsorted ? [UNSORTED] : [], OTHER_LEAVES);
   const leavesUnder = (id) => isLeaf(id) ? [id] : ALL_LEAVES.filter((l) => l !== UNSORTED && isUnder(l, id)).concat(id === ROOT && hasUnsorted ? [UNSORTED] : []);
 
   // The categories of section 2.1 of the specification. Each is drawn in one of five color families and with an icon
@@ -79,6 +96,8 @@
   function nameOf(id) {
     if (id === ROOT) return META.solution || MAP.solution;
     if (id === UNSORTED) return "Unsorted";
+    if (id === OTHER) return "Other files";
+    if (isOther(id)) return id.length > OTHER.length + 1 ? id.slice(OTHER.length + 1) + "/" : "Top-level files";
     if (NODES[id]) return NODES[id].name;
     if (EXTERNALS[id]) return EXTERNALS[id].name;
     if (id.startsWith("g:")) { const [v, g] = id.slice(2).split("/"); return VIEWS[v].groups[g].name; }
@@ -87,6 +106,8 @@
   function purposeOf(id) {
     if (id === ROOT) return META.title ? `Changeset ${META.range || ""}: ${META.title}` : "";
     if (id === UNSORTED) return "Types that no leaf binds. The map should be extended to place them.";
+    if (id === OTHER) return "Changed files that no type binds, such as project files, documents and workflows.";
+    if (isOther(id)) return id.length > OTHER.length + 1 ? `Changed files under ${id.slice(OTHER.length + 1)}/ that no type binds.` : "Changed files at the top that no type binds.";
     if (NODES[id]) return NODES[id].purpose || "";
     if (EXTERNALS[id]) return EXTERNALS[id].purpose || "External assembly.";
     if (id.startsWith("g:")) { const [v, g] = id.slice(2).split("/"); return VIEWS[v].groups[g].purpose || ""; }
@@ -95,9 +116,11 @@
 
   // Indexes over the changeset.
   const FILES = new Map(CS.files.map((f) => [f.path, f]));
+  // The renamed files by their paths at base, which the types at base still list.
+  const RENAMED_FROM = new Map(CS.files.filter((f) => f.previousPath).map((f) => [f.previousPath, f]));
+  // Returns the file at a path, which may be a renamed file's path at base, or null.
+  const fileOf = (path) => FILES.get(path) || RENAMED_FROM.get(path) || null;
   const HUNKS = new Map(CS.hunks.map((h) => [h.path, h.hunks]));
-  // The modified files whose every edit is trivial: comments, whitespace or layout, which cannot change the program.
-  const TRIVIAL_FILES = new Set(CS.hunks.filter((h) => h.trivial).map((h) => h.path));
   const TYPES_BY_LEAF = new Map();
   for (const t of CS.types) {
     const leaf = t.leafHead || t.leafBase;
@@ -105,34 +128,83 @@
     TYPES_BY_LEAF.get(leaf).push(t);
   }
   const typesOf = (leaf) => TYPES_BY_LEAF.get(leaf) || [];
-  // Returns a file's status, which is "trivial" for a modified file whose edits are all trivial while those are muted.
+
+  // ---------- Reviewed files ----------
+  // A changed file is reviewed when the reviewer has set it aside, or when the tool has and the reviewer has not
+  // unmarked it. The server keeps the marks. Each maps a path to the reason the file is reviewed: "reviewer", "trivial"
+  // for a file whose edits touch no code, or "renamed" for a file renamed without changes. A reviewed file is set aside
+  // wherever it appears while reviewed files are muted. See docs/pull-requests.md section 5.
+  const REVIEWED = new Map(Object.entries(META.reviewed || {}));
+  const REASON_TEXT = { trivial: "no code changed", renamed: "renamed without changes" };
+  const CHANGED_FILES = CS.files.filter((f) => f.status !== "unchanged");
+
+  // Returns the leaves a changed file counts under, as the changeset's content counts it: its leaves at head, its
+  // leaves at base when it was removed, and its leaves at both ends when it was renamed. A file that no type binds
+  // counts under its Other files leaf.
+  function countedLeaves(f) {
+    if (!f.leavesBase.length && !f.leavesHead.length) return [otherLeafOf(f.path)];
+    if (f.status === "removed") return f.leavesBase;
+    return f.status === "renamed" ? [...new Set(f.leavesBase.concat(f.leavesHead))] : f.leavesHead;
+  }
+
+  // Returns the paths of the changed files that count under each node, by the rule of countedLeaves: a file counts
+  // under each leaf it counts under, under every ancestor of those leaves, and under the top level. It depends on the
+  // files alone, so the marks can be laid over it whenever they change.
+  function filesByNode(files) {
+    const out = new Map();
+    for (const f of files) {
+      const ids = new Set([ROOT]);
+      for (const l of countedLeaves(f)) for (let x = l; x && x !== ROOT; x = parentOf(x)) ids.add(x);
+      for (const id of ids) { if (!out.has(id)) out.set(id, []); out.get(id).push(f.path); }
+    }
+    return out;
+  }
+  const FILES_BY_NODE = filesByNode(CHANGED_FILES);
+
+  // Returns the paths of a node's or a group's changed files, how many there are, and how many of them are reviewed.
+  function reviewedCount(key) {
+    const paths = key.startsWith("g:") ? [...new Set(groupLeaves(key).flatMap((l) => FILES_BY_NODE.get(l) || []))] : FILES_BY_NODE.get(key) || [];
+    return { paths, changed: paths.length, reviewed: paths.filter((p) => REVIEWED.has(p)).length };
+  }
+
+  // Returns a file's status, which is "reviewed" for a changed file that is reviewed while reviewed files are muted.
   const fileStatus = (path) => {
-    const st = (FILES.get(path) || {}).status || "unchanged";
-    return st === "modified" && state.opts.trivial && TRIVIAL_FILES.has(path) ? "trivial" : st;
+    const f = fileOf(path);
+    const st = f ? f.status : "unchanged";
+    return st !== "unchanged" && state.opts.mute && REVIEWED.has(f.path) ? "reviewed" : st;
   };
-  // Returns a type's status: its own when it was added, removed or moved, and otherwise the strongest of its files'.
+  // Returns a type's status: "reviewed" when every changed file that declares it is, its own when it was added,
+  // removed or moved, and otherwise "modified" when any of its files changed.
   const typeStatus = (t) => {
+    const changed = t.files.map(fileStatus).filter((f) => f !== "unchanged");
+    if (changed.length && changed.every((f) => f === "reviewed")) return "reviewed";
     if (t.status !== "unchanged") return t.status;
-    const files = t.files.map(fileStatus);
-    return files.some((f) => f !== "unchanged" && f !== "trivial") ? "modified" : files.includes("trivial") ? "trivial" : "unchanged";
+    return changed.length ? "modified" : "unchanged";
   };
   const typeTouched = (t) => typeStatus(t) !== "unchanged";
   const CHANGED_EDGES = CS.edges.filter((e) => e.status !== "unchanged");
   const CONTENT = CS.content, METRICS = CS.metrics;
 
-  function contentOf(id) { return CONTENT[id] || { files: 0, added: 0, removed: 0, modified: 0, status: "unchanged", trivial: 0 }; }
-  // Returns the status drawn for a node or a group. While trivial edits are muted, a node whose changed files were all
-  // modified, and all trivially, is "trivial", and so is a group whose changed leaves all are. Triviality rises no
-  // further than the changes beneath it allow.
+  // Returns the file counts of a node. The top level also counts the files that no type binds.
+  function contentOf(id) {
+    if (isOther(id)) return otherContent(id);
+    const c = CONTENT[id] || { files: 0, added: 0, removed: 0, modified: 0, status: "unchanged" };
+    if (id !== ROOT || !OTHER_FILES.length) return c;
+    const o = otherContent(OTHER);
+    return { files: c.files + o.files, added: c.added + o.added, removed: c.removed + o.removed, modified: c.modified + o.modified, status: c.status === "unchanged" ? "children" : c.status };
+  }
+  // Returns the file counts of the Other files block or one of its leaves, where a renamed file counts as modified.
+  function otherContent(id) {
+    const files = otherFilesOf(id), count = (st) => files.filter((f) => f.status === st).length;
+    return { files: files.length, added: count("added"), removed: count("removed"), modified: count("modified") + count("renamed"), status: isLeaf(id) ? "modified" : "children" };
+  }
+  // Returns the status drawn for a node or a group. While reviewed files are muted, one whose changed files are all
+  // reviewed is "reviewed". A group otherwise shows the changes inside its leaves.
   function statusOf(key) {
-    if (key.startsWith("g:")) {
-      const changed = groupLeaves(key).map(statusOf).filter((st) => st !== "unchanged");
-      return !changed.length ? "unchanged" : changed.every((st) => st === "trivial") ? "trivial" : "children";
-    }
-    const c = contentOf(key);
-    const trivial = state.opts.trivial && (c.status === "modified" || c.status === "children")
-      && c.added + c.removed === 0 && c.modified > 0 && c.trivial === c.modified;
-    return trivial ? "trivial" : c.status;
+    const r = reviewedCount(key);
+    if (state.opts.mute && r.changed > 0 && r.reviewed === r.changed) return "reviewed";
+    if (key.startsWith("g:")) return groupLeaves(key).some((l) => statusOf(l) !== "unchanged") ? "children" : "unchanged";
+    return contentOf(key).status;
   }
   function groupLeaves(key) { const [v, g] = key.slice(2).split("/"); return VIEWS[v].groups[g].leaves; }
   function metricsOf(key) {
@@ -159,7 +231,7 @@
     if (!key) return { level: ROOT };
     if (key.startsWith("leaf:")) { const id = key.slice(5); return isLeaf(id) ? { leaf: id } : { level: ROOT }; }
     const [level, rest] = key.split("@");
-    if (!(level === ROOT || (NODES[level] && !isLeaf(level)))) return { level: ROOT };
+    if (!(level === ROOT || ((NODES[level] || level === OTHER) && !isLeaf(level)))) return { level: ROOT };
     if (!rest) return { level };
     const [view, group] = rest.split("/");
     if (!VIEWS[view] || VIEWS[view].level !== level) return { level };
@@ -645,6 +717,7 @@
   const fitText = (str, width, advance) => truncate(str, Math.max(1, Math.floor(width / advance)));
 
   const truncate = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const fmtDelta = (b, h) => h === b ? "" : (h > b ? "+" : "−") + Math.abs(h - b);
   const statusClass = (st) => st === "unchanged" ? "" : " st-" + st;
   const strokeWidth = (n) => (1 + Math.log2(1 + n) / 2.2).toFixed(2);
@@ -656,7 +729,9 @@
     selected: null,
     // The selections the details panel came from, most recent last, so that its Back button can return to them.
     back: [],
-    opts: { threshold: "1", externals: false, dim: true, trivial: true },
+    opts: { threshold: "1", externals: false, dim: true, mute: true },
+    // The reviewed files whose diffs the reader has shown, by path.
+    expanded: new Set(),
     current: null, // { level, layout }
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
@@ -700,15 +775,16 @@
     if (inner.h < 10) return;
     if (child.kind === "node" && isLeaf(child.id) || child.kind === "unsorted") {
       // One bar per type, colored by what happened to it.
-      const types = typesOf(child.id).slice().sort((a, b) => (typeTouched(b) ? 1 : 0) - (typeTouched(a) ? 1 : 0));
-      const shown = Math.min(types.length, 12);
-      const cols = types.length > 6 ? 2 : 1;
+      // A leaf of Other files has no types, so its bars stand for its files.
+      const items = isOther(child.id) ? otherFilesOf(child.id).map((f) => fileStatus(f.path))
+        : typesOf(child.id).slice().sort((a, b) => (typeTouched(b) ? 1 : 0) - (typeTouched(a) ? 1 : 0)).map(typeStatus);
+      const shown = Math.min(items.length, 12);
+      const cols = items.length > 6 ? 2 : 1;
       const rows = Math.ceil(shown / cols);
       const gap = Math.min(5, inner.h / Math.max(rows, 1));
       for (let i = 0; i < shown; i++) {
-        const t = types[i];
-        const ts = typeStatus(t);
-        const cls = "mini-type" + (ts === "unchanged" ? "" : ["added", "removed", "trivial"].includes(ts) ? " mini-type-" + ts : " mini-type-changed");
+        const ts = items[i];
+        const cls = "mini-type" + (ts === "unchanged" ? "" : ["added", "removed", "reviewed"].includes(ts) ? " mini-type-" + ts : " mini-type-changed");
         const col = i % cols, row = Math.floor(i / cols);
         const cw = (inner.w - 6 * (cols - 1)) / cols;
         g.append(svg("rect", { x: inner.x + col * (cw + 6), y: inner.y + row * gap, width: Math.max(8, cw * (0.55 + ((i * 7) % 5) / 10)), height: 2, class: cls }));
@@ -786,7 +862,7 @@
       const st = statusOf(c.key);
       const leaf = c.kind === "unsorted" || (c.kind === "node" && isLeaf(c.id));
       const cat = categoryOf(c.id);
-      const cls = "node" + statusClass(st) + familyClass(c.id) + (c.kind === "unsorted" ? " unsorted" : "") + (leaf ? " leaf" : " container") +
+      const cls = "node" + statusClass(st) + familyClass(c.id) + (c.kind === "unsorted" ? " unsorted" : "") + (isOther(c.id) ? " other" : "") + (leaf ? " leaf" : " container") +
         (level.inCycle.has(c.key) ? " in-cycle" : "") + (c.key === state.selected ? " selected" : "");
       const g = svg("g", { class: cls, "data-key": c.key, tabindex: 0,
         onclick: (ev) => clickSelect(ev, c.key),
@@ -803,11 +879,10 @@
       const m = metricsOf(c.key), content = c.kind === "group" ? groupContent(c) : contentOf(c.key);
       const changedFiles = content.added + content.removed + content.modified;
       // The badge on the top edge says what happened, with the count of changed files when there is one.
-      const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
       const badge = st === "added" ? "added" : st === "removed" ? "removed"
         : st === "modified" ? (changedFiles ? plural(changedFiles, "file changed", "files changed") : "modified")
         : st === "children" ? (changedFiles ? `${changedFiles} changed inside` : "changes inside")
-        : st === "trivial" ? (leaf ? "no code changed" : "no code changed inside") : null;
+        : st === "reviewed" ? (leaf ? "reviewed" : "reviewed inside") : null;
       if (badge) {
         const bw = badge.length * MONO.badge + 12;
         const bg = svg("g", { class: "badge" });
@@ -816,7 +891,8 @@
         g.append(bg);
       }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
-      g.append(text(r.x + 10, r.y + 43, fitText(`${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`, r.w - 20, MONO.meta), { class: "meta" }));
+      const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
+      g.append(text(r.x + 10, r.y + 43, fitText(meta, r.w - 20, MONO.meta), { class: "meta" }));
       g.append(svg("circle", { cx: r.x + r.w - 26, cy: r.y + 14, r: 3, class: "cycle-mark" }));
       const glyph = text(r.x + r.w - 9, r.y + 19, leaf ? "≡" : "⤵", { class: "enter-glyph", "text-anchor": "end",
         onclick: (ev) => { ev.stopPropagation(); enter(c); } });
@@ -950,7 +1026,7 @@
     const rows = pairLines(hunk.lines);
     const digits = String(Math.max(nums.a, nums.b) + rows.length).length;
     const ln = () => el("col", { style: `width: calc(${digits}ch + 17px)` });
-    const trivial = hunk.trivial && state.opts.trivial;
+    const trivial = hunk.trivial && state.opts.mute;
     const table = el("table", { class: "diff" + (trivial ? " trivial" : "") }, el("caption", {}, hunk.header + (trivial ? " · no code changed" : "")),
       el("colgroup", {}, ln(), el("col", {}), ln(), el("col", {})));
     const body = el("tbody");
@@ -982,12 +1058,71 @@
     return ul;
   }
 
+  // Puts reviewed items after the rest, keeping the order within each part.
+  const reviewedLast = (items, isReviewed) => items.filter((x) => !isReviewed(x)).concat(items.filter(isReviewed));
+
+  // Returns a file's header and diffs for the leaf view. A changed file's header carries its reviewed checkbox, and a
+  // reviewed file's diffs stay collapsed while reviewed files are muted, until the reader shows them. A renamed file
+  // names its path at base, and a path at base that a type still lists links to the renamed file.
+  function fileBlock(path) {
+    const f = fileOf(path), fs = fileStatus(path);
+    if (f && f.path !== path) {
+      return el("div", { class: "file file-" + fs },
+        el("div", { class: "file-head" }, el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path),
+          el("span", { class: "file-note" }, "renamed to"), el("button", { class: "link", onclick: () => openFile(f.path), title: "Show the renamed file's diff" }, f.path)));
+    }
+    const changed = !!f && f.status !== "unchanged";
+    const done = changed && REVIEWED.has(path);
+    const hunks = HUNKS.get(path) || [];
+    const head = el("div", { class: "file-head" });
+    if (changed) head.append(el("input", { type: "checkbox", checked: done, "aria-label": "Reviewed", title: done ? "Reviewed. Clear it to review the file again." : "Mark the file reviewed",
+      onchange: (ev) => setReviewed([path], ev.target.checked) }));
+    head.append(el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path));
+    if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
+    if (done && REASON_TEXT[REVIEWED.get(path)]) head.append(el("span", { class: "file-note" }, REASON_TEXT[REVIEWED.get(path)]));
+    const muted = done && state.opts.mute;
+    const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
+    const diffs = el("div", { class: "file-diffs" });
+    const fill = () => { if (!diffs.childElementCount) for (const h of hunks) diffs.append(diffTable(path, h)); };
+    if (muted && !state.expanded.has(path)) diffs.hidden = true;
+    else fill();
+    if (muted && hunks.length) {
+      head.append(el("button", { class: "link", onclick: (ev) => {
+        const show = diffs.hidden;
+        if (show) { fill(); state.expanded.add(path); } else state.expanded.delete(path);
+        diffs.hidden = !show;
+        ev.target.textContent = show ? "Hide diff" : "Show diff";
+      } }, diffs.hidden ? "Show diff" : "Hide diff"));
+    }
+    block.append(diffs);
+    return block;
+  }
+
+  // Returns the line that says how many of a node's changed files are reviewed, with a button that marks them all, or
+  // unmarks them all once they all are. It is null for a node without changed files.
+  function reviewedBar(key) {
+    const r = reviewedCount(key);
+    if (!r.changed) return null;
+    const all = r.reviewed === r.changed;
+    return el("div", { class: "reviewed-bar" }, el("span", {}, `${r.reviewed} of ${plural(r.changed, "changed file", "changed files")} reviewed`),
+      el("button", { class: "btn", onclick: () => setReviewed(r.paths, !all) }, all ? "Unmark all" : "Mark all reviewed"));
+  }
+
   function renderLeaf(id) {
     const wrap = el("div", { class: "leaf" });
     const m = metricsOf(id), content = contentOf(id);
     wrap.append(el("div", {},
       el("div", { class: "leaf-title" }, nameOf(id).toUpperCase()),
       el("div", { class: "leaf-sub" }, purposeOf(id))));
+    if (isOther(id)) {
+      // Files that no type binds have no types and no edges, so the leaf lists the files themselves.
+      const files = reviewedLast(otherFilesOf(id).map((f) => f.path), (p) => fileStatus(p) === "reviewed");
+      wrap.append(reviewedBar(id) || "", el("h3", {}, plural(files.length, "changed file", "changed files")));
+      const card = el("section", { class: "typecard" });
+      for (const path of files) card.append(fileBlock(path));
+      wrap.append(card);
+      return wrap;
+    }
     const metrics = el("div", { class: "metrics" });
     const mb = m.base, mh = m.head;
     const stat = (label, b, h, fmt = (x) => String(x)) => {
@@ -1000,28 +1135,23 @@
     metrics.append(stat("internal refs", mb ? mb.internal : null, mh ? mh.internal : null));
     metrics.append(stat("crossing refs", mb ? mb.crossing : null, mh ? mh.crossing : null));
     wrap.append(metrics);
+    const bar = reviewedBar(id);
+    if (bar) wrap.append(bar);
 
-    // Changed types with their files and hunks.
+    // Changed types with their files and hunks, the reviewed ones last.
     const types = typesOf(id);
-    const touched = types.filter(typeTouched);
+    const touched = reviewedLast(types.filter(typeTouched), (t) => typeStatus(t) === "reviewed");
     wrap.append(el("h3", {}, touched.length ? `${touched.length} of ${types.length} types changed` : `No changes among ${types.length} types`));
-    const chipText = (st) => st === "trivial" ? "no code changed" : st;
     for (const t of touched) {
       const ts = typeStatus(t);
       const card = el("section", { class: "typecard" + statusClass(ts) });
       const head = el("header", {},
-        el("span", { class: "chip chip-" + ts }, chipText(ts)),
+        el("span", { class: "chip chip-" + ts }, ts),
         el("span", { class: "typename" }, shortName(t.name)),
         el("span", { class: "typens" }, namespaceOf(t.name)));
       if (t.status === "moved") head.append(el("span", { class: "typens" }, `from ${t.leafBase} to ${t.leafHead}`));
       card.append(head);
-      for (const path of t.files) {
-        const fs = fileStatus(path);
-        const fileEl = el("div", { class: "file file-" + fs },
-          el("div", { class: "file-head" }, el("span", { class: "chip chip-" + fs }, chipText(fs)), el("span", { class: "file-path" }, path)));
-        for (const h of HUNKS.get(path) || []) fileEl.append(diffTable(path, h));
-        card.append(fileEl);
-      }
+      for (const path of reviewedLast(t.files, (p) => fileStatus(p) === "reviewed")) card.append(fileBlock(path));
       wrap.append(card);
     }
 
@@ -1054,7 +1184,7 @@
     const tl = el("div", { class: "typelist" });
     for (const t of types.slice().sort((a, b) => shortName(a.name).localeCompare(shortName(b.name)))) {
       const ts = typeStatus(t);
-      tl.append(el("span", { class: ts === "added" ? "t-added" : ts === "trivial" ? "t-trivial" : ts !== "unchanged" ? "t-changed" : "", title: t.name + "\n" + t.files.join("\n") }, shortName(t.name)));
+      tl.append(el("span", { class: ts === "added" ? "t-added" : ts === "reviewed" ? "t-reviewed" : ts !== "unchanged" ? "t-changed" : "", title: t.name + "\n" + t.files.join("\n") }, shortName(t.name)));
     }
     all.append(tl);
     wrap.append(all);
@@ -1152,7 +1282,7 @@
     const cur = state.current;
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
-      if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf));
+      if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf) || "");
       box.append(el("p", { class: "hint" }, "Changed types show their diffs. Click an edge row to see the type pairs behind it. Esc goes back to the schematic."));
       return;
     }
@@ -1176,7 +1306,9 @@
     if (!sel) {
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
-      if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id));
+      if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
+      const bar = reviewedBar(id);
+      if (bar) box.append(bar);
       const m = metricsOf(id);
       if (m.head) box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
       else if (id === ROOT) box.append(kv("Types", deltaText(CS.types.filter((t) => t.leafBase).length, CS.types.filter((t) => t.leafHead).length)));
@@ -1196,7 +1328,7 @@
       box.append(el("h2", {}, nameOf(child.id)), el("p", { class: "ident" }, child.id), el("p", { class: "purpose" }, purposeOf(child.id)));
       const st = statusOf(child.key);
       box.append(kv("Status", st === "children" ? "contains changes" : st));
-      if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id));
+      if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id) || "");
       const m = metricsOf(child.key), content = child.kind === "group" ? groupContent(child) : contentOf(child.key);
       if (m.head) {
         box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
@@ -1204,6 +1336,8 @@
         box.append(kv("Crossing refs", deltaText(m.base ? m.base.crossing : null, m.head.crossing)));
       }
       box.append(kv("Files", `${content.files}` + (content.added + content.removed + content.modified ? ` · +${content.added} −${content.removed} ~${content.modified}` : "")));
+      const bar = reviewedBar(child.key);
+      if (bar) box.append(bar);
       if (level.inCycle.has(child.key)) {
         const cyc = level.cycles.find((c) => c.includes(child.key));
         box.append(el("p", { class: "warn" }, "In a cycle with " + cyc.filter((k) => k !== child.key).map(nameOf).join(", ") + "."));
@@ -1241,7 +1375,7 @@
       box.append(kv("Status", edge.status));
       box.append(kv("References", deltaText(edge.base, edge.head)));
       box.append(kv("Leaf pairs", String(edge.members.length)));
-      if (edge.status !== "unchanged") { const n = edgeNarrative(edge); box.append(narrativeBlock(n, n ? n.key : null)); }
+      if (edge.status !== "unchanged") { const n = edgeNarrative(edge); box.append(narrativeBlock(n, n ? n.key : null) || ""); }
       if (edge.members.length > 1 || edge.members[0].from !== from || edge.members[0].to !== to) {
         box.append(el("h3", {}, "Made of"));
         const ul = el("ul", { class: "evidence" });
@@ -1503,6 +1637,19 @@
     const m = await mount();
     if (m) setViewBox(arrive(m));
   }
+  // Opens the leaf view that holds a changed file, by its leaves at head or else at base, and scrolls to the file.
+  async function openFile(path) {
+    const f = fileOf(path);
+    if (!f) return;
+    const leaf = f.leavesHead[0] || f.leavesBase[0] || otherLeafOf(f.path);
+    rememberView();
+    state.trail = [{ level: ROOT }, ...ancestors(parentOf(leaf)).map((x) => ({ level: x })), { leaf }];
+    state.selected = null;
+    await mount();
+    const target = document.querySelector(`[data-file="${CSS.escape(f.path)}"]`);
+    if (target) target.scrollIntoView({ block: "start" });
+  }
+
   function ancestors(id) { const out = []; for (let x = id; x && x !== ROOT; x = parentOf(x)) out.unshift(x); return out; }
 
   // Shows a leaf-pair edge at the lowest tree level that draws it as an edge between two blocks or a block and a pin.
@@ -1696,7 +1843,8 @@
   // Returns the details panel's block for a narrative: its text marked as Claude's, the evidence it rests on and a
   // regenerate action. While narratives are being written and this one has not arrived, it says so. Otherwise it is null.
   function narrativeBlock(n, key = n && n.key) {
-    if (NARR.state === "off") return null;
+    // Claude explains the map's parts, and the Other files block is not one of them.
+    if (NARR.state === "off" || (key && key.startsWith("node:" + OTHER))) return null;
     const busy = key && NARR.pending.has(key);
     if (!n && !busy && NARR.state !== "writing" && NARR.state !== "waiting") return key && NARR.errors.has(key) ? el("p", { class: "warn" }, NARR.errors.get(key)) : null;
     const box = el("section", { class: "narrative" }, el("h3", {}, "Why it changed"));
@@ -1855,6 +2003,8 @@
       const e = JSON.parse(m.data);
       if (e.type === "narrative" || e.type === "narratives") { narrativeEvent(e); return; }
       const fresh = e.seq >= META.events;
+      // The marks sent before the page loaded are already in META.reviewed.
+      if (e.type === "reviewed") { if (fresh) applyMarks(e.marks); return; }
       if (e.type === "ready" && fresh) { source.close(); location.reload(); }
       else if (e.type === "stage" && fresh && switching) show("busy", "switch", spinner(), el("span", {}, `Switching to the concept map: ${e.message}`));
       else if (e.type === "map" && !switching) {
@@ -1864,6 +2014,51 @@
         else if (e.state === "failed" || e.state === "unavailable") show("error", e.state, el("span", {}, e.message));
       } else if (e.type === "map" && e.state === "failed") { switching = false; show("error", "failed", el("span", {}, e.message)); }
     };
+  }
+
+  // ---------- Reviewed marks ----------
+
+  // Shows how many of the changeset's changed files are reviewed.
+  function renderProgress() {
+    const done = CHANGED_FILES.filter((f) => REVIEWED.has(f.path)).length;
+    $("#progress").textContent = CHANGED_FILES.length ? `${done} of ${CHANGED_FILES.length} files reviewed` : "";
+  }
+
+  // Lays marks over the page's, where each maps a path to its reason, or to nothing when the file is not reviewed.
+  function applyMarks(marks) {
+    for (const [path, why] of Object.entries(marks || {})) { if (why) REVIEWED.set(path, why); else REVIEWED.delete(path); }
+    renderProgress();
+    redraw();
+  }
+
+  // Marks files reviewed or not. The page changes at once. The server, when there is one, stores the marks, answers
+  // with the review's marks, which replace the page's, and tells the other pages that show the same changes.
+  async function setReviewed(paths, reviewed) {
+    const before = new Map(REVIEWED);
+    applyMarks(Object.fromEntries(paths.map((p) => [p, reviewed ? REVIEWED.get(p) || "reviewer" : ""])));
+    if (!API) return;
+    const r = await fetch(`${API}/reviewed`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths, reviewed }) }).catch(() => null);
+    const body = r && r.ok ? await r.json().catch(() => null) : null;
+    REVIEWED.clear();
+    for (const [path, why] of body ? Object.entries(body.marks || {}) : before) REVIEWED.set(path, why);
+    renderProgress();
+    if (!body) $("#progress").textContent += " · the last mark could not be saved";
+    redraw();
+  }
+
+  // Draws the current location again once per frame, keeping the view, the selection and the leaf view's scroll.
+  let redrawFrame = 0;
+  function redraw() {
+    if (redrawFrame) return;
+    redrawFrame = requestAnimationFrame(async () => {
+      redrawFrame = 0;
+      const leafView = $("#leafview"), top = leafView.scrollTop, view = { ...state.view }, back = state.back;
+      const m = await mount();
+      if (m) setViewBox(view);
+      state.back = back;
+      leafView.scrollTop = top;
+      renderDetails();
+    });
   }
 
   // ---------- Boot ----------
@@ -1882,7 +2077,8 @@
     installTip();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
-    $("#trivial").addEventListener("change", async (ev) => { rememberView(); state.opts.trivial = ev.target.checked; const m = await mount(); if (m) setViewBox(arrive(m)); });
+    $("#mute").addEventListener("change", (ev) => { state.opts.mute = ev.target.checked; redraw(); });
+    renderProgress();
     $("#flow").addEventListener("change", (ev) => document.body.classList.toggle("flow", ev.target.checked));
     installThemeChoice();
     document.body.classList.toggle("flow", $("#flow").checked);

@@ -10,6 +10,8 @@ listing of the code's types and verified against the dependency graph.
 The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step review
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
+Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
+its first phase, reviewed files and the full diff, is built.
 
 ## Layout
 
@@ -176,6 +178,21 @@ A view regroups the leaves under a level into other blocks, and a leaf opens its
 types, the files that changed, their diffs, and the type pairs behind each of its
 edges. Changed edges carry a label with the count and the delta; a change of fewer
 than three references or under one percent is drawn as minor and left unlabeled.
+
+Every diff detects renames, so a moved file shows its edits rather than every line
+deleted and added again. Changed files that no type binds, such as project files,
+documents and workflows, open from an **Other files** block on the top level.
+
+Each changed file has a reviewed checkbox in the leaf view, and a block offers to mark
+all of its files at once. A reviewed file is set aside: its chip and its types are
+muted, its diffs are collapsed, it sorts last, and a block whose changed files are all
+reviewed is drawn muted. The top bar shows how many files are reviewed. A file whose
+edits touch only comments, whitespace or layout, and a file renamed without changes,
+start reviewed, and unmarking one sticks. A mark belongs to the file's change: it is
+kept in `reviewed.json` in the repository's cache folder, keyed by the path and git's
+blobs at both ends, so a later range that leaves the file alone keeps the mark and one
+that changes it clears it. **Mute reviewed files** turns the muting off but keeps the
+marks.
 
 To write a changeset document without the viewer, run `changeset` from the repository:
 

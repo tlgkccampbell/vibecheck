@@ -35,6 +35,7 @@ public sealed record Changeset
     /// <summary>The same metrics for each view's groups at head, keyed by the view.</summary>
     public required SortedDictionary<string, ViewMetrics> Views { get; init; }
 
+    /// <summary>The hunks of every changed file, including those that no type binds, keyed by the file's path.</summary>
     public required List<FileHunks> Hunks { get; init; }
 }
 
@@ -66,13 +67,29 @@ public sealed record TypeChange(string Name, string? LeafBase, string? LeafHead,
 
 /// <summary>
 /// File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>,
-/// <c>modified</c>, <c>children</c> or <c>unchanged</c>. Trivial counts the modified files whose edits are all
-/// trivial, as <see cref="TrivialEdits"/> defines it.
+/// <c>modified</c>, <c>children</c> or <c>unchanged</c>. A renamed file counts as modified under a node that holds one of
+/// its leaves at both ends, as removed under one that holds only its leaves at base, and as added under one that holds
+/// only its leaves at head.
 /// </summary>
-public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status, int Trivial = 0);
+public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status);
 
-/// <summary>A file's change status and the leaves its types bound to at base and at head.</summary>
-public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead);
+/// <summary>
+/// A file's change status and the leaves its types bound to at base and at head. The status is <c>added</c>,
+/// <c>removed</c>, <c>modified</c>, <c>renamed</c> or <c>unchanged</c>. The path is the file's path at head, or at base
+/// for a removed file, and a renamed file also has its path at base. A changed file that no type binds has no leaves at
+/// either end. The blobs are git's object identifiers of the file at each end, when git reports the file as changed.
+/// </summary>
+public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead)
+{
+    /// <summary>Gets the path of a renamed file at base, or <see langword="null"/> for any other file.</summary>
+    public string? PreviousPath { get; init; }
+
+    /// <summary>Gets git's object identifier of the file at base, or <see langword="null"/> when git does not report it or the file is new.</summary>
+    public string? BlobBase { get; init; }
+
+    /// <summary>Gets git's object identifier of the file at head, or <see langword="null"/> when git does not report it or the file is gone.</summary>
+    public string? BlobHead { get; init; }
+}
 
 /// <summary>
 /// A leaf-pair edge with its reference counts at base and head. The status is

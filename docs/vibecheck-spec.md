@@ -527,9 +527,17 @@ as the differences:
 - **Structural**: nodes, views and externals added, removed or modified between the
   two maps, and every type that binds to a different leaf at head than at base,
   since membership is structure.
+- **Files**: every file either analysis lists, and every other file that git
+  reports as changed, with its status (`added`, `removed`, `modified`, `renamed` or
+  `unchanged`), its leaves at base and at head, and git's blob identifiers at each
+  end when git reports it. A renamed file is one entry under its head path, with its
+  base path as `previousPath`. A changed file that no type binds has no leaves at
+  either end, and the viewer draws it under an **Other files** block.
 - **Content**: for every node, the files under it that were added, removed or
-  modified, as paths and as counts, rolled up through the hierarchy. A file counts
-  under every leaf whose types it declares.
+  modified, as counts, rolled up through the hierarchy. A file counts under every
+  leaf whose types it declares. A renamed file counts as modified under a node that
+  holds one of its leaves at both ends, as removed under one that holds only its
+  leaves at base, and as added under one that holds only its leaves at head.
 - **Types**: every type at either end with the leaf it binds to at base and at head,
   the files that declare it, and whether it was added, removed, moved or unchanged.
   This is how the viewer descends from a leaf to its types to their files.
@@ -541,15 +549,17 @@ as the differences:
   the document small.
 - **Metrics**: the per-node metrics of section 4.1 at base and at head, and the
   per-level and per-view edges and cycles at head.
-- **Hunks**: the textual diff per file, attached to the file's leaves, so that the
-  viewer can descend from a node to its code without a second tool.
+- **Hunks**: the textual diff of every changed file, including those that no type
+  binds, with three lines of context and renames detected, keyed by the file's path,
+  so that the viewer can descend from a node to its code without a second tool.
 - **Trivial edits**: an edit to a C# file is trivial when the code on both sides
   parses to the same sequence of tokens, so that it touches only comments,
   documentation comments, whitespace, line breaks, `#region` lines or `#pragma`
   lines. Other directives, and code that an `#if` leaves out of the parse, count as
-  code. Each hunk and each file whose edits are all trivial is marked, and Content
-  counts the trivial files under each node. The viewer shows a node whose changes are
-  all trivial in a muted style rather than as modified. Moving code to other lines
+  code. Each hunk and each file whose edits are all trivial is marked. A trivial
+  file starts out reviewed, as [pull-requests.md](pull-requests.md) section 5
+  describes, and the viewer shows a node whose changed files are all reviewed in a
+  muted style rather than as modified. Moving code to other lines
   can still reach the program through caller-information attributes and stack
   traces, and the marks accept that.
 
@@ -573,7 +583,7 @@ the facts say, as part of the normal test run.
 | `vibecheck why <from> <to>` | Lists the type pairs behind the edge between two nodes, with counts, from a facts document given with `--facts` or from a fresh analysis. |
 | `vibecheck fmt` | Rewrites both files in canonical form. `--check` reports without writing. |
 | `vibecheck facts` | Emits the facts document for the working tree, recording the HEAD commit, suffixed `+dirty` when the tree has changes. |
-| `vibecheck diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, attaches hunks from `git diff` between the two commits, with trivial edits marked. |
+| `vibecheck diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, adds every file `git diff` reports as changed between the two commits, pairs renames, and attaches the hunks, with trivial edits marked. |
 | `vibecheck changeset <base> [<head>]` | Produces the changeset document between two revisions in one step. Each revision is checked out into a temporary git worktree, built and analyzed, the two in parallel, and the current map is applied to both. The worktrees are removed afterward. One argument may be a range: `a..b`, or `a...b` to compare from the merge base as a pull request does. The head defaults to `HEAD`. `:worktree` names a snapshot of the uncommitted work, and on its own compares that with `HEAD`. `--no-build` skips the builds, which leaves out generated types. Analyses are cached per commit as `review` caches them; `--no-cache` turns that off. |
 
 Every command takes `--map <path>`; the default is `./vibecheck.json`, and the layout

@@ -47,6 +47,12 @@ public sealed class ReviewCache : INarrativeCache
     public string Directory { get; }
 
     /// <summary>
+    /// Gets the file that holds the repository's reviewed marks, which <see cref="ReviewedFiles"/> reads and writes. It
+    /// is never evicted, since a mark is the reviewer's own record and not something the tool can produce again.
+    /// </summary>
+    public string ReviewedPath => Path.Combine(Directory, "reviewed.json");
+
+    /// <summary>
     /// Returns the root that every repository's cache lives under: the <c>VIBECHECK_CACHE</c> environment variable when it
     /// is set, the local application data folder on Windows, and the XDG cache directory elsewhere.
     /// </summary>
