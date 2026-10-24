@@ -33,7 +33,7 @@ public static class ChangesetBuilder
         var declarations = DeclarationDiff.Diff(baseFacts.Declarations, headFacts.Declarations);
         var marked = texts is null ? hunks ?? [] : TrivialEdits.Mark(hunks ?? [], texts, baseFacts, headFacts, declarations, files);
         var (decisions, clustered) = Clustering.Apply(baseFacts, headFacts, files, marked, declarations);
-        return new Changeset
+        var changeset = new Changeset
         {
             Base = baseFacts.Commit,
             Head = headFacts.Commit,
@@ -49,6 +49,7 @@ public static class ChangesetBuilder
             Hunks = clustered,
             Decisions = decisions,
         };
+        return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views) };
     }
 
     private static List<TypeChange> DiffTypes(Facts baseFacts, Facts headFacts)

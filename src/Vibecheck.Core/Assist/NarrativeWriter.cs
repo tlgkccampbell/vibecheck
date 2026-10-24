@@ -20,7 +20,7 @@ public sealed record Narrative(string Key, string Text, IReadOnlyList<string> Ci
     public const string SummaryKey = "summary";
 
     /// <summary>Returns the key of the narrative of an edge between two blocks, such as <c>edge:a.x→b</c>.</summary>
-    public static string EdgeKey(string from, string to) => $"edge:{from}→{to}";
+    public static string EdgeKey(string from, string to) => DrawnEdge.KeyOf(from, to);
 
     /// <summary>Returns the key of the narrative of a node, such as <c>node:a.x</c>.</summary>
     public static string NodeKey(string id) => "node:" + id;
@@ -385,14 +385,14 @@ public static class NarrativeWriter
         if (home.Key is not null)
         {
             foreach (var (groupId, group) in home.Value.Groups)
-                foreach (var leaf in group.Leaves) owners[leaf] = NarrativePlanner.GroupKey(home.Key, groupId);
+                foreach (var leaf in group.Leaves) owners[leaf] = DrawnEdges.GroupKey(home.Key, groupId);
         }
         else
         {
             foreach (var leaf in cs.Edges.SelectMany(e => new[] { e.From, e.To }))
                 if (!cs.Map.Externals.ContainsKey(leaf)) owners[leaf] = leaf == ArchitectureMap.Unsorted ? leaf : Identifiers.TopLevelOf(leaf);
         }
-        var edges = NarrativePlanner.Edges(cs, owners, externals: true);
+        var edges = DrawnEdges.Edges(cs, owners, externals: true);
         sb.Append($"\nThe changed dependencies between {(home.Key is null ? "the parts" : $"the groups of the view `{home.Key}`, {home.Value.Name},")} largest change first:\n");
         foreach (var e in edges.Take(SummaryEdges))
         {

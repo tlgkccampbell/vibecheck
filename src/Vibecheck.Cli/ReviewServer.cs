@@ -71,6 +71,9 @@ public sealed record ReviewServerOptions
 
     /// <summary>Gets a sink for the lines the server prints about each review, or <see langword="null"/>.</summary>
     public Action<string>? Log { get; init; }
+
+    /// <summary>Gets the file that keeps the reviewer's settings across sessions, or <see langword="null"/> to keep them in memory. See <see cref="UserSettings"/>.</summary>
+    public string? SettingsPath { get; init; }
 }
 
 /// <summary>
@@ -87,6 +90,7 @@ public sealed class ReviewServer : IAsyncDisposable
     private readonly Dictionary<string, MapJob> mapJobs = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource stopping = new();
     private readonly ReviewedFiles reviewed;
+    private readonly UserSettings settings;
 
     // The ends of the logs of finished GitHub Actions jobs, by job identifier.
     private readonly ConcurrentDictionary<long, List<string>> jobLogs = new();
@@ -97,6 +101,7 @@ public sealed class ReviewServer : IAsyncDisposable
     {
         this.options = options;
         reviewed = new ReviewedFiles(options.Cache?.ReviewedPath);
+        settings = new UserSettings(options.SettingsPath ?? (options.Cache is null ? null : Path.Combine(ReviewCache.DefaultRoot(), "settings.json")));
     }
 
     /// <summary>Gets the address the server listens on, without the token.</summary>
@@ -859,6 +864,13 @@ public sealed class ReviewServer : IAsyncDisposable
             }
         });
 
+        web.MapPost("/api/settings", async (HttpContext ctx) =>
+        {
+            var body = await JsonSerializer.DeserializeAsync<SettingsBody>(ctx.Request.Body, FactsJson.Options);
+            if (body?.Theme is not { } theme || !settings.SetTheme(theme)) return Results.BadRequest(new { message = "theme must be auto, light or dark" });
+            return Results.Json(new { theme = settings.Theme }, FactsJson.Options);
+        });
+
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
             reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
 
@@ -883,7 +895,7 @@ public sealed class ReviewServer : IAsyncDisposable
             {
                 solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
                 mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
-                narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root),
+                narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root), settings = new { theme = settings.Theme },
                 pull = r.Snapshot, pullThreads = Placements(r, r.Snapshot), pullAnnotations = AnnotationPlaces(r, r.Snapshot), pullCommits = r.OpenedCommits, pullStale = r.Stale,
             };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
@@ -1013,7 +1025,7 @@ public sealed class ReviewServer : IAsyncDisposable
     /// The viewer shows comment bodies that other people wrote, so the policy keeps a gap in their sanitizing from
     /// running script. See <c>docs/pull-requests.md</c> section 11.
     /// </summary>
-    private static IResult HtmlPage(HttpContext ctx, string page)
+    private IResult HtmlPage(HttpContext ctx, string page)
     {
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
         ctx.Response.Headers.ContentSecurityPolicy = string.Join("; ",
@@ -1028,6 +1040,12 @@ public sealed class ReviewServer : IAsyncDisposable
             "base-uri 'none'",
             "form-action 'none'",
             "frame-ancestors 'none'");
+        // The root element says that the server holds the settings, and carries the stored theme, so that the page
+        // paints in it at once and leaves the browser's own storage alone.
+        var theme = settings.Theme;
+        var root = "<html data-settings=\"server\"" + (theme == "auto" ? "" : $" data-theme=\"{theme}\"");
+        var at = page.IndexOf("<html", StringComparison.Ordinal);
+        if (at >= 0) page = page[..at] + root + page[(at + 5)..];
         return Results.Text(page.Replace("<script>", $"<script nonce=\"{nonce}\">", StringComparison.Ordinal), "text/html; charset=utf-8");
     }
 
@@ -1046,6 +1064,11 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private sealed record NarrativesBody(string? Key);
 
+
+
+    /// <summary>The body of a settings change: the theme choice.</summary>
+
+    private sealed record SettingsBody(string? Theme);
     private sealed record ReviewedBody(List<string>? Paths, bool? Reviewed);
 
     /// <summary>

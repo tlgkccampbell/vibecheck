@@ -5,7 +5,7 @@
 <title>Vibecheck Review</title>
 <script>
   // Applies the theme the viewer stored, so that the picker and the viewer agree.
-  try { const t = localStorage.getItem("vibecheck-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) { /* storage unavailable */ }
+  try { if (!document.documentElement.dataset.settings) { const t = localStorage.getItem("vibecheck-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } } catch (e) { /* storage unavailable */ }
 </script>
 <meta name="description" content="Chooses a range of commits to review with vibecheck, and shows the review's progress until the viewer opens.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">

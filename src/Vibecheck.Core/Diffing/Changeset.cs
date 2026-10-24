@@ -41,6 +41,9 @@ public sealed record Changeset
 
     /// <summary>Gets the hunks that change a declaration, each with the hunks that follow from it, as <see cref="Clustering"/> finds them.</summary>
     public List<Decision> Decisions { get; init; } = [];
+
+    /// <summary>Gets the order in which to read the changeset, as <see cref="ReadingPath"/> plans it.</summary>
+    public List<PathStep> Path { get; init; } = [];
 }
 
 public sealed record StructuralDiff
