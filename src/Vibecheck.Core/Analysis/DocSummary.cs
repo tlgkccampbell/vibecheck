@@ -33,11 +33,11 @@ public static partial class DocSummary
     /// <summary>Returns the index of the period that ends the first sentence, skipping periods inside identifiers such as <c>nt65.json</c>.</summary>
     private static int FirstSentenceEnd(string text)
     {
-        for (var i = 0; i < text.Length; i++)
+        var i = text.IndexOf('.');
+        while (i >= 0)
         {
-            if (text[i] != '.') continue;
-            if (i + 1 == text.Length) return i;
-            if (text[i + 1] == ' ') return i;
+            if (i + 1 == text.Length || text[i + 1] == ' ') return i;
+            i = text.IndexOf('.', i + 1);
         }
         return -1;
     }

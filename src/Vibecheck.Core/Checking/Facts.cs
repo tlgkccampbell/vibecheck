@@ -53,7 +53,7 @@ public sealed record FileFact(string Path, string Hash, IReadOnlyList<string> Le
 /// <summary>An observed dependency between two types, kept as evidence. The leaves of its ends are found through the types list.</summary>
 public sealed record DependencyFact(string From, string To, string Kind, string Symbol, string File, int Line);
 
-/// <summary>A count of references from one node or group to another.</summary>
+/// <summary>The number of references from one node or group to another, as the viewer draws them on an edge.</summary>
 public sealed record EdgeCount(string From, string To, int Count);
 
 /// <summary>
