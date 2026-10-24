@@ -253,6 +253,9 @@ changed, not only what changed. Counts and diffs already say what.
 - Each changed node, at the level whose child it is, shown in the details panel when
   the node is selected or open. A view's groups get no narrative of their own, since a
   group is a regrouping of leaves the levels already explain.
+- Each term of the glossary that has no documentation summary, as one sentence that
+  says what the declaration is, keyed `term:<symbol>` and requested in batches by
+  block after the levels and views. See [attention.md](attention.md) section 8.3.
 
 Edges to the tabs on a level's frame have no narrative of their own. The edge they
 stand for has one at the enclosing level, and the viewer shows that one. An edge
@@ -291,8 +294,9 @@ four requests run at once.
 ### 6.3 Checking
 
 Each narrative states the evidence it rests on: the type pairs for an edge, the files
-for a node, and the nodes for the summary. A narrative that cites nothing, names a pair
-not in the edge's evidence, a file not under the node or a node not in the map, or that
+for a node, the declaring file for a term, and the nodes for the summary. A narrative
+that cites nothing, names a pair not in the edge's evidence, a file not under the node,
+a file other than the one that declares the term or a node not in the map, or that
 the answer leaves out, is discarded. The discarded narratives of a batch are requested
 once more together, apart from the rest, with the reason each was discarded. If the
 second answer fails too, the edge keeps its counts and shows no narrative. The check

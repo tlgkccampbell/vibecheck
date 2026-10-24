@@ -44,6 +44,9 @@ public sealed record Changeset
 
     /// <summary>Gets the order in which to read the changeset, as <see cref="ReadingPath"/> plans it.</summary>
     public List<PathStep> Path { get; init; } = [];
+
+    /// <summary>Gets the names the changeset introduces, grouped by block and ordered by use, as <see cref="Diffing.Glossary"/> lists them.</summary>
+    public List<Term> Glossary { get; init; } = [];
 }
 
 public sealed record StructuralDiff
@@ -121,6 +124,20 @@ public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = nu
 {
     /// <summary>Gets why the tool sets the file aside, or <see langword="null"/> when it does not.</summary>
     public EditReason? Reason { get; init; }
+
+    /// <summary>Returns the lines of the file at head that the hunks hold, context and added lines alike, keyed by one-based line number.</summary>
+    public Dictionary<int, string> LinesAtHead()
+    {
+        var result = new Dictionary<int, string>();
+        foreach (var hunk in Hunks)
+        {
+            if (!hunk.TryRanges(out _, out var now)) continue;
+            var line = now.Start + 1;
+            foreach (var l in hunk.Lines)
+                if (l[0] != "-") result[line++] = l[1];
+        }
+        return result;
+    }
 }
 
 /// <summary>

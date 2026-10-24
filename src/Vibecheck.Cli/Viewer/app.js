@@ -867,6 +867,11 @@
     decision: null,
     // What the last mark action of a decision did: the decision's identifier and the text that says so, or null.
     decisionNote: null,
+    // The Changes panel's content, "path", "changes" or "glossary", or undefined before the first render chooses.
+    panel: undefined,
+    // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
+    glossaryBlock: null,
+    term: null,
     current: null, // { level, layout }
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
@@ -1234,7 +1239,7 @@
     const lead = /^[ 	]*/.exec(line)[0];
     const cols = lead.replace(/	/g, "    ").length;
     const td = el("td", { class: "code " + kind, style: `padding-left: calc(8px + ${cols + 2}ch); text-indent: -2ch` });
-    if (!html) { td.append(line.slice(lead.length)); return td; }
+    if (!html) { td.append(line.slice(lead.length)); return markTerms(td, kind); }
     td.innerHTML = html;
     let strip = lead.length;
     const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
@@ -1243,7 +1248,7 @@
       node.data = node.data.slice(n);
       strip -= n;
     }
-    return td;
+    return markTerms(td, kind);
   }
 
   // Returns the split diff of one hunk of a file. The threads given, keyed by hunk and line index as threadsOf keys
@@ -1680,9 +1685,7 @@
     if (s.kind === "node") return showInContext(s.target);
     if (s.kind === "decision") {
       const d = DECISIONS.get(s.target);
-      if (!d) return;
-      state.decision = d.id;
-      return openHunk(d.file, d.hunk);
+      return d ? openDecision(d) : undefined;
     }
     if (s.kind === "file") return openFile(s.target);
     if (s.kind === "aside" || s.kind === "more") return s.files.length ? openFile(s.files[0]) : renderChanges();
@@ -1762,18 +1765,223 @@
     else if (block.top < top) aside.scrollTop -= top - block.top;
   }
 
+  // ---------- The glossary ----------
+  // The names the change introduces, as the changeset lists them: added types and members, renamed declarations, parts
+  // added to the map, and assemblies referenced for the first time, each with where it is declared, its documentation
+  // summary, how often it is used and where first. The panel lists them by block, a block's details panel lists its
+  // own, and an introduced name in a diff shows its entry on hover. See docs/attention.md section 8.
+  const GLOSSARY = CS.glossary || [];
+  const TERMS = new Map(GLOSSARY.map((t) => [t.key, t]));
+  // The group of the terms that no block holds: the parts added to the map and the assemblies.
+  const MAP_TERMS = "~map";
+  const DECLARATION_KINDS = new Set(["type", "method", "constructor", "property", "field", "event", "indexer", "operator"]);
+  const isDeclarationTerm = (t) => DECLARATION_KINDS.has(t.kind);
+  const termGroup = (t) => t.block || MAP_TERMS;
+  const termGroupName = (g) => g === MAP_TERMS ? "Map and assemblies" : nameOf(g);
+  // Returns the name a declaration shows in code: its own, without its type, namespace or type arguments.
+  const codeName = (symbol) => memberName(symbol, "type").replace(/<.*$/, "");
+  // Declaration terms by the name they show in code at head, and renamed ones by their name at base too, so that both
+  // sides of a rename find the entry.
+  const TERMS_AT_HEAD = new Map(), TERMS_AT_BASE = new Map();
+  for (const t of GLOSSARY.filter(isDeclarationTerm)) {
+    const add = (map, name) => { if (!map.has(name)) map.set(name, []); map.get(name).push(t); };
+    add(TERMS_AT_HEAD, codeName(t.symbol));
+    if (t.previous) add(TERMS_AT_BASE, codeName(t.previous));
+  }
+  // Returns a pattern that matches any name of a map as a whole identifier, or null when the map has none.
+  function termPattern(map) {
+    const names = [...map.keys()].filter((n) => /^[A-Za-z_]\w*$/.test(n)).sort((a, b) => b.length - a.length);
+    return names.length ? new RegExp(`(?<!\\w)(${names.join("|")})(?!\\w)`) : null;
+  }
+  const TERM_PATTERN = { head: termPattern(TERMS_AT_HEAD), base: termPattern(TERMS_AT_BASE) };
+  // Wraps each introduced name in a cell of a changed line in a span that shows the name's entry on hover and opens the
+  // Glossary on a click. A removed line is matched against the names at base, an added line against those at head,
+  // and a context line is left alone. Returns the cell.
+  function markTerms(td, kind) {
+    const side = kind === "del" ? "base" : kind === "add" ? "head" : null;
+    const re = side && TERM_PATTERN[side];
+    if (!re) return td;
+    const map = side === "head" ? TERMS_AT_HEAD : TERMS_AT_BASE;
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT), nodes = [];
+    while (walker.nextNode()) if (re.test(walker.currentNode.data)) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const frag = document.createDocumentFragment();
+      node.data.split(re).forEach((part, i) => frag.append(i % 2 ? el("span", { class: "term", "data-term": map.get(part).map((t) => t.key).join(" ") }, part) : part));
+      node.replaceWith(frag);
+    }
+    return td;
+  }
+
+  const fileName = (path) => path.split("/").pop();
+  const TERM_KIND_TEXT = { node: "map node", view: "map view", external: "external", assembly: "assembly" };
+  const termKind = (t) => TERM_KIND_TEXT[t.kind] || (t.accessibility ? `${t.accessibility} ${t.kind}` : t.kind);
+  // Returns what a term is shown as: its name, after its previous name when it was renamed.
+  function termName(t) {
+    const name = (s) => isDeclarationTerm(t) ? memberName(s, t.kind) : t.name;
+    return t.previous ? el("span", { class: "term-name" }, el("code", {}, name(t.previous)), " is now ", el("code", {}, name(t.symbol))) : el("code", { class: "term-name" }, name(t.symbol));
+  }
+  // Returns the line of a term's entry that says what it is: its documentation summary or a map part's purpose,
+  // Claude's definition when a declaration has none, or that it has no documentation, which is itself worth a
+  // reviewer's attention in code a model wrote. An assembly has none of these.
+  function termText(t, inTip) {
+    if (t.summary) return el("p", { class: "term-text" }, t.summary);
+    if (t.kind === "assembly") return null;
+    if (!isDeclarationTerm(t)) return el("p", { class: "term-text undocumented" }, "No purpose given.");
+    const n = NARR.state === "off" ? null : NARR.items.get(t.key);
+    const busy = NARR.pending.has(t.key);
+    if (n) {
+      const p = el("p", { class: "term-text" }, ...richText(n.text), " ", el("span", { class: "by" }, "written by Claude"));
+      if (!inTip) p.append(" ", el("button", { class: "link", disabled: busy, onclick: () => regenerate(t.key), title: "Write the definition again" }, busy ? "Writing…" : "Regenerate"));
+      return p;
+    }
+    const p = el("p", { class: "term-text undocumented" }, "No documentation.");
+    if (busy || NARR.state === "writing" || NARR.state === "waiting") p.append(" ", el("span", { class: "by" }, "Claude is writing a definition…"));
+    else if (NARR.errors.has(t.key)) p.append(" ", el("span", { class: "by" }, NARR.errors.get(t.key)));
+    return p;
+  }
+  // Returns the line of a term's entry that places it: where it is declared, how often it is used and where first
+  // outside its own type, and the decision that introduced it. Each place opens in the leaf view, except in the
+  // tooltip, which is read and not clicked.
+  function termMeta(t, inTip) {
+    const meta = el("div", { class: "term-meta" });
+    const place = (text, title, open) => inTip ? el("span", { title }, text) : el("button", { class: "link", title, onclick: open }, text);
+    const refs = t.kind === "assembly" || t.kind === "external";
+    if (t.file) meta.append(place(`declared in ${fileName(t.file)}:${t.line}`, t.file, () => openLine(t.file, t.line)));
+    if (t.kind === "node") meta.append(place("show on the map", t.symbol, () => showInContext(t.symbol)));
+    if (isDeclarationTerm(t) || refs) meta.append(el("span", {}, t.uses ? plural(t.uses, refs ? "reference" : "use", refs ? "references" : "uses") : refs ? "no references" : "no uses"));
+    if (t.firstUse) meta.append(place(`first ${refs ? "referenced" : "used"} in ${fileName(t.firstUse.file)}:${t.firstUse.line}`, `${t.firstUse.file}: the first use outside the declaring type`, () => openLine(t.firstUse.file, t.firstUse.line)));
+    if (t.decision && DECISIONS.has(t.decision)) meta.append(place("decision", "Open the decision that introduced it", () => openDecision(DECISIONS.get(t.decision))));
+    return meta;
+  }
+  // Returns a term's entry: its kind and name, what it is, and where it is. In the tooltip the entry also names the
+  // term's block, since the tooltip stands alone, and has no links.
+  function termEntry(t, inTip) {
+    const entry = el("div", { class: "term-entry" },
+      el("div", { class: "term-head" }, el("span", { class: "term-kind" }, termKind(t)), termName(t), inTip && t.block && t.kind !== "node" ? el("span", { class: "term-block" }, nameOf(t.block)) : null));
+    entry.append(termText(t, inTip) || "", termMeta(t, inTip));
+    return entry;
+  }
+
+  // Returns the index of the hunk of a file that holds a line at head, or -1 when no hunk does.
+  function hunkAt(path, line) {
+    return (HUNKS.get(path) || []).findIndex((h) => { const start = parseHeader(h.header).b, count = h.lines.filter((l) => l[0] !== "-").length; return line >= start && line < start + count; });
+  }
+  // Opens a file in the leaf view at the hunk that holds a line at head, or at its top when no hunk holds the line.
+  function openLine(path, line) {
+    const i = hunkAt(path, line);
+    return i >= 0 ? openHunk(path, i) : openFile(path);
+  }
+  // Selects a decision and opens its hunk, with its reach in the details panel.
+  function openDecision(d) {
+    state.decision = d.id;
+    return openHunk(d.file, d.hunk);
+  }
+  // Opens a term where it lives: a declaration at its line in the leaf view, a map node on the map, and anything else
+  // in the Glossary.
+  function openTerm(t) {
+    if (t.file) return openLine(t.file, t.line);
+    if (t.kind === "node") return showInContext(t.symbol);
+    return showGlossary(null, t.key);
+  }
+  // Returns the terms under a block, a group of a view, or the whole map.
+  function termsUnder(id) {
+    if (id === ROOT || id === null || id === undefined) return GLOSSARY;
+    const leaves = id.startsWith("g:") ? groupLeaves(id) : [id];
+    return GLOSSARY.filter((t) => t.block && leaves.some((l) => isUnder(t.block, l)));
+  }
+  // Opens the Glossary panel on the terms under a block, or on every term when the block is null, with a term marked.
+  function showGlossary(block, term) {
+    state.panel = "glossary";
+    state.glossaryBlock = block;
+    state.term = term || null;
+    renderChanges();
+  }
+  // Returns the details panel's section for the names a block introduces, or null when it introduces none: up to six,
+  // each opening where it lives, and the Glossary for all of them.
+  function glossarySection(id) {
+    const terms = termsUnder(id);
+    if (!terms.length) return null;
+    const box = el("section", { class: "glossary-section" }, el("h3", {}, `Glossary: ${plural(terms.length, "new name", "new names")}`));
+    const ul = el("ul", { class: "list" });
+    for (const t of terms.slice(0, 6)) {
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => openTerm(t), title: t.summary || (isDeclarationTerm(t) ? "No documentation." : "") },
+        el("span", { class: "term-kind" }, t.kind), el("span", { class: "row-name" }, termName(t)), el("span", { class: "row-meta" }, t.uses ? String(t.uses) : ""))));
+    }
+    box.append(ul, el("button", { class: "link", onclick: () => showGlossary(id) }, terms.length > 6 ? `All ${terms.length} in the Glossary` : "Show in the Glossary"));
+    return box;
+  }
+  // Renders the glossary into the panel: the terms by block, the most used first, with the count in the pinned head.
+  function renderGlossary(box, head) {
+    const block = state.glossaryBlock;
+    const terms = block ? termsUnder(block) : GLOSSARY;
+    head.append(el("div", { class: "path-head" }, el("span", {}, block ? `${plural(terms.length, "term", "terms")} in ${nameOf(block)}` : plural(GLOSSARY.length, "new name", "new names")),
+      block ? el("button", { class: "link", onclick: () => showGlossary(null) }, "Show all") : null));
+    if (!terms.length) { box.append(el("p", { class: "hint" }, block ? "The change introduces no name here." : "The change introduces no new name.")); return; }
+    box.append(el("p", { class: "hint" }, "The names the change introduces, by block, the most used first. In a diff, an introduced name has a dotted underline and shows its entry on hover."));
+    let group, ul;
+    for (const t of terms) {
+      const g = termGroup(t);
+      if (g !== group) { group = g; box.append(el("h3", {}, termGroupName(g))); ul = el("ul", { class: "list glossary" }); box.append(ul); }
+      ul.append(el("li", { class: state.term === t.key ? "current" : "" }, termEntry(t, false)));
+    }
+    const cur = box.querySelector("li.current");
+    if (cur) cur.scrollIntoView({ block: "nearest" });
+  }
+  // Shows a term's entry in a tooltip beside an introduced name under the pointer in the leaf view, and opens the
+  // Glossary on the name when it is clicked.
+  let termTip = null;
+  function installTermTips() {
+    const view = $("#leafview"), tip = el("div", { class: "tip term-tip", id: "termtip", role: "tooltip", hidden: true });
+    document.body.append(tip);
+    const hide = () => { termTip = null; tip.hidden = true; };
+    const termAt = (ev) => ev.target instanceof Element ? ev.target.closest(".term") : null;
+    view.addEventListener("mouseover", (ev) => {
+      const span = termAt(ev);
+      if (!span) { if (termTip) hide(); return; }
+      if (span === termTip) return;
+      termTip = span;
+      showTermTip();
+    });
+    view.addEventListener("mouseleave", hide);
+    view.addEventListener("scroll", hide, { passive: true });
+    view.addEventListener("click", (ev) => {
+      const span = termAt(ev);
+      const t = span && TERMS.get(span.dataset.term.split(" ")[0]);
+      if (!t) return;
+      hide();
+      showGlossary(t.block || null, t.key);
+    });
+  }
+  // Fills the term tooltip with the entries of the names under the pointer, up to three, and places it below them, or
+  // above when there is no room below.
+  function showTermTip() {
+    const tip = $("#termtip"), span = termTip;
+    if (!tip || !span || !span.isConnected) { termTip = null; if (tip) tip.hidden = true; return; }
+    const terms = span.dataset.term.split(" ").map((k) => TERMS.get(k)).filter(Boolean);
+    tip.replaceChildren(...terms.slice(0, 3).map((t) => termEntry(t, true)));
+    tip.hidden = false;
+    const r = span.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const top = r.bottom + 6 + h > window.innerHeight ? r.top - 6 - h : r.bottom + 6;
+    tip.style.left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4)) + "px";
+    tip.style.top = Math.max(4, top) + "px";
+  }
+
+  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary" };
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
     // The panel's head holds the title and, on the path, the arrows; everything after the title is drawn afresh.
     const head = $("#changes-head"), title = $("#changes-title");
     for (const n of [...head.children]) if (n !== title) n.remove();
-    // With a path, the panel switches between the path and the changes, and opens on the path.
-    if (PATH.length) {
-      if (state.panel === undefined) state.panel = "path";
+    // With a path or a glossary, the panel switches among the path, the changes and the glossary, and opens on the
+    // path when the changeset has one.
+    if (PATH.length || GLOSSARY.length) {
+      if (state.panel === undefined) state.panel = PATH.length ? "path" : "changes";
       const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => { state.panel = name; renderChanges(); } }, label);
-      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, state.panel === "path" ? "Path" : "Changes"), el("span", { class: "seg", role: "tablist" }, tab("path", "Path"), tab("changes", "Changes"))));
+      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel]), el("span", { class: "seg", role: "tablist" },
+        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null)));
       if (state.panel === "path") { renderPath(box, head); return; }
+      if (state.panel === "glossary") { renderGlossary(box, head); return; }
     }
     const talk = openThreadsUnder(ROOT).length;
     if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
@@ -1839,6 +2047,7 @@
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
       if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf) || "");
+      box.append(glossarySection(l.leaf) || "");
       box.append(threadList(l.leaf) || "", problemList(l.leaf) || "");
       box.append(el("p", { class: "hint" }, "Changed types show their diffs. Click an edge row to see the type pairs behind it. Esc goes back to the schematic."));
       return;
@@ -1864,6 +2073,7 @@
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
       if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
+      if (id !== ROOT) box.append(glossarySection(id) || "");
       const bar = reviewedBar(id);
       if (bar) box.append(bar);
       box.append(threadList(id) || "", problemList(id) || "");
@@ -1887,6 +2097,7 @@
       const st = statusOf(child.key);
       box.append(kv("Status", st === "children" ? "contains changes" : st));
       if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id) || "");
+      box.append(glossarySection(child.kind === "group" ? child.key : child.id) || "");
       const m = metricsOf(child.key), content = child.kind === "group" ? groupContent(child) : contentOf(child.key);
       if (m.head) {
         box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
@@ -2477,8 +2688,9 @@
       narrativeFrame = 0;
       renderSummary();
       if (state.current || loc().leaf) renderDetails();
-      if (state.panel === "path") renderChanges();
+      if (state.panel === "path" || state.panel === "glossary") renderChanges();
       if (tipKey) showTip(tipKey);
+      if (termTip) showTermTip();
     });
   }
 
@@ -3287,6 +3499,7 @@
     renderSummary();
     renderPull();
     installTip();
+    installTermTips();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
     $("#mute").addEventListener("change", (ev) => { state.opts.mute = ev.target.checked; redraw(); });
