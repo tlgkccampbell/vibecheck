@@ -12,8 +12,9 @@ namespace Vibecheck.GitHub;
 public sealed record ThreadPlace(string Path, int? Hunk, int? Line);
 
 /// <summary>
-/// Places a pull request's review threads in the diffs of one of its reviews. See <c>docs/pull-requests.md</c>
-/// section 7.1.
+/// Places a pull request's review threads in the diffs of one of its reviews, and places a new comment on lines of
+/// those diffs where GitHub takes it. Both directions number lines as GitHub does, so a comment lands where the
+/// reviewer wrote it. See <c>docs/pull-requests.md</c> sections 7.1 and 8.1.
 /// </summary>
 public static class ThreadPlacer
 {
@@ -46,6 +47,36 @@ public static class ThreadPlacer
             result[t.Id] = new ThreadPlace(path, at?.Hunk, at?.Line);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Returns where GitHub takes a comment on lines of one side of a hunk, given by their indexes in
+    /// <see cref="Hunk.Lines"/>. A context line is on both sides, an added line only at head, and a removed line only at
+    /// base.
+    /// </summary>
+    /// <param name="path">The file's path relative to the repository's top.</param>
+    /// <param name="right">A value indicating whether the lines are at head rather than at base.</param>
+    /// <exception cref="ArgumentException">The hunk or a line does not exist, the first line follows the last, or a line is not on the side given.</exception>
+    public static DiffAnchor Anchor(string path, IReadOnlyList<Hunk> hunks, int hunk, int first, int last, bool right)
+    {
+        if (hunk < 0 || hunk >= hunks.Count) throw new ArgumentException($"{path} has no hunk {hunk}");
+        if (first > last) throw new ArgumentException("the first line of a comment follows its last");
+        var end = Number(hunks[hunk], last, right) ?? throw new ArgumentException($"line {last} of the hunk is not at {(right ? "head" : "base")}");
+        var start = Number(hunks[hunk], first, right) ?? throw new ArgumentException($"line {first} of the hunk is not at {(right ? "head" : "base")}");
+        var side = right ? "RIGHT" : "LEFT";
+        return first == last ? new DiffAnchor(path, side, end) : new DiffAnchor(path, side, end, side, start);
+    }
+
+    /// <summary>
+    /// Returns the line number in the file at head, or at base when <paramref name="right"/> is false, of a line of a
+    /// hunk given by its index, or null when the line is not on that side or does not exist.
+    /// </summary>
+    private static int? Number(Hunk hunk, int index, bool right)
+    {
+        if (index < 0 || index >= hunk.Lines.Count || hunk.Lines[index][0] == (right ? "-" : "+") || !hunk.TryRanges(out var old, out var now)) return null;
+        var number = (right ? now.Start : old.Start) + 1;
+        for (var i = 0; i < index; i++) if (hunk.Lines[i][0] != (right ? "-" : "+")) number++;
+        return number;
     }
 
     /// <summary>

@@ -192,6 +192,13 @@ public static class ReviewPipeline
     }
 
     /// <summary>
+    /// Returns a changeset's path relative to the repository's top, which is where GitHub's paths are relative to. It is
+    /// the inverse of <see cref="ChangesetPath"/>.
+    /// </summary>
+    /// <param name="root">The directory the changeset's paths are relative to, relative to the repository's top.</param>
+    public static string RepositoryPath(string path, string root) => root is "." or "" ? path : root.TrimEnd('/') + "/" + path;
+
+    /// <summary>
     /// Returns renames given relative to the repository's top relative to the directory the changeset's paths are
     /// relative to, leaving out those with a path outside it.
     /// </summary>

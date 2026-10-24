@@ -95,7 +95,7 @@ public sealed class ReviewedFiles
     /// </summary>
     public static string Key(FileChange file, string root)
     {
-        var repoPath = root is "." or "" ? file.Path : root.TrimEnd('/') + "/" + file.Path;
+        var repoPath = ReviewPipeline.RepositoryPath(file.Path, root);
         return $"{repoPath} {file.BlobBase ?? "-"}..{file.BlobHead ?? "-"}";
     }
 

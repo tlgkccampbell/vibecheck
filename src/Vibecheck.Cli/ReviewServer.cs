@@ -733,6 +733,95 @@ public sealed class ReviewServer : IAsyncDisposable
             return Results.Json(new { snapshot = review.Snapshot, stale = review.Stale }, FactsJson.Options);
         });
 
+        web.MapPost("/api/reviews/{id}/pull/comments", async (string id, HttpContext ctx) =>
+        {
+            if (Writer(id, out var refusal) is not var (review, github, pull)) return refusal;
+            var body = await JsonSerializer.DeserializeAsync<CommentBody>(ctx.Request.Body, FactsJson.Options);
+            if (string.IsNullOrWhiteSpace(body?.Body)) return Results.BadRequest(new { message = "a comment needs a body" });
+            var text = body.Body;
+            if (body.Path is null) return await WriteAsync(review, $"commented on the conversation: {Excerpt(text)}", () => github.AddCommentAsync(pull.NodeId!, text, stopping.Token));
+            if (review.Result is not { } result) return Results.Conflict(new { message = "the review is not ready" });
+            var file = result.Changeset.Hunks.FirstOrDefault(h => h.Path == body.Path);
+            if (file is null || body.Hunk is not { } hunk || body.Last is not { } last || body.Side is not ("LEFT" or "RIGHT"))
+                return Results.BadRequest(new { message = "a comment on lines needs a path that the diff holds, a hunk, its last line and a side" });
+            DiffAnchor at;
+            try
+            {
+                at = ThreadPlacer.Anchor(ReviewPipeline.RepositoryPath(body.Path, result.Target.Root), file.Hunks, hunk, body.First ?? last, last, body.Side == "RIGHT");
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { message = ex.Message });
+            }
+            var where = $"{at.Path}:{(at.StartLine is { } start ? start + "-" : "")}{at.Line} {at.Side}";
+            if (body.Review != true) return await WriteAsync(review, $"commented on {where}: {Excerpt(text)}", () => github.AddSingleCommentAsync(pull.Number, review.Head, at, text, stopping.Token));
+            return await WriteAsync(review, $"added a review comment on {where}: {Excerpt(text)}", async () =>
+            {
+                // The pending review is created when the first comment needs one, on the review's head.
+                var pending = pull.Discussion?.Pending?.Id ?? await github.StartReviewAsync(pull.NodeId!, review.Head, stopping.Token);
+                await github.AddReviewThreadAsync(pending, at, text, stopping.Token);
+            });
+        });
+
+        web.MapPost("/api/reviews/{id}/pull/threads/{thread}/replies", async (string id, string thread, HttpContext ctx) =>
+        {
+            if (Writer(id, out var refusal) is not var (review, github, pull)) return refusal;
+            if (pull.Discussion?.Threads.FirstOrDefault(t => t.Id == thread) is not { } found) return Results.NotFound(new { message = $"#{pull.Number} has no thread {thread}" });
+            var body = await JsonSerializer.DeserializeAsync<ReplyBody>(ctx.Request.Body, FactsJson.Options);
+            if (string.IsNullOrWhiteSpace(body?.Body)) return Results.BadRequest(new { message = "a reply needs a body" });
+            // A reply joins the pending review when there is one and posts at once otherwise, as on GitHub.
+            var pending = pull.Discussion.Pending?.Id;
+            return await WriteAsync(review, $"replied{(pending is null ? "" : " in the pending review")} on {found.Path}: {Excerpt(body.Body)}", () => github.ReplyAsync(thread, body.Body, pending, stopping.Token));
+        });
+
+        web.MapPost("/api/reviews/{id}/pull/threads/{thread}/resolved", async (string id, string thread, HttpContext ctx) =>
+        {
+            if (Writer(id, out var refusal) is not var (review, github, pull)) return refusal;
+            if (pull.Discussion?.Threads.FirstOrDefault(t => t.Id == thread) is not { } found) return Results.NotFound(new { message = $"#{pull.Number} has no thread {thread}" });
+            var body = await JsonSerializer.DeserializeAsync<ResolvedBody>(ctx.Request.Body, FactsJson.Options);
+            if (body?.Resolved is not { } resolved) return Results.BadRequest(new { message = "resolved is required" });
+            return await WriteAsync(review, $"{(resolved ? "resolved" : "unresolved")} a thread on {found.Path}", () => github.ResolveAsync(thread, resolved, stopping.Token));
+        });
+
+        web.MapPost("/api/reviews/{id}/pull/review", async (string id, HttpContext ctx) =>
+        {
+            if (Writer(id, out var refusal) is not var (review, github, pull)) return refusal;
+            var body = await JsonSerializer.DeserializeAsync<SubmitBody>(ctx.Request.Body, FactsJson.Options);
+            if (body?.Event is not ("COMMENT" or "APPROVE" or "REQUEST_CHANGES") || body.Event is not { } kind)
+                return Results.BadRequest(new { message = "event must be COMMENT, APPROVE or REQUEST_CHANGES" });
+            var summary = body.Body ?? "";
+            // GitHub refuses these, so they are refused here before anything is sent. See docs/pull-requests.md section 8.3.
+            if (kind != "COMMENT" && pull.ViewerDidAuthor)
+                return Results.BadRequest(new { message = "GitHub does not let the author of a pull request approve it or request changes to it" });
+            var pending = pull.Discussion?.Pending;
+            if (kind != "APPROVE" && string.IsNullOrWhiteSpace(summary) && (pending?.Comments ?? 0) == 0)
+                return Results.BadRequest(new { message = "a comment or a request for changes needs a summary or comments" });
+            var what = kind switch { "APPROVE" => "approved", "REQUEST_CHANGES" => "requested changes", _ => "submitted a review" };
+            return await WriteAsync(review, $"{what} with {pending?.Comments ?? 0} comment(s): {Excerpt(summary)}",
+                () => github.SubmitReviewAsync(pull.NodeId!, pending?.Id, review.Head, kind, summary, stopping.Token));
+        });
+
+        web.MapDelete("/api/reviews/{id}/pull/review", async (string id) =>
+        {
+            if (Writer(id, out var refusal) is not var (review, github, pull)) return refusal;
+            if (pull.Discussion?.Pending is not { } pending) return Results.NotFound(new { message = $"you have no pending review on #{pull.Number}" });
+            return await WriteAsync(review, $"discarded the pending review with {pending.Comments} comment(s)", () => github.DeleteReviewAsync(pending.Id, stopping.Token));
+        });
+
+        web.MapPost("/api/markdown", async (HttpContext ctx) =>
+        {
+            if (options.GitHub is not { } github) return Results.NotFound(new { message = options.GitHubNotice ?? "GitHub is turned off" });
+            var body = await JsonSerializer.DeserializeAsync<MarkdownBody>(ctx.Request.Body, FactsJson.Options);
+            try
+            {
+                return Results.Json(new { html = await github.RenderMarkdownAsync(body?.Text ?? "", stopping.Token) }, FactsJson.Options);
+            }
+            catch (GitHubException ex)
+            {
+                return Results.Json(new { message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
             reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
 
@@ -809,6 +898,76 @@ public sealed class ReviewServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the review, the client and the snapshot that a write to a review's pull request needs, or null with the
+    /// answer that refuses the write: 404 for a review without a pull request, and 409 for a pull request that is closed
+    /// or merged, which is shown read-only. See <c>docs/pull-requests.md</c> section 8.
+    /// </summary>
+    private (Review Review, IGitHub GitHub, PullSnapshot Pull)? Writer(string id, out IResult refusal)
+    {
+        refusal = Results.NotFound();
+        if (!reviews.TryGetValue(id, out var review) || review.Pull is null || options.GitHub is not { } github || review.Snapshot is not { } pull) return null;
+        if (pull.State != "OPEN")
+        {
+            refusal = Results.Conflict(new { message = $"#{pull.Number} is {pull.State.ToLowerInvariant()}, so it is read-only" });
+            return null;
+        }
+        if (pull.NodeId is null)
+        {
+            refusal = Results.Conflict(new { message = $"GitHub has not identified #{pull.Number} yet" });
+            return null;
+        }
+        return (review, github, pull);
+    }
+
+    /// <summary>
+    /// Runs a write to a review's pull request and logs what was written, where, and GitHub's answer, since the terminal
+    /// is the record of what the tool did as the reviewer. The pull request is then read again at once for every review
+    /// of it, so that the pages show the write. A refusal from GitHub is answered with 502 and GitHub's message. See
+    /// <c>docs/pull-requests.md</c> section 8.4.
+    /// </summary>
+    private async Task<IResult> WriteAsync(Review review, string what, Func<Task> write)
+    {
+        var number = review.Pull!.Value;
+        try
+        {
+            await write();
+            options.Log?.Invoke($"  {review.Id} #{number}: {what}: done");
+            return Results.Json(new { ok = true }, FactsJson.Options);
+        }
+        catch (GitHubException ex)
+        {
+            options.Log?.Invoke($"  {review.Id} #{number}: {what}: GitHub refused: {ex.Message}");
+            return Results.Json(new { message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+        }
+        finally
+        {
+            await RereadAsync(number);
+        }
+    }
+
+    /// <summary>Reads a pull request again and sends the snapshot to every review of it whose pages have not seen it.</summary>
+    private async Task RereadAsync(int number)
+    {
+        if (options.GitHub is not { } github) return;
+        try
+        {
+            if (await github.GetPullAsync(number, stopping.Token) is not { } snapshot) return;
+            foreach (var r in reviews.Values.Where(r => r.Pull == number)) PublishSnapshot(r, snapshot);
+        }
+        catch (GitHubException ex)
+        {
+            options.Log?.Invoke($"  #{number} could not be read again after a write: {ex.Message}");
+        }
+    }
+
+    /// <summary>Returns the start of a text that the log quotes, on one line.</summary>
+    private static string Excerpt(string text)
+    {
+        var line = string.Join(' ', text.Split((char[])['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+        return "\"" + (line.Length > 60 ? line[..57] + "..." : line) + "\"";
+    }
+
     private IResult Page(string name, string contentType) => Results.Text(ReadViewer(name), contentType);
 
     /// <summary>
@@ -851,6 +1010,21 @@ public sealed class ReviewServer : IAsyncDisposable
     private sealed record NarrativesBody(string? Key);
 
     private sealed record ReviewedBody(List<string>? Paths, bool? Reviewed);
+
+    /// <summary>
+    /// Holds a new comment. Without a path it goes to the conversation. With a path it is on lines of one side of a hunk
+    /// of that file, given by their indexes in the hunk, and the review flag adds it to the pending review rather than
+    /// posting it at once.
+    /// </summary>
+    private sealed record CommentBody(string? Body, string? Path, int? Hunk, int? First, int? Last, string? Side, bool? Review);
+
+    private sealed record ReplyBody(string? Body);
+
+    private sealed record ResolvedBody(bool? Resolved);
+
+    private sealed record SubmitBody(string? Event, string? Body);
+
+    private sealed record MarkdownBody(string? Text);
 
     /// <summary>
     /// Represents the writing of one result's narratives: the run of the result, the plan and its inputs once they are

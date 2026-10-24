@@ -48,6 +48,7 @@ public class GitHubTests
         Assert.Equal(("MERGED", false, 23, false), (pull.State, pull.IsDraft, pull.Commits, pull.ViewerDidAuthor));
         Assert.Equal(("153adc66eef2af5fe51715ea7f571f3514c50bec", "316e7a80fba9ba68b45cb55e0ade5ab707a54cbd"), (pull.HeadOid, pull.BaseOid));
         Assert.Null(pull.LatestReviewCommit);
+        Assert.StartsWith("PR_", pull.NodeId);
 
         // The description comes first, and the timeline follows in GitHub's order.
         var discussion = pull.Discussion!;
@@ -164,6 +165,91 @@ public class GitHubTests
         Assert.Equal((0, 0), ThreadPlacer.Find([new Hunk("@@ -0,0 +1,2 @@", [["+", "x"], ["+", "y"]])], right: true, 1));
         Assert.Equal((1, 1), ThreadPlacer.Find([new Hunk("@@ -1 +1 @@", [["-", "a"], ["+", "b"]]), new Hunk("@@ -9,2 +9,2 @@", [[" ", "c"], ["-", "d"], ["+", "e"]])], right: false, 10));
         Assert.Null(ThreadPlacer.Find([new Hunk("@@ -1 +1 @@", [["-", "a"], ["+", "b"]])], right: true, 2));
+    }
+
+    [Fact]
+    public async Task WritesSendTheRequestsGitHubExpects()
+    {
+        var sent = new List<(string Method, string Uri, JsonNode? Body)>();
+        using var client = Client(r =>
+        {
+            var text = r.Content?.ReadAsStringAsync().Result;
+            var body = text is null ? null : JsonNode.Parse(text);
+            sent.Add((r.Method.Method, r.RequestUri!.ToString(), body));
+            if (r.RequestUri.AbsolutePath == "/markdown") return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<p><strong>hi</strong></p>", Encoding.UTF8, "text/html") };
+            if (body?["operationName"]?.GetValue<string>() == "StartReview") return Json("""{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_new"}}}}""");
+            return Json("""{"data":{}}""");
+        });
+        var line = new DiffAnchor("app/Thing.cs", "RIGHT", 12);
+        var lines = new DiffAnchor("app/Thing.cs", "LEFT", 13, "LEFT", 11);
+
+        await client.AddCommentAsync("PR_1", "hello");
+        await client.AddSingleCommentAsync(7, "abc", lines, "on lines");
+        Assert.Equal("PRR_new", await client.StartReviewAsync("PR_1", "abc"));
+        await client.AddReviewThreadAsync("PRR_new", line, "in the review");
+        await client.ReplyAsync("T1", "reply", "PRR_new");
+        await client.ResolveAsync("T1", resolved: false);
+        await client.SubmitReviewAsync("PR_1", "PRR_new", "abc", "REQUEST_CHANGES", "please");
+        await client.SubmitReviewAsync("PR_1", null, "abc", "APPROVE", "");
+        await client.DeleteReviewAsync("PRR_new");
+        Assert.Equal("<p><strong>hi</strong></p>", await client.RenderMarkdownAsync("**hi**"));
+
+        // Each GraphQL write names its mutation in the embedded document and passes its variables.
+        var graphql = sent.Where(s => s.Uri == "https://api.github.com/graphql").Select(s => s.Body!).ToList();
+        Assert.All(graphql, b => Assert.Equal(GitHubClient.Query("write.graphql"), b["query"]!.GetValue<string>()));
+        string Vars(JsonNode b) => b["operationName"] + " " + b["variables"]!.ToJsonString();
+        Assert.Equal(
+        [
+            """AddComment {"subject":"PR_1","body":"hello"}""",
+            """StartReview {"pull":"PR_1","commit":"abc"}""",
+            """AddThread {"review":"PRR_new","path":"app/Thing.cs","body":"in the review","line":12,"side":"RIGHT","startLine":null,"startSide":null}""",
+            """Reply {"thread":"T1","body":"reply","review":"PRR_new"}""",
+            """Unresolve {"thread":"T1"}""",
+            """Submit {"review":"PRR_new","event":"REQUEST_CHANGES","body":"please"}""",
+            """CreateAndSubmit {"pull":"PR_1","commit":"abc","event":"APPROVE","body":""}""",
+            """Discard {"review":"PRR_new"}""",
+        ], graphql.Select(Vars));
+
+        // A single comment on lines and a Markdown preview go through REST.
+        var single = sent.Single(s => s.Uri.EndsWith("/pulls/7/comments"));
+        Assert.Equal(("POST", "https://api.github.com/repos/cli/cli/pulls/7/comments"), (single.Method, single.Uri));
+        Assert.Equal("""{"body":"on lines","commit_id":"abc","path":"app/Thing.cs","line":13,"side":"LEFT","start_line":11,"start_side":"LEFT"}""", single.Body!.ToJsonString());
+        var markdown = sent.Single(s => s.Uri == "https://api.github.com/markdown");
+        Assert.Equal("""{"text":"**hi**","mode":"gfm","context":"cli/cli"}""", markdown.Body!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task AWriteGitHubRefusesReportsItsMessage()
+    {
+        using var client = Client(_ => Json("""{"data":{"addPullRequestReview":null},"errors":[{"message":"User can only have one pending review per pull request"}]}"""));
+        var ex = await Assert.ThrowsAsync<GitHubException>(() => client.StartReviewAsync("PR_1", "abc"));
+        Assert.Contains("User can only have one pending review per pull request", ex.Message);
+    }
+
+    [Fact]
+    public void ALineOrRangeOfAHunkMapsToTheLineAndSideGitHubTakesAndBack()
+    {
+        var hunks = OneHunk("C.cs")[0].Hunks;
+        Assert.Equal(new DiffAnchor("src/C.cs", "RIGHT", 12), ThreadPlacer.Anchor("src/C.cs", hunks, 0, 3, 3, right: true));
+        Assert.Equal(new DiffAnchor("src/C.cs", "LEFT", 11), ThreadPlacer.Anchor("src/C.cs", hunks, 0, 1, 1, right: false));
+        // A context line has a number on each side.
+        Assert.Equal(new DiffAnchor("src/C.cs", "LEFT", 12), ThreadPlacer.Anchor("src/C.cs", hunks, 0, 4, 4, right: false));
+        Assert.Equal(new DiffAnchor("src/C.cs", "RIGHT", 13, "RIGHT", 11), ThreadPlacer.Anchor("src/C.cs", hunks, 0, 2, 4, right: true));
+        Assert.Throws<ArgumentException>(() => ThreadPlacer.Anchor("src/C.cs", hunks, 0, 2, 2, right: false));
+        Assert.Throws<ArgumentException>(() => ThreadPlacer.Anchor("src/C.cs", hunks, 0, 1, 1, right: true));
+        Assert.Throws<ArgumentException>(() => ThreadPlacer.Anchor("src/C.cs", hunks, 0, 4, 2, right: true));
+        Assert.Throws<ArgumentException>(() => ThreadPlacer.Anchor("src/C.cs", hunks, 1, 0, 0, right: true));
+
+        // Every line placed as a comment is found again where it was written.
+        for (var i = 0; i < hunks[0].Lines.Count; i++)
+            foreach (var right in new[] { true, false })
+                if (hunks[0].Lines[i][0] != (right ? "-" : "+"))
+                    Assert.Equal((0, i), ThreadPlacer.Find(hunks, right, ThreadPlacer.Anchor("C.cs", hunks, 0, i, i, right).Line));
+
+        // The changeset's paths are relative to the review's directory, and GitHub's to the repository's top.
+        Assert.Equal("src/C.cs", Vibecheck.Reviewing.ReviewPipeline.RepositoryPath("C.cs", "src"));
+        Assert.Equal("C.cs", Vibecheck.Reviewing.ReviewPipeline.ChangesetPath(Vibecheck.Reviewing.ReviewPipeline.RepositoryPath("C.cs", "src"), "src"));
+        Assert.Equal("C.cs", Vibecheck.Reviewing.ReviewPipeline.RepositoryPath("C.cs", "."));
     }
 
     [Fact]

@@ -174,6 +174,100 @@ public class ReviewServerTests
     }
 
     [Fact]
+    public async Task WritesToThePullRequestAsGitHubExpectsAndRefusesWhatGitHubWould()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        var opened = Snapshot(3, after, before) with { NodeId = "PR_3", ViewerDidAuthor = true, Discussion = OneThread("app/" + TestData.X1) };
+        var github = new FakeGitHub
+        {
+            Pulls = [new PullSummary(3, "Call", "u", "author", false, after, "main", null, null, false)],
+            Snapshots = { [3] = opened },
+        };
+        await using var server = new ReviewServer(Options(repo) with { Directory = Path.Combine(repo.Path, "app"), GitHub = github });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        await ReadEventsAsync(client, api + "/events");
+        async Task<(HttpStatusCode Status, string Body)> Post(string path, object body)
+        {
+            using var r = await client.PostAsJsonAsync(api + path, body);
+            return (r.StatusCode, await r.Content.ReadAsStringAsync());
+        }
+
+        // A comment on the head's first line of the changed file goes to GitHub by its path from the repository's top.
+        Assert.Equal(HttpStatusCode.OK, (await Post("/pull/comments", new { body = "single", path = TestData.X1, hunk = 0, last = 1, side = "RIGHT" })).Status);
+        // The first review comment starts the pending review on the review's head, and the next joins it.
+        github.Snapshots[3] = opened with { Discussion = opened.Discussion! with { Pending = new PendingReview("PRR_p", 1) } };
+        await Post("/pull/comments", new { body = "first", path = TestData.X1, hunk = 0, last = 1, side = "RIGHT", review = true });
+        await Post("/pull/comments", new { body = "second", path = TestData.X1, hunk = 0, first = 0, last = 0, side = "LEFT", review = true });
+        await Post("/pull/comments", new { body = "to everyone" });
+        await Post("/pull/threads/T1/replies", new { body = "reply" });
+        await Post("/pull/threads/T1/resolved", new { resolved = true });
+        await Post("/pull/review", new { @event = "COMMENT", body = "" });
+        var discarded = await client.SendAsync(new HttpRequestMessage(HttpMethod.Delete, api + "/pull/review") { Content = JsonContent.Create(new { }) });
+        Assert.Equal(HttpStatusCode.OK, discarded.StatusCode);
+        Assert.Equal(
+        [
+            $"single 3 {after} app/{TestData.X1} RIGHT 1 - single",
+            $"start PR_3 {after}",
+            $"thread PRR_new app/{TestData.X1} RIGHT 1 - first",
+            $"thread PRR_p app/{TestData.X1} LEFT 1 - second",
+            "comment PR_3 to everyone",
+            "reply T1 PRR_p reply",
+            "resolve T1 True",
+            $"submit PR_3 PRR_p {after} COMMENT ",
+            "delete PRR_p",
+        ], github.Writes);
+        // Each write reads the pull request again at once.
+        Assert.True(github.Reads >= github.Writes.Count);
+
+        // These are refused before anything is sent: the author's approval, a review with nothing in it, a line the
+        // diff does not hold, a thread the pull request does not have, and an empty comment.
+        github.Snapshots[3] = opened;
+        await Post("/pull/refresh", new { });
+        var writes = github.Writes.Count;
+        var approval = await Post("/pull/review", new { @event = "APPROVE", body = "" });
+        Assert.Equal(HttpStatusCode.BadRequest, approval.Status);
+        Assert.Contains("author", approval.Body, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post("/pull/review", new { @event = "COMMENT", body = " " })).Status);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post("/pull/comments", new { body = "x", path = TestData.X1, hunk = 0, last = 0, side = "RIGHT" })).Status);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post("/pull/comments", new { body = "x", path = "Elsewhere.cs", hunk = 0, last = 0, side = "RIGHT" })).Status);
+        Assert.Equal(HttpStatusCode.NotFound, (await Post("/pull/threads/T9/replies", new { body = "x" })).Status);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post("/pull/comments", new { body = "" })).Status);
+        Assert.Equal(writes, github.Writes.Count);
+
+        // GitHub's own refusal reaches the page with its message.
+        github.WriteFail = new GitHubException("GitHub answered 422: Validation Failed");
+        var refused = await Post("/pull/comments", new { body = "x" });
+        Assert.Equal(HttpStatusCode.BadGateway, refused.Status);
+        Assert.Contains("Validation Failed", refused.Body, StringComparison.Ordinal);
+        github.WriteFail = null;
+
+        // A write without a JSON body, or without the session's cookie, is refused.
+        using var form = await client.PostAsync(api + "/pull/comments", new StringContent("body=x", Encoding.UTF8, "application/x-www-form-urlencoded"));
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, form.StatusCode);
+        using var stranger = new HttpClient();
+        using var forged = await stranger.PostAsJsonAsync(api + "/pull/comments", new { body = "x" });
+        Assert.Equal(HttpStatusCode.Forbidden, forged.StatusCode);
+
+        // Markdown previews render through GitHub.
+        using var preview = await client.PostAsJsonAsync(server.BaseAddress + "/api/markdown", new { text = "**x**" });
+        Assert.Equal("<strong>**x**</strong>", (await preview.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("html").GetString());
+
+        // A merged pull request is read-only.
+        github.Snapshots[3] = opened with { State = "MERGED" };
+        await Post("/pull/refresh", new { });
+        Assert.Equal(HttpStatusCode.Conflict, (await Post("/pull/comments", new { body = "x" })).Status);
+        Assert.Equal(writes, github.Writes.Count);
+    }
+
+    [Fact]
     public async Task AttachesARangeWhoseHeadIsAPullRequestsHead()
     {
         using var repo = new TempRepo();
@@ -241,7 +335,10 @@ public class ReviewServerTests
         Assert.Equal("gh is missing", (await refused.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString());
     }
 
-    /// <summary>Answers as GitHub would from pull requests held in memory, counting the snapshots it is asked for.</summary>
+    /// <summary>
+    /// Answers as GitHub would from pull requests held in memory, counting the snapshots it is asked for and recording
+    /// each write as a line of text.
+    /// </summary>
     private sealed class FakeGitHub : IGitHub
     {
         public GitHubRepository Repository { get; } = new("github.com", "o", "r");
@@ -261,6 +358,28 @@ public class ReviewServerTests
         }
 
         public Task<IReadOnlyList<PullFile>> GetPullFilesAsync(int number, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<PullFile>>(Files);
+
+        public List<string> Writes { get; } = [];
+        public Exception? WriteFail { get; set; }
+
+        private Task Write(string what)
+        {
+            if (WriteFail is not null) throw WriteFail;
+            Writes.Add(what);
+            return Task.CompletedTask;
+        }
+
+        private static string Where(DiffAnchor at) => $"{at.Path} {at.Side} {(at.StartLine is { } s ? s + "-" : "")}{at.Line}";
+
+        public Task AddCommentAsync(string pullId, string body, CancellationToken ct = default) => Write($"comment {pullId} {body}");
+        public Task AddSingleCommentAsync(int number, string commit, DiffAnchor at, string body, CancellationToken ct = default) => Write($"single {number} {commit} {Where(at)} - {body}");
+        public async Task<string> StartReviewAsync(string pullId, string commit, CancellationToken ct = default) { await Write($"start {pullId} {commit}"); return "PRR_new"; }
+        public Task AddReviewThreadAsync(string reviewId, DiffAnchor at, string body, CancellationToken ct = default) => Write($"thread {reviewId} {Where(at)} - {body}");
+        public Task ReplyAsync(string threadId, string body, string? reviewId, CancellationToken ct = default) => Write($"reply {threadId} {reviewId} {body}");
+        public Task ResolveAsync(string threadId, bool resolved, CancellationToken ct = default) => Write($"resolve {threadId} {resolved}");
+        public Task SubmitReviewAsync(string pullId, string? reviewId, string commit, string @event, string body, CancellationToken ct = default) => Write($"submit {pullId} {reviewId} {commit} {@event} {body}");
+        public Task DeleteReviewAsync(string reviewId, CancellationToken ct = default) => Write($"delete {reviewId}");
+        public Task<string> RenderMarkdownAsync(string text, CancellationToken ct = default) => Task.FromResult($"<strong>{text}</strong>");
     }
 
     private static ReviewServerOptions Options(TempRepo repo) => new()

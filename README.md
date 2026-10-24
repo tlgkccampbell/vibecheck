@@ -11,8 +11,8 @@ The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step 
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
 Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
-its first three phases, reviewed files and the full diff, opening pull requests, and reading
-the discussion, are built.
+its first four phases, reviewed files and the full diff, opening pull requests, reading the
+discussion, and writing, are built.
 
 ## Layout
 
@@ -138,7 +138,16 @@ diff lines they belong to, and outdated threads in a list at the top of their fi
 Blocks with unresolved threads carry a count. Your pending review is read back, and its
 comments are marked pending. Bodies are GitHub's HTML, sanitized again in the page,
 which runs under a Content-Security-Policy.
-`--no-github` leaves GitHub out. Nothing is written to GitHub.
+
+Click a line number in a diff to comment on that line, and Shift-click another on the same
+side to comment on the lines between. **Add single comment** posts at once, and **Start a
+review** gathers comments in a pending review, as on GitHub. Threads take replies and can be
+resolved, comment boxes preview through GitHub's Markdown renderer, and **Suggest change**
+fills in a suggestion block. **Review** in the bar submits the pending review as a comment,
+an approval or a request for changes, or discards it. Nothing is posted except by one of
+these actions, and the terminal logs each write with GitHub's answer. A closed or merged pull
+request is read-only.
+`--no-github` leaves GitHub out.
 
 ## Using the tool
 

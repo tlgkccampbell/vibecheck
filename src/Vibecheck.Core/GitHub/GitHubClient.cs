@@ -7,9 +7,10 @@ using System.Text.Json;
 namespace Vibecheck.GitHub;
 
 /// <summary>
-/// Reads pull requests from GitHub over HTTPS, as the reviewer, with a token the server holds in memory. It reads
-/// through GraphQL, which returns a pull request's state in one query, and lists files through REST. The queries are
-/// embedded from <c>GitHub/Queries</c>. See <c>docs/pull-requests.md</c> section 3.1.
+/// Reads and writes pull requests on GitHub over HTTPS, as the reviewer, with a token the server holds in memory. It
+/// reads through GraphQL, which returns a pull request's state in one query, and lists files through REST. It writes
+/// through GraphQL, except single comments on lines and Markdown previews, which only REST offers. The queries and
+/// mutations are embedded from <c>GitHub/Queries</c>. See <c>docs/pull-requests.md</c> sections 3.1 and 8.
 /// </summary>
 public sealed class GitHubClient : IGitHub, IDisposable
 {
@@ -52,6 +53,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
         var variables = new Dictionary<string, object?> { ["owner"] = Repository.Owner, ["name"] = Repository.Name, ["number"] = number };
         var data = await QueryAsync("pull.graphql", variables, ct);
         if (data.GetProperty("repository").GetProperty("pullRequest") is not { ValueKind: JsonValueKind.Object } pr) return null;
+        var nodeId = Str(pr, "id");
         var latest = pr.GetProperty("viewerLatestReview");
         var reviewed = latest.ValueKind == JsonValueKind.Object;
         var timeline = new List<PullItem> { new("description", "description", Login(pr), Time(pr, "createdAt"), Str(pr, "url")) { BodyHtml = Str(pr, "bodyHTML") } };
@@ -75,7 +77,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
             if (data.GetProperty("repository").GetProperty("pullRequest") is not { ValueKind: JsonValueKind.Object } next) break;
             pr = next;
         }
-        return snapshot with { Discussion = new PullDiscussion(timeline, threads, pending) };
+        return snapshot with { Discussion = new PullDiscussion(timeline, threads, pending), NodeId = nodeId };
     }
 
     /// <summary>
@@ -150,12 +152,63 @@ public sealed class GitHubClient : IGitHub, IDisposable
         return result;
     }
 
+    public Task AddCommentAsync(string pullId, string body, CancellationToken ct = default) =>
+        MutateAsync("AddComment", new() { ["subject"] = pullId, ["body"] = body }, ct);
+
+    public async Task AddSingleCommentAsync(int number, string commit, DiffAnchor at, string body, CancellationToken ct = default)
+    {
+        var fields = new Dictionary<string, object> { ["body"] = body, ["commit_id"] = commit, ["path"] = at.Path, ["line"] = at.Line, ["side"] = at.Side };
+        if (at.StartLine is { } start) (fields["start_line"], fields["start_side"]) = (start, at.StartSide ?? at.Side);
+        using var _ = await SendAsync(Post($"repos/{Repository.Owner}/{Repository.Name}/pulls/{number}/comments", fields), ct);
+    }
+
+    public async Task<string> StartReviewAsync(string pullId, string commit, CancellationToken ct = default)
+    {
+        var data = await MutateAsync("StartReview", new() { ["pull"] = pullId, ["commit"] = commit }, ct);
+        return Str(data.GetProperty("addPullRequestReview").GetProperty("pullRequestReview"), "id") ?? throw new GitHubException("GitHub did not return the new review.");
+    }
+
+    public Task AddReviewThreadAsync(string reviewId, DiffAnchor at, string body, CancellationToken ct = default) =>
+        MutateAsync("AddThread", new()
+        {
+            ["review"] = reviewId, ["path"] = at.Path, ["body"] = body, ["line"] = at.Line, ["side"] = at.Side,
+            ["startLine"] = at.StartLine, ["startSide"] = at.StartLine is null ? null : at.StartSide ?? at.Side,
+        }, ct);
+
+    public Task ReplyAsync(string threadId, string body, string? reviewId, CancellationToken ct = default) =>
+        MutateAsync("Reply", new() { ["thread"] = threadId, ["body"] = body, ["review"] = reviewId }, ct);
+
+    public Task ResolveAsync(string threadId, bool resolved, CancellationToken ct = default) =>
+        MutateAsync(resolved ? "Resolve" : "Unresolve", new() { ["thread"] = threadId }, ct);
+
+    public Task SubmitReviewAsync(string pullId, string? reviewId, string commit, string @event, string body, CancellationToken ct = default) =>
+        reviewId is not null
+            ? MutateAsync("Submit", new() { ["review"] = reviewId, ["event"] = @event, ["body"] = body }, ct)
+            : MutateAsync("CreateAndSubmit", new() { ["pull"] = pullId, ["commit"] = commit, ["event"] = @event, ["body"] = body }, ct);
+
+    public Task DeleteReviewAsync(string reviewId, CancellationToken ct = default) =>
+        MutateAsync("Discard", new() { ["review"] = reviewId }, ct);
+
+    public Task<string> RenderMarkdownAsync(string text, CancellationToken ct = default) =>
+        SendTextAsync(Post("markdown", new Dictionary<string, object> { ["text"] = text, ["mode"] = "gfm", ["context"] = Repository.NameWithOwner }), ct);
+
     public void Dispose() => http.Dispose();
 
-    /// <summary>Runs an embedded GraphQL query with variables and returns its <c>data</c>, throwing when GitHub reports an error.</summary>
-    private async Task<JsonElement> QueryAsync(string name, object variables, CancellationToken ct)
+    /// <summary>Runs one of the mutations embedded in <c>write.graphql</c> and returns its <c>data</c>.</summary>
+    private Task<JsonElement> MutateAsync(string operation, Dictionary<string, object?> variables, CancellationToken ct) =>
+        QueryAsync("write.graphql", variables, ct, operation);
+
+    /// <summary>Returns a REST request that posts fields as JSON to a path under the API's address.</summary>
+    private HttpRequestMessage Post(string path, Dictionary<string, object> fields) =>
+        new(HttpMethod.Post, new Uri(api, path)) { Content = new StringContent(JsonSerializer.Serialize(fields), Encoding.UTF8, "application/json") };
+
+    /// <summary>
+    /// Runs an embedded GraphQL document with variables, or the named operation of a document that holds several, and
+    /// returns its <c>data</c>, throwing when GitHub reports an error.
+    /// </summary>
+    private async Task<JsonElement> QueryAsync(string name, object variables, CancellationToken ct, string? operation = null)
     {
-        var body = JsonSerializer.Serialize(new { query = Query(name), variables });
+        var body = JsonSerializer.Serialize(new { query = Query(name), variables, operationName = operation });
         var request = new HttpRequestMessage(HttpMethod.Post, graphql) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         using var doc = await SendAsync(request, ct);
         if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
@@ -164,7 +217,10 @@ public sealed class GitHubClient : IGitHub, IDisposable
     }
 
     /// <summary>Sends a request and returns the parsed answer, throwing on a refusal, with the wait GitHub asks for when it limits the rate.</summary>
-    private async Task<JsonDocument> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    private async Task<JsonDocument> SendAsync(HttpRequestMessage request, CancellationToken ct) => JsonDocument.Parse(await SendTextAsync(request, ct));
+
+    /// <summary>Sends a request and returns the text of the answer, throwing on a refusal, with the wait GitHub asks for when it limits the rate.</summary>
+    private async Task<string> SendTextAsync(HttpRequestMessage request, CancellationToken ct)
     {
         HttpResponseMessage response;
         try
@@ -182,7 +238,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
         using (response)
         {
             var text = await response.Content.ReadAsStringAsync(ct);
-            if (response.IsSuccessStatusCode) return JsonDocument.Parse(text);
+            if (response.IsSuccessStatusCode) return text;
             var message = Message(text) ?? response.ReasonPhrase ?? response.StatusCode.ToString();
             if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.Forbidden && RetryAfter(response) is { } wait)
                 throw new GitHubRateLimitException($"GitHub limited the rate of requests: {message}", wait);

@@ -35,6 +35,9 @@ public sealed record PullSnapshot(int Number, string Title, string Url, string S
 {
     /// <summary>Gets the pull request's description, timeline, review threads and pending review, or <see langword="null"/> when they were not read.</summary>
     public PullDiscussion? Discussion { get; init; }
+
+    /// <summary>Gets GitHub's node identifier of the pull request, which writes through GraphQL name it by.</summary>
+    public string? NodeId { get; init; }
 }
 
 /// <summary>
@@ -96,6 +99,14 @@ public sealed record ThreadComment(string Id, string? Author, string BodyHtml, D
 /// <summary>The viewer's pending review: its identifier, which later writes add to, and how many comments it holds.</summary>
 public sealed record PendingReview(string Id, int Comments);
 
+/// <summary>
+/// Locates a comment in a pull request's diff as GitHub's API takes it: the path relative to the repository's top, and
+/// the side and line number of the comment's last line. A comment on several lines also has the side and line of its
+/// first line. The side is <c>LEFT</c> for lines at base and <c>RIGHT</c> for lines at head. See
+/// <c>docs/pull-requests.md</c> section 8.1.
+/// </summary>
+public sealed record DiffAnchor(string Path, string Side, int Line, string? StartSide = null, int? StartLine = null);
+
 /// <summary>A changed file of a pull request as GitHub lists it, with its path at base when GitHub reports it renamed. Paths are relative to the repository's top.</summary>
 public sealed record PullFile(string Path, string Status, string? PreviousPath);
 
@@ -110,8 +121,8 @@ public sealed class GitHubRateLimitException(string message, TimeSpan retryAfter
 }
 
 /// <summary>
-/// Reads pull requests from GitHub. <see cref="GitHubClient"/> is the real one, and tests answer from recorded
-/// responses. See <c>docs/pull-requests.md</c> section 3.1.
+/// Reads pull requests from GitHub and writes comments and reviews to them as the viewer. <see cref="GitHubClient"/> is
+/// the real one, and tests answer from recorded responses. See <c>docs/pull-requests.md</c> section 3.1.
 /// </summary>
 public interface IGitHub
 {
@@ -132,4 +143,44 @@ public interface IGitHub
     /// <summary>Returns the changed files of a pull request as GitHub lists them.</summary>
     /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
     Task<IReadOnlyList<PullFile>> GetPullFilesAsync(int number, CancellationToken ct = default);
+
+    /// <summary>Adds a comment to a pull request's conversation, given the pull request's node identifier.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task AddCommentAsync(string pullId, string body, CancellationToken ct = default);
+
+    /// <summary>Posts a comment on lines of a pull request's diff at once, outside any review, anchored to a commit.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task AddSingleCommentAsync(int number, string commit, DiffAnchor at, string body, CancellationToken ct = default);
+
+    /// <summary>Creates the viewer's pending review on a pull request, anchored to a commit, and returns its identifier.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task<string> StartReviewAsync(string pullId, string commit, CancellationToken ct = default);
+
+    /// <summary>Adds a comment on lines of the diff to the viewer's pending review, which starts a new thread.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task AddReviewThreadAsync(string reviewId, DiffAnchor at, string body, CancellationToken ct = default);
+
+    /// <summary>Replies to a review thread, as part of the viewer's pending review when one is given and at once otherwise.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task ReplyAsync(string threadId, string body, string? reviewId, CancellationToken ct = default);
+
+    /// <summary>Resolves a review thread, or unresolves it.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task ResolveAsync(string threadId, bool resolved, CancellationToken ct = default);
+
+    /// <summary>
+    /// Submits the viewer's pending review with an event and a summary, or creates and submits a review anchored to a
+    /// commit in one call when there is no pending review. The event is <c>COMMENT</c>, <c>APPROVE</c> or
+    /// <c>REQUEST_CHANGES</c>.
+    /// </summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task SubmitReviewAsync(string pullId, string? reviewId, string commit, string @event, string body, CancellationToken ct = default);
+
+    /// <summary>Deletes the viewer's pending review with its comments.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task DeleteReviewAsync(string reviewId, CancellationToken ct = default);
+
+    /// <summary>Returns Markdown rendered as HTML the way GitHub renders it in the repository.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task<string> RenderMarkdownAsync(string text, CancellationToken ct = default);
 }

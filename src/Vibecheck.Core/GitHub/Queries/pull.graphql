@@ -1,6 +1,7 @@
 query($owner: String!, $name: String!, $number: Int!, $threads: Boolean = true, $threadsAfter: String, $timeline: Boolean = true, $timelineAfter: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      id
       number
       title
       url

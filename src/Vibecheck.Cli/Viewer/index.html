@@ -450,6 +450,33 @@
   svg#stage .talk-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
   svg#stage .talk-icon { fill: var(--accent); }
   svg#stage .talk-text { fill: var(--accent); font-size: 9px; font-weight: 600; }
+  /* Comment boxes, the review box and line selection, which write to the pull request through the server. */
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.1); }
+  .btn.danger, .link.danger { color: var(--removed); border-color: var(--removed); }
+  .composer { display: grid; gap: 6px; font-family: var(--sans); font-size: 13px; white-space: normal; }
+  .composer-tools { display: flex; align-items: center; gap: 10px; }
+  .composer-tools .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 10px; }
+  .composer-text { width: 100%; min-height: 80px; resize: vertical; font: 13px var(--code); color: var(--fg); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 4px; padding: 6px 8px; }
+  .composer-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .composer-preview { min-height: 80px; border: 1px solid var(--line); border-radius: 4px; }
+  .composer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .composer-actions .spacer { flex: 1; }
+  .composer-error { color: var(--removed); font-size: 12.5px; }
+  .composer-title { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .line-composer { border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); padding: 8px 10px; }
+  .thread-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+  .thread-actions .composer { flex: 1; }
+  .reply-open { flex: 1; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; color: var(--muted); cursor: text; font-size: 13px; }
+  table.diff td.ln.pick { cursor: pointer; }
+  table.diff td.ln.pick:hover { color: var(--accent); background: var(--bg); }
+  table.diff td.picked { box-shadow: inset 3px 0 0 var(--accent); }
+  table.diff td.code.picked { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+  .reviewbox { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); display: grid; gap: 8px; }
+  .review-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; }
+  .review-choices { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+  .review-choices label.blocked { color: var(--muted); text-decoration: line-through; }
+  .confirm { display: inline-flex; align-items: center; gap: 8px; color: var(--removed); font-size: 13px; }
   .loading { padding: 40px; text-align: center; color: var(--muted); font-family: var(--mono); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -482,6 +509,7 @@
 </div>
 <div class="notice" id="notice" role="status" hidden></div>
 <div class="pullbar" id="pullbar" hidden></div>
+<div class="reviewbox" id="reviewbox" hidden></div>
 <div class="notice ready" id="pushnotice" role="status" hidden></div>
 <div class="summary" id="summary" aria-live="polite" hidden></div>
 

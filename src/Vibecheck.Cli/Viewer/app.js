@@ -733,6 +733,8 @@
     opts: { threshold: "1", externals: false, dim: true, mute: true, talk: false },
     // The tab the page shows: "map" or "conversation".
     tab: "map",
+    // The lines selected to comment on: a path, a hunk index, a side, and the first and last line indexes, or null.
+    compose: null,
     // The reviewed files whose diffs the reader has shown, by path.
     expanded: new Set(),
     current: null, // { level, layout }
@@ -1047,14 +1049,29 @@
     const body = el("tbody");
     const lit = highlightHunk(path, hunk.lines);
     const text = (i) => i === null ? null : hunk.lines[i][1];
+    // While the pull request takes comments, a line number selects its line to comment on, and Shift extends the selection.
+    const writable = canWrite() && index !== undefined;
+    const c = state.compose && state.compose.path === path && state.compose.hunk === index ? state.compose : null;
+    const picked = (side, i) => c && c.side === side && i !== null && i >= c.first && i <= c.last;
+    const number = (side, i, n, kind) => {
+      const td = el("td", { class: "ln " + kind + (writable && i !== null ? " pick" : "") + (picked(side, i) ? " picked" : "") }, i === null ? "" : String(n));
+      if (writable && i !== null) {
+        td.title = "Comment on this line. Shift-click to select a range.";
+        td.addEventListener("click", (ev) => pick(path, index, side, i, ev.shiftKey));
+      }
+      return td;
+    };
     for (const row of rows) {
       const lk = row.l === null ? "empty" : row.kind === "ctx" ? "ctx" : "del";
       const rk = row.r === null ? "empty" : row.kind === "ctx" ? "ctx" : "add";
-      body.append(el("tr", {},
-        el("td", { class: "ln " + lk }, row.l === null ? "" : String(la++)),
-        codeCell(lk, text(row.l), lit && row.l !== null ? lit.left[row.l] : null),
-        el("td", { class: "ln " + rk }, row.r === null ? "" : String(lb++)),
-        codeCell(rk, text(row.r), lit && row.r !== null ? lit.right[row.r] : null)));
+      const left = codeCell(lk, text(row.l), lit && row.l !== null ? lit.left[row.l] : null), right = codeCell(rk, text(row.r), lit && row.r !== null ? lit.right[row.r] : null);
+      if (picked("LEFT", row.l)) left.classList.add("picked");
+      if (picked("RIGHT", row.r)) right.classList.add("picked");
+      if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) c.number = c.side === "LEFT" ? la : lb;
+      body.append(el("tr", {}, number("LEFT", row.l, la, lk), left, number("RIGHT", row.r, lb, rk), right));
+      if (row.l !== null) la++;
+      if (row.r !== null) lb++;
+      if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, lineComposer(path, hunk))));
       const here = threads ? [...new Set([row.l, row.r])].filter((i) => i !== null).flatMap((i) => threads.get(index + ":" + i) || []) : [];
       if (here.length) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, ...here.map((t) => threadBox(t)))));
     }
@@ -2023,6 +2040,8 @@
       p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
       el("span", { class: "spacer" }),
       PULL.stale ? el("span", { class: "stale", title: PULL.stale }, "Stale: " + PULL.stale) : null,
+      canWrite() ? el("button", { class: "btn primary", onclick: toggleReviewBox, title: "Submit your review: a comment, an approval or a request for changes" }, "Review")
+        : API && p.state !== "OPEN" ? el("span", { class: "by" }, "read-only") : null,
       API ? el("button", { class: "link", onclick: refreshPull, title: "Read the pull request from GitHub now" }, "Refresh") : null].filter(Boolean));
     bar.hidden = false;
     renderPush();
@@ -2172,6 +2191,7 @@
     if (opts.away && placed) box.append(el("button", { class: "link thread-show", onclick: () => openThread(t) }, "Show in the diff"));
     if ((opts.top || opts.away) && !t.onFile && t.comments[0] && t.comments[0].diffHunk) box.append(hunkTail(t.comments[0].diffHunk, 4));
     for (const c of t.comments) box.append(commentBox(c));
+    if (!opts.away && canWrite()) box.append(threadControls(t));
     return box;
   }
 
@@ -2286,6 +2306,188 @@
       el("div", { class: "card-threads" }, ...pending.map((t) => threadBox(t, { away: true })))));
     if (other.length) col.append(el("section", { class: "card" }, el("header", {}, el("b", {}, "Other review threads")),
       el("div", { class: "card-threads" }, ...other.map((t) => threadBox(t, { away: true })))));
+    if (canWrite()) col.append(conversationComposer());
+  }
+
+  // ---------- Writing ----------
+
+  // The reviewer comments on lines, replies to threads, resolves them, and submits a review, all through the server,
+  // which writes to GitHub as the reviewer and reads the pull request again, so the page updates from the pull event
+  // that follows. Unsent text survives a reload through sessionStorage, and nothing else keeps it. See
+  // docs/pull-requests.md section 8.
+
+  // Returns a value indicating whether the page can write to the pull request: it is served, attached to a pull
+  // request, and the pull request is open. A closed or merged pull request is shown read-only.
+  const canWrite = () => !!(API && PULL.snapshot && PULL.snapshot.state === "OPEN");
+  const pendingReview = () => { const d = discussion(); return d ? d.pending : null; };
+
+  // Sends JSON to a path of the server and returns whether it succeeded, with the answer's body.
+  async function send(path, body, method = "POST") {
+    const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).catch(() => null);
+    if (!r) return { ok: false, body: { message: "The vibecheck server could not be reached." } };
+    return { ok: r.ok, body: await r.json().catch(() => ({})) };
+  }
+
+  // Draws what pull events brought while a comment box held the focus.
+  function flushPull() {
+    if (!PULL.dirty) return;
+    PULL.dirty = false;
+    redraw();
+    renderConversation();
+  }
+
+  // Reads and writes the unsent text of a comment box, by a key that names the box.
+  const draftKey = (key) => `vibecheck-draft:${META.review}:${key}`;
+  const readDraft = (key) => { try { return sessionStorage.getItem(draftKey(key)) || ""; } catch (e) { return ""; } };
+  const saveDraft = (key, text) => { try { if (text) sessionStorage.setItem(draftKey(key), text); else sessionStorage.removeItem(draftKey(key)); } catch (e) { /* storage unavailable */ } };
+
+  // Returns a comment box: a text area that takes Markdown, a preview that GitHub renders, and buttons. Each action has
+  // a label and a run function that takes the text and returns the server's answer. A successful action clears the
+  // box's draft and calls done. The options are key, placeholder, suggestion, the text that Suggest change puts in a
+  // suggestion block, extra, nodes shown beside the buttons, check, which returns a reason the text cannot be sent,
+  // and onCancel.
+  function composer(opts) {
+    const area = el("textarea", { class: "composer-text", rows: 4, placeholder: opts.placeholder || "Leave a comment. Markdown is supported." });
+    area.value = readDraft(opts.key);
+    const preview = el("div", { class: "body composer-preview" });
+    preview.hidden = true;
+    const error = el("div", { class: "composer-error", role: "alert" });
+    const write = el("button", { class: "on", onclick: () => show(false) }, "Write");
+    const look = el("button", { onclick: () => show(true) }, "Preview");
+    async function show(previewing) {
+      write.className = previewing ? "" : "on"; look.className = previewing ? "on" : "";
+      area.hidden = previewing; preview.hidden = !previewing;
+      if (!previewing) { area.focus(); return; }
+      preview.replaceChildren(el("span", { class: "hint" }, "Rendering…"));
+      const r = await send("/api/markdown", { text: area.value });
+      preview.replaceChildren(r.ok ? (area.value.trim() ? safeBody(r.body.html) : el("span", { class: "hint" }, "Nothing to preview.")) : el("span", { class: "composer-error" }, r.body.message || "The preview failed."));
+    }
+    const buttons = opts.actions.map((a) => el("button", { class: "btn" + (a.primary ? " primary" : ""), onclick: async (ev) => {
+      const text = area.value;
+      const why = opts.check ? opts.check(text, a) : !text.trim() ? "Write something first." : null;
+      if (why) { error.textContent = why; return; }
+      for (const b of buttons) b.disabled = true;
+      error.textContent = "";
+      // The server sends the pull event that shows the write before it answers, and the redraw that follows rebuilds
+      // this box from its draft, so the draft goes first and comes back only when the write fails.
+      saveDraft(opts.key, "");
+      const r = await a.run(text);
+      for (const b of buttons) b.disabled = false;
+      if (!r.ok) { saveDraft(opts.key, text); error.textContent = r.body.message || "GitHub refused it."; return; }
+      area.value = "";
+      if (opts.done) opts.done();
+      flushPull();
+    } }, a.label));
+    area.addEventListener("input", () => saveDraft(opts.key, area.value));
+    // The page waits to redraw until the reviewer leaves the box, so that a pull event does not take the text away
+    // mid-word. A box that closes is left without a blur event, so sending and cancelling draw what waited as well.
+    area.addEventListener("blur", flushPull);
+    const tools = el("div", { class: "composer-tools" }, el("span", { class: "seg" }, write, look));
+    if (opts.suggestion !== undefined) tools.append(el("button", { class: "link", title: "Put the selected lines in a suggestion block, for you to edit", onclick: () => {
+      area.value += (area.value && !area.value.endsWith("\n") ? "\n" : "") + "```suggestion\n" + opts.suggestion + "\n```\n";
+      saveDraft(opts.key, area.value);
+      show(false);
+    } }, "Suggest change"));
+    const row = el("div", { class: "composer-actions" }, ...(opts.extra || []), el("span", { class: "spacer" }), error,
+      opts.onCancel ? el("button", { class: "link", onclick: () => { opts.onCancel(); flushPull(); } }, "Cancel") : null, ...buttons);
+    const box = el("div", { class: "composer" }, tools, area, preview, row);
+    requestAnimationFrame(() => { if (opts.focus && box.isConnected) area.focus(); });
+    return box;
+  }
+
+  // Selects a line of a diff to comment on, or extends the selection to it with Shift on the same side of the same
+  // hunk, and draws the comment box under the last selected line.
+  function pick(path, hunk, side, line, extend) {
+    const c = state.compose;
+    if (extend && c && c.path === path && c.hunk === hunk && c.side === side) state.compose = { path, hunk, side, first: Math.min(c.first, line), last: Math.max(c.last, line) };
+    else state.compose = { path, hunk, side, first: line, last: line };
+    redraw();
+  }
+
+  // Returns the box that comments on the selected lines: posted at once, or added to the pending review, which the
+  // first such comment starts.
+  function lineComposer(path, hunk) {
+    const c = state.compose, lines = hunk.lines.slice(c.first, c.last + 1);
+    const pending = pendingReview();
+    const target = { path, hunk: c.hunk, first: c.first, last: c.last, side: c.side };
+    const close = () => { state.compose = null; redraw(); };
+    // The selection's lines on its side, which a range's first line number counts back from.
+    const counted = lines.filter((l) => l[0] !== (c.side === "RIGHT" ? "-" : "+")).length;
+    const label = c.first === c.last ? `Comment on line ${c.number}` : `Comment on lines ${c.number - counted + 1}–${c.number}`;
+    return el("div", { class: "line-composer" }, el("div", { class: "composer-title" }, label + (c.side === "LEFT" ? " at base" : "")), composer({
+      key: "line:" + path, focus: true, onCancel: close, done: close,
+      suggestion: c.side === "RIGHT" ? lines.filter((l) => l[0] !== "-").map((l) => l[1]).join("\n") : undefined,
+      actions: [
+        { label: "Add single comment", run: (text) => send(`${API}/pull/comments`, { ...target, body: text }) },
+        { label: pending ? "Add review comment" : "Start a review", primary: true, run: (text) => send(`${API}/pull/comments`, { ...target, body: text, review: true }) },
+      ],
+    }));
+  }
+
+  // Returns a thread's controls: a reply box behind a button, and Resolve or Unresolve. A reply joins the pending
+  // review when there is one, as on GitHub.
+  function threadControls(t) {
+    const pending = pendingReview();
+    const bar = el("div", { class: "thread-actions" });
+    const resolve = el("button", { class: "btn", onclick: async () => {
+      resolve.disabled = true;
+      const r = await send(`${API}/pull/threads/${encodeURIComponent(t.id)}/resolved`, { resolved: !t.isResolved });
+      resolve.disabled = false;
+      if (!r.ok) bar.append(el("span", { class: "composer-error" }, r.body.message || "GitHub refused it."));
+    } }, t.isResolved ? "Unresolve" : "Resolve conversation");
+    // A box opened by the reviewer takes the focus. One restored from its draft by a redraw does not, since a focused
+    // box holds back the redraws that pull events ask for.
+    const open = (focus) => {
+      bar.replaceChildren(composer({ key: "reply:" + t.id, placeholder: "Reply…", focus, onCancel: () => bar.replaceChildren(...idle()), done: () => bar.replaceChildren(...idle()),
+        actions: [{ label: pending ? "Add reply to review" : "Reply", primary: true, run: (text) => send(`${API}/pull/threads/${encodeURIComponent(t.id)}/replies`, { body: text }) }] }));
+    };
+    const idle = () => [el("button", { class: "reply-open", onclick: () => open(true) }, "Reply…"), resolve];
+    if (readDraft("reply:" + t.id)) open(false); else bar.append(...idle());
+    return bar;
+  }
+
+  const EVENT_TEXT = { COMMENT: "Comment", APPROVE: "Approve", REQUEST_CHANGES: "Request changes" };
+
+  // Shows or hides the review box under the bar: a summary, the choice of comment, approval or request for changes,
+  // and the pending review's discard. GitHub refuses an approval or a request for changes from the author, and a
+  // comment or request for changes with no summary and no comments, so the box says so before it sends.
+  function toggleReviewBox() {
+    const box = $("#reviewbox");
+    if (!box.hidden) { box.hidden = true; return; }
+    renderReviewBox();
+    box.hidden = false;
+  }
+  function renderReviewBox() {
+    const box = $("#reviewbox"), p = PULL.snapshot, pending = pendingReview();
+    if (!p || !canWrite()) { box.hidden = true; return; }
+    let choice = "COMMENT";
+    const choices = el("div", { class: "review-choices" }, ...Object.keys(EVENT_TEXT).map((e) => {
+      const blocked = e !== "COMMENT" && p.viewerDidAuthor;
+      return el("label", { class: blocked ? "blocked" : "", title: blocked ? "GitHub does not let the author approve their own pull request or request changes to it." : "" },
+        el("input", { type: "radio", name: "review-event", value: e, checked: e === "COMMENT", disabled: blocked, onchange: () => { choice = e; } }), " " + EVENT_TEXT[e]);
+    }));
+    const discard = pending ? el("button", { class: "link danger", onclick: () => {
+      discard.replaceWith(el("span", { class: "confirm" }, `Discard ${plural(pending.comments, "pending comment", "pending comments")}?`,
+        el("button", { class: "btn danger", onclick: async (ev) => {
+          ev.target.disabled = true;
+          const r = await send(`${API}/pull/review`, {}, "DELETE");
+          if (r.ok) box.hidden = true; else { ev.target.disabled = false; ev.target.after(el("span", { class: "composer-error" }, r.body.message || "GitHub refused it.")); }
+        } }, "Discard")));
+    } }, "Discard review") : null;
+    box.replaceChildren(
+      el("div", { class: "review-head" }, el("b", {}, "Finish your review"), el("span", { class: "hint" }, pending ? `${plural(pending.comments, "pending comment", "pending comments")} will be submitted with it` : "No pending comments"),
+        p.viewerDidAuthor ? el("span", { class: "hint" }, "· you opened this pull request, so you can only comment") : null),
+      composer({ key: "review", placeholder: "Leave a summary", focus: true, extra: [choices, discard],
+        check: (text) => choice !== "APPROVE" && !text.trim() && !(pending && pending.comments) ? `${EVENT_TEXT[choice]} needs a summary or comments.` : null,
+        done: () => { box.hidden = true; },
+        actions: [{ label: "Submit review", primary: true, run: (text) => send(`${API}/pull/review`, { event: choice, body: text }) }] }));
+  }
+
+  // Returns the box at the bottom of the conversation that adds a comment to it.
+  function conversationComposer() {
+    return el("section", { class: "card" }, el("header", {}, el("b", {}, "Add a comment")),
+      el("div", { class: "card-threads" }, composer({ key: "conversation",
+        actions: [{ label: "Comment", primary: true, run: (text) => send(`${API}/pull/comments`, { body: text }) }] })));
   }
 
   // ---------- Map notices ----------
@@ -2339,7 +2541,10 @@
         if (e.stale) PULL.stale = e.message;
         else { PULL.snapshot = e.snapshot; PULL.places = e.threads || {}; PULL.stale = null; }
         renderPull();
-        if (!e.stale) { renderConversation(); redraw(); }
+        if (!$("#reviewbox").hidden) renderReviewBox();
+        if (e.stale) return;
+        if (document.activeElement && document.activeElement.matches(".composer-text")) PULL.dirty = true;
+        else { renderConversation(); redraw(); }
         return;
       }
       if (e.type === "ready" && fresh) { source.close(); location.reload(); }
