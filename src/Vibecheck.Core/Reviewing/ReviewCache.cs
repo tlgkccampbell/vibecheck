@@ -103,16 +103,19 @@ public sealed class ReviewCache : INarrativeCache
         }
     }
 
-    /// <summary>Returns the cached changeset between two commits drawn with a map, or <see langword="null"/> when there is none.</summary>
-    public Changeset? ReadChangeset(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText) =>
-        Read<Changeset>(ChangesetPath(baseCommit, headCommit, target, mapText, layoutText));
+    /// <summary>
+    /// Returns the cached changeset between two commits drawn with a map, or <see langword="null"/> when there is none.
+    /// The variant names anything else the changeset depends on, such as the renames it pairs files by.
+    /// </summary>
+    public Changeset? ReadChangeset(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText, string variant = "") =>
+        Read<Changeset>(ChangesetPath(baseCommit, headCommit, target, mapText, layoutText, variant));
 
-    /// <summary>Stores the changeset between two commits drawn with a map.</summary>
-    public void WriteChangeset(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText, Changeset changeset) =>
-        Write(ChangesetPath(baseCommit, headCommit, target, mapText, layoutText), changeset);
+    /// <summary>Stores the changeset between two commits drawn with a map, under a variant as <see cref="ReadChangeset"/> describes.</summary>
+    public void WriteChangeset(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText, Changeset changeset, string variant = "") =>
+        Write(ChangesetPath(baseCommit, headCommit, target, mapText, layoutText, variant), changeset);
 
-    private string ChangesetPath(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText) =>
-        Path.Combine(Directory, "changesets", $"{baseCommit[..12]}-{headCommit[..12]}-{Hash(baseCommit, headCommit, target.Root, target.Solution, target.Build ? "build" : "no-build", mapText, layoutText ?? "", ToolId)}.json.gz");
+    private string ChangesetPath(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText, string variant) =>
+        Path.Combine(Directory, "changesets", $"{baseCommit[..12]}-{headCommit[..12]}-{Hash(baseCommit, headCommit, target.Root, target.Solution, target.Build ? "build" : "no-build", mapText, layoutText ?? "", variant, ToolId)}.json.gz");
 
     /// <summary>
     /// Returns the latest version of the map Claude generated for a solution, and its version number, or

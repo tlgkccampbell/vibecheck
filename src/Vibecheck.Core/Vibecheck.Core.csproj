@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assist\Prompts\*" LogicalName="prompts/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="GitHub\Queries\*" LogicalName="github/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

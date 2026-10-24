@@ -11,7 +11,7 @@ The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step 
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
 Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
-its first phase, reviewed files and the full diff, is built.
+its first two phases, reviewed files and the full diff, and opening pull requests, are built.
 
 ## Layout
 
@@ -110,12 +110,35 @@ A second review of the same range, or of a range that shares a commit with one s
 before, skips the compilation. `--no-cache` turns the cache off. The server listens
 on `127.0.0.1` only and answers only a browser that opened the link it printed.
 
+## Reviewing a pull request
+
+When the `gh` command is installed and signed in, the picker lists the repository's
+open pull requests, those that request your review first, with their author, draft
+state, checks and review decision. `vibecheck pr 42`, or the pull request's address,
+opens one straight away. The server reads GitHub with the token `gh` gives, which
+stays in its memory and never reaches the page.
+
+Opening a pull request whose commits are not present fetches them with an empty
+refmap, so only objects and `FETCH_HEAD` are written and no branch or remote-tracking
+ref moves. The review compares the head with its merge base with the base branch's tip
+on GitHub, as GitHub does, rather than with a local branch that may be stale, and pairs
+renamed files as GitHub pairs them.
+
+A bar under the top bar shows the pull request's state, checks, review decision and
+merge state. While its page is open the server reads the pull request every 30
+seconds and sends it to the page when it changes; **Refresh** reads it at once, and the
+bar says when GitHub's rate limit has made it stale. When the author pushes, a notice
+offers a review of the new head, or of the commits since your last review. A review of
+a range whose head is the head of exactly one open pull request is attached to it too.
+`--no-github` leaves GitHub out. Nothing is written to GitHub.
+
 ## Using the tool
 
 ```
 vibecheck           [review options]
 vibecheck review    [<base> [<head>] | <range>] [--map <vibecheck.json>] [--root <dir>] [--solution <sln>]
-                  [--no-build] [--no-cache] [--no-ai] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+                  [--no-build] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+vibecheck pr        <number> | <url> [review options]
 vibecheck init      --solution <path.sln> [--root <dir>] [--map <vibecheck.json>] [--facts <out.json>]
 vibecheck units     [--map <vibecheck.json>] [--root <dir>] [--out <units.txt>]
 vibecheck check     [--map <vibecheck.json>] [--root <dir>] [--facts <out.json>] [--strict]

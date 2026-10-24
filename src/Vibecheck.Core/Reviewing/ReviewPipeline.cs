@@ -23,6 +23,13 @@ public sealed record ReviewRequest(string Directory, string BaseCommit, string H
 
     /// <summary>Gets a value indicating whether each end is built before it is analyzed, so that source generators run.</summary>
     public bool Build { get; init; } = true;
+
+    /// <summary>
+    /// Gets the renames to pair files by in place of git's, by head path with each base path, relative to the
+    /// repository's top, or <see langword="null"/> to keep git's. A pull request's review takes them from GitHub, so
+    /// that its diff pairs files as GitHub does. See <c>docs/pull-requests.md</c> section 4.5.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Renames { get; init; }
 }
 
 /// <summary>Names a stage of a review and says what it is doing. The stages are <c>map</c>, <c>base</c>, <c>head</c> and <c>changeset</c>.</summary>
@@ -84,7 +91,9 @@ public static class ReviewPipeline
         var headName = WorkingTree.IsSnapshot(top, headCommit) ? "working tree" : headCommit[..7];
         var info = new ReviewInfo(Path.GetFileNameWithoutExtension(chosen.Solution), $"{baseCommit[..7]}..{headName}",
             Title(top, baseCommit, headCommit), chosen.Kind, chosen.Source, warnings, chosen.Version);
-        var cached = cache?.ReadChangeset(baseCommit, headCommit, target, mapText!, layoutText);
+        var renames = Relative(request.Renames, chosen.Root);
+        var variant = renames is null ? "" : string.Join("\n", renames.OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => r.Key + "\t" + r.Value));
+        var cached = cache?.ReadChangeset(baseCommit, headCommit, target, mapText!, layoutText, variant);
         if (cached is not null)
         {
             Report("changeset", "cached");
@@ -95,8 +104,8 @@ public static class ReviewPipeline
         var facts = sides.Select((s, i) => RevisionChangeset.Check(map, mapText, layoutText, analyses[i], s.Item2)).ToArray();
         foreach (var w in facts[1].Warnings) warnings.Add(w);
         var root = chosen.Root == "." ? top : Path.Combine(top, chosen.Root);
-        var changeset = ChangesetBuilder.Build(facts[0], facts[1], root, baseCommit, headCommit);
-        cache?.WriteChangeset(baseCommit, headCommit, target, mapText!, layoutText, changeset);
+        var changeset = ChangesetBuilder.Build(facts[0], facts[1], root, baseCommit, headCommit, renames);
+        cache?.WriteChangeset(baseCommit, headCommit, target, mapText!, layoutText, changeset, variant);
         Report("changeset", $"{changeset.Files.Count(f => f.Status != "unchanged")} files and {changeset.Edges.Count(e => e.Status != "unchanged")} edges changed");
         return new ReviewResult(changeset, info, target, analyses[0], analyses[1]);
     }
@@ -168,6 +177,19 @@ public static class ReviewPipeline
             Projects = [.. head.Projects, .. baseAnalysis.Projects.Where(p => !projects.Contains(p.Name))],
             ExternalReferences = [.. head.ExternalReferences, .. baseAnalysis.ExternalReferences],
         };
+    }
+
+    /// <summary>
+    /// Returns renames given relative to the repository's top relative to the directory the changeset's paths are
+    /// relative to, leaving out those with a path outside it. This is the one place where the repository's paths
+    /// become the changeset's.
+    /// </summary>
+    private static Dictionary<string, string>? Relative(IReadOnlyDictionary<string, string>? renames, string root)
+    {
+        if (renames is null) return null;
+        var prefix = root is "." or "" ? "" : root.TrimEnd('/') + "/";
+        return renames.Where(r => r.Key.StartsWith(prefix, StringComparison.Ordinal) && r.Value.StartsWith(prefix, StringComparison.Ordinal))
+            .ToDictionary(r => r.Key[prefix.Length..], r => r.Value[prefix.Length..], StringComparer.Ordinal);
     }
 
     /// <summary>Returns the subject of the head commit when the range is that one commit, and <see langword="null"/> otherwise.</summary>

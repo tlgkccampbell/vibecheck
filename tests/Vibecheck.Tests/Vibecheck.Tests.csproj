@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="GitHub\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Vibecheck.Core\Vibecheck.Core.csproj" />
     <ProjectReference Include="..\..\src\Vibecheck.Cli\Vibecheck.Cli.csproj" />
   </ItemGroup>

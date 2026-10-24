@@ -8,7 +8,14 @@ namespace Vibecheck.Diffing;
 /// file also has its path at base. The blobs are the file's object identifiers at each end, null at an end where the file
 /// does not exist.
 /// </summary>
-public sealed record GitChange(string Path, string Status, string? PreviousPath, string? BlobBase, string? BlobHead);
+public sealed record GitChange(string Path, string Status, string? PreviousPath, string? BlobBase, string? BlobHead)
+{
+    /// <summary>
+    /// Gets a value indicating whether <see cref="GitHunks.Reconcile"/> paired the file differently from git, so that
+    /// its hunks are diffed on their own rather than taken from git's diff of the whole range.
+    /// </summary>
+    public bool Repaired { get; init; }
+}
 
 /// <summary>
 /// Collects the textual diff of files between two revisions by running <c>git diff</c>, and parses it into hunks. Every
@@ -47,6 +54,38 @@ public static class GitHunks
         return result;
     }
 
+    /// <summary>
+    /// Returns the changes with renames paired as another source pairs them, such as a pull request's file list on
+    /// GitHub. A rename that git found and the pairs do not name is split into the removal of its base path and the
+    /// addition of its head path. An addition and a removal that the pairs name as one rename are joined. Entries that
+    /// change are marked <see cref="GitChange.Repaired"/>.
+    /// </summary>
+    /// <param name="changes">The changes as <see cref="Changes"/> returns them.</param>
+    /// <param name="pairs">The renames by head path, each with its base path, relative to the same directory as the changes.</param>
+    public static List<GitChange> Reconcile(IReadOnlyList<GitChange> changes, IReadOnlyDictionary<string, string> pairs)
+    {
+        var result = new List<GitChange>();
+        foreach (var c in changes)
+        {
+            if (c.Status == "renamed" && !(pairs.TryGetValue(c.Path, out var old) && old == c.PreviousPath))
+            {
+                result.Add(new GitChange(c.PreviousPath!, "removed", null, c.BlobBase, null) { Repaired = true });
+                result.Add(new GitChange(c.Path, "added", null, null, c.BlobHead) { Repaired = true });
+            }
+            else result.Add(c);
+        }
+        foreach (var (head, old) in pairs)
+        {
+            var added = result.FirstOrDefault(c => c.Path == head && c.Status == "added");
+            var removed = result.FirstOrDefault(c => c.Path == old && c.Status == "removed");
+            if (added is null || removed is null) continue;
+            result.Remove(added);
+            result.Remove(removed);
+            result.Add(new GitChange(head, "renamed", old, removed.BlobBase, added.BlobHead) { Repaired = true });
+        }
+        return result.OrderBy(c => c.Path, StringComparer.Ordinal).ToList();
+    }
+
     /// <summary>Returns a blob identifier, or null for git's all-zero identifier, which names no object.</summary>
     private static string? Blob(string id) => id.Trim('0').Length == 0 ? null : id;
 
@@ -61,6 +100,13 @@ public static class GitHunks
         if (changes.Count == 0) return [];
         var output = Git.RunExact(repo, [.. DiffOptions, "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", baseRev, headRev]);
         var files = Parse(output);
+        var repaired = changes.Where(c => c.Repaired).ToList();
+        if (repaired.Count > 0)
+        {
+            // Git's diff of the range pairs these files its own way, so each is diffed on its own as the changes pair it.
+            var touched = repaired.SelectMany(c => new[] { c.Path, c.PreviousPath ?? c.Path }).ToHashSet(StringComparer.Ordinal);
+            files = files.Where(f => !touched.Contains(f.Path)).Concat(repaired.Select(c => DiffOne(repo, baseRev, headRev, c)).OfType<FileHunks>()).ToList();
+        }
         var byPath = changes.ToDictionary(c => c.Path, StringComparer.Ordinal);
         GitChange? Both(FileHunks f) =>
             byPath.TryGetValue(f.Path, out var c) && c.BlobBase is not null && c.BlobHead is not null && TrivialEdits.Applies(c.Path) ? c : null;
@@ -68,6 +114,19 @@ public static class GitHunks
         return files.Select(f =>
             Both(f) is { } c && texts.TryGetValue(c.BlobBase!, out var before) && texts.TryGetValue(c.BlobHead!, out var after)
                 ? TrivialEdits.Mark(f, before, after) : f).ToList();
+    }
+
+    /// <summary>
+    /// Returns the hunks of one change on its own, keyed by its path, or null when it has none. A rename is diffed
+    /// between its two blobs, and an addition or a removal between the two revisions without rename detection.
+    /// </summary>
+    private static FileHunks? DiffOne(string repo, string baseRev, string headRev, GitChange change)
+    {
+        if (change.Status == "renamed" && change.BlobBase == change.BlobHead) return null;
+        string[] args = change.Status == "renamed"
+            ? ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", change.BlobBase!, change.BlobHead!]
+            : ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-renames", "--relative", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", baseRev, headRev, "--", change.Path];
+        return Parse(Git.RunExact(repo, args)).FirstOrDefault() is { } file ? file with { Path = change.Path } : null;
     }
 
     /// <summary>
@@ -117,6 +176,8 @@ public static class GitHunks
         var result = new List<FileHunks>();
         FileHunks? current = null;
         Hunk? hunk = null;
+        // The newline that ends the text ends its last line, and is not an empty line of its own.
+        if (text.EndsWith('\n')) text = text[..^1];
         foreach (var raw in text.Split('\n'))
         {
             var line = raw.TrimEnd('\r');

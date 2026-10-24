@@ -7,6 +7,7 @@ using System.Text.Json;
 using Vibecheck.Assist;
 using Vibecheck.Checking;
 using Vibecheck.Diffing;
+using Vibecheck.GitHub;
 using Vibecheck.Model;
 using Vibecheck.Reviewing;
 using Microsoft.AspNetCore.Builder;
@@ -50,8 +51,14 @@ public sealed record ReviewServerOptions
     /// <summary>Gets the port to listen on, or 0 for any free port.</summary>
     public int Port { get; init; }
 
-    /// <summary>Gets a value indicating whether the gh command is asked for open pull requests.</summary>
-    public bool PullRequests { get; init; } = true;
+    /// <summary>Gets the client that lists and reads the repository's pull requests, or <see langword="null"/> when GitHub is unavailable or turned off.</summary>
+    public IGitHub? GitHub { get; init; }
+
+    /// <summary>Gets what the picker tells the reviewer when <see cref="GitHub"/> is missing, or <see langword="null"/> to say nothing.</summary>
+    public string? GitHubNotice { get; init; }
+
+    /// <summary>Gets how often a pull request is read again while a page follows its review.</summary>
+    public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Gets the Claude client that generates maps and places types, or <see langword="null"/> to draw the skeleton alone.</summary>
     public IClaude? Claude { get; init; }
@@ -135,6 +142,31 @@ public sealed class ReviewServer : IAsyncDisposable
         return $"/reviews/{id}/";
     }
 
+    /// <summary>
+    /// Starts a review of a pull request, or returns the review of the same pull request and head already started, and
+    /// returns the URL path of its page. The review compares the pull request's range as GitHub does, or the commits
+    /// from <paramref name="from"/> to its head when that is given. See <c>docs/pull-requests.md</c> section 4.
+    /// </summary>
+    /// <exception cref="ArgumentException">GitHub is not available, the pull request does not exist, or <paramref name="from"/> is not a commit hash.</exception>
+    /// <exception cref="GitHubException">GitHub could not be read.</exception>
+    public async Task<string> BeginPullAsync(int number, string? from = null)
+    {
+        var github = options.GitHub ?? throw new ArgumentException(options.GitHubNotice ?? "GitHub is turned off, so pull requests cannot be opened.");
+        if (from is not null && !System.Text.RegularExpressions.Regex.IsMatch(from, "^[0-9a-f]{40}$")) throw new ArgumentException("from must be a full commit hash");
+        var pull = await github.GetPullAsync(number, stopping.Token) ?? throw new ArgumentException($"{github.Repository.NameWithOwner} has no pull request #{number}");
+        var id = $"pr{number}-" + (from is null ? "" : from[..7] + "-") + pull.HeadOid[..7];
+        lock (reviews)
+        {
+            if (!reviews.TryGetValue(id, out var review) || review.Failed)
+            {
+                review = new Review(id, null, pull.HeadOid, $"#{number} {pull.Title}" + (from is null ? "" : " since your last review")) { Since = from };
+                review.Attach(number, pull);
+                reviews[id] = Start(review);
+            }
+        }
+        return $"/reviews/{id}/";
+    }
+
     /// <summary>Waits until the host stops, which Ctrl+C causes.</summary>
     public Task WaitForShutdownAsync() => app?.WaitForShutdownAsync() ?? Task.CompletedTask;
 
@@ -157,8 +189,9 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private Review Start(Review review)
     {
-        options.Log?.Invoke($"reviewing {review.Label} ({review.Base[..8]}..{review.Head[..8]})");
+        options.Log?.Invoke($"reviewing {review.Label} ({(review.Base is null ? "pull request" : review.Base[..8])}..{review.Head[..8]})");
         review.Add(new { type = "review", label = review.Label, @base = review.Base, head = review.Head });
+        if (review.Snapshot is { } snapshot) PublishSnapshot(review, snapshot);
         review.Task = Task.Run(() => RunAsync(review, rerun: false));
         return review;
     }
@@ -174,12 +207,13 @@ public sealed class ReviewServer : IAsyncDisposable
             options.Log?.Invoke($"  {review.Id} {p.Stage}: {p.Message}");
             review.Add(new { type = "stage", stage = p.Stage, message = p.Message });
         });
-        var request = new ReviewRequest(options.Directory, review.Base, review.Head)
-        {
-            MapPath = options.MapPath, Root = options.Root, Solution = options.Solution, Build = options.Build,
-        };
         try
         {
+            if (!rerun) await PreparePullAsync(review, progress);
+            var request = new ReviewRequest(options.Directory, review.Base!, review.Head)
+            {
+                MapPath = options.MapPath, Root = options.Root, Solution = options.Solution, Build = options.Build, Renames = review.Renames,
+            };
             var result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
             review.Publish(result);
             foreach (var w in result.Info.Warnings) options.Log?.Invoke($"  {review.Id} warning: {w}");
@@ -206,6 +240,147 @@ public sealed class ReviewServer : IAsyncDisposable
         {
             review.Rerunning = false;
         }
+    }
+
+    /// <summary>
+    /// Prepares a review's pull request before analysis. A review started from a pull request fetches the commits
+    /// that are missing, takes its base as GitHub does, and pairs renames as GitHub does. A review of a range is
+    /// attached to the open pull request whose head is its head, when exactly one is. See <c>docs/pull-requests.md</c>
+    /// sections 4.1 to 4.5.
+    /// </summary>
+    private async Task PreparePullAsync(Review review, IProgress<ReviewProgress> progress)
+    {
+        if (options.GitHub is not { } github) return;
+        if (review.Pull is not { } number)
+        {
+            try
+            {
+                var matches = (await github.ListPullsAsync(stopping.Token)).Where(p => p.HeadOid == review.Head).ToList();
+                if (matches.Count != 1 || await github.GetPullAsync(matches[0].Number, stopping.Token) is not { } found) return;
+                review.Attach(matches[0].Number, found);
+                options.Log?.Invoke($"  {review.Id} is the head of #{found.Number}");
+                PublishSnapshot(review, found);
+                EnsureWatching(review);
+            }
+            catch (GitHubException ex)
+            {
+                options.Log?.Invoke($"  {review.Id} could not look for its pull request: {ex.Message}");
+            }
+            return;
+        }
+        var pull = review.Snapshot!;
+        var dir = options.Directory;
+        if (PullCommits.Present(dir, pull)) progress.Report(new ReviewProgress("fetch", "the commits are present"));
+        else
+        {
+            var remote = PullCommits.RemoteOf(dir, github.Repository) ?? throw new InvalidOperationException($"no remote of this repository points at {github.Repository.NameWithOwner}");
+            progress.Report(new ReviewProgress("fetch", $"fetching #{number} from {remote}"));
+            await Task.Run(() => PullCommits.Fetch(dir, remote, number, pull.BaseRefName), stopping.Token);
+            if (!PullCommits.Present(dir, pull)) throw new InvalidOperationException($"the commits of #{number} are still missing after fetching it from {remote}");
+        }
+        var (baseCommit, head) = PullCommits.Range(dir, pull);
+        if (review.Since is { } from)
+        {
+            // Git's own pairing of renames stands for these commits, since GitHub's file list covers the whole pull request.
+            if (Git.TryRun(dir, "merge-base", "--is-ancestor", from, head) is null) throw new InvalidOperationException($"{from[..8]}, where your last review was made, is no longer part of #{number}");
+            baseCommit = from;
+        }
+        else
+        {
+            var files = await github.GetPullFilesAsync(number, stopping.Token);
+            review.Renames = files.Where(f => f.PreviousPath is not null).ToDictionary(f => f.Path, f => f.PreviousPath!, StringComparer.Ordinal);
+        }
+        review.Resolve(baseCommit);
+        review.Add(new { type = "review", label = review.Label, @base = baseCommit, head });
+        progress.Report(new ReviewProgress("fetch", $"comparing {baseCommit[..8]}..{head[..8]} as GitHub does"));
+    }
+
+    /// <summary>Starts following a review's pull request when a page has its event stream open and nothing follows it yet.</summary>
+    private void EnsureWatching(Review review)
+    {
+        lock (review)
+        {
+            if (review.Pull is null || review.Watchers == 0 || review.Watching) return;
+            review.Watching = true;
+        }
+        _ = Task.Run(() => WatchPullAsync(review));
+    }
+
+    /// <summary>
+    /// Reads a review's pull request again and again while a page has the review's event stream open: at once, then
+    /// at each interval, and whenever a refresh asks for it. GitHub cannot send webhooks to a loopback server, so the
+    /// server polls, and the pages never do. See <c>docs/pull-requests.md</c> section 3.3.
+    /// </summary>
+    private async Task WatchPullAsync(Review review)
+    {
+        while (true)
+        {
+            Task poke;
+            lock (review)
+            {
+                if (review.Watchers == 0 || stopping.IsCancellationRequested) { review.Watching = false; return; }
+                poke = review.NextPoke();
+            }
+            var wait = await RefreshPullAsync(review);
+            await Task.WhenAny(poke, Task.Delay(wait, stopping.Token).ContinueWith(_ => { }, TaskScheduler.Default));
+        }
+    }
+
+    /// <summary>
+    /// Reads a review's pull request once, sends it to the review's pages when it changed, and returns how long to wait
+    /// before the next read. While GitHub limits the rate, nothing is read until the wait it asked for has passed, and
+    /// the pages are told that the data is stale.
+    /// </summary>
+    private async Task<TimeSpan> RefreshPullAsync(Review review)
+    {
+        if (options.GitHub is not { } github || review.Pull is not { } number) return options.PollInterval;
+        var quiet = review.QuietUntil - DateTime.UtcNow;
+        if (quiet > TimeSpan.Zero) return quiet;
+        try
+        {
+            if (await github.GetPullAsync(number, stopping.Token) is { } snapshot) PublishSnapshot(review, snapshot);
+            return options.PollInterval;
+        }
+        catch (GitHubRateLimitException ex)
+        {
+            review.QuietUntil = DateTime.UtcNow + ex.RetryAfter;
+            PublishStale(review, ex.Message);
+            return ex.RetryAfter > options.PollInterval ? ex.RetryAfter : options.PollInterval;
+        }
+        catch (GitHubException ex)
+        {
+            PublishStale(review, ex.Message);
+            return options.PollInterval;
+        }
+        catch (OperationCanceledException)
+        {
+            return options.PollInterval;
+        }
+    }
+
+    /// <summary>Sends a review's pages a <c>pull</c> event with a snapshot, unless it is the snapshot they were last sent.</summary>
+    private static void PublishSnapshot(Review review, PullSnapshot snapshot)
+    {
+        var text = JsonSerializer.Serialize(snapshot, FactsJson.Options);
+        lock (review)
+        {
+            review.Snapshot = snapshot;
+            if (text == review.SentSnapshot && review.Stale is null) return;
+            review.SentSnapshot = text;
+            review.Stale = null;
+        }
+        review.Add(new { type = "pull", snapshot });
+    }
+
+    /// <summary>Sends a review's pages a <c>pull</c> event saying that the snapshot they have is stale, and why, unless they were told already.</summary>
+    private static void PublishStale(Review review, string message)
+    {
+        lock (review)
+        {
+            if (review.Stale == message) return;
+            review.Stale = message;
+        }
+        review.Add(new { type = "pull", stale = true, message });
     }
 
     /// <summary>
@@ -298,7 +473,8 @@ public sealed class ReviewServer : IAsyncDisposable
             {
                 var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
                 lock (review) review.Worktree ??= Reviewing.Worktree.Add(top, review.Head);
-                job.Context = new NarrativeContext(result.Changeset, result.BaseAnalysis, result.HeadAnalysis, NarrativeContext.ReadCommits(top, review.Base, review.Head))
+                // A review has its base by the time it has a result, since a pull request's review resolves it first.
+                job.Context = new NarrativeContext(result.Changeset, result.BaseAnalysis, result.HeadAnalysis, NarrativeContext.ReadCommits(top, review.Base!, review.Head))
                 {
                     WorkingDirectory = Path.GetFullPath(Path.Combine(review.Worktree.Path, result.Target.Root)),
                     Model = options.Models.Narrative,
@@ -428,24 +604,28 @@ public sealed class ReviewServer : IAsyncDisposable
         web.MapGet("/api/ranges", async () =>
         {
             var ranges = RangeCatalog.List(options.Directory);
-            if (options.PullRequests) ranges.AddRange(await RangeCatalog.PullRequestsAsync(options.Directory, TimeSpan.FromSeconds(4)));
+            var (pulls, notice) = await ListPullsAsync();
             var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
             var open = reviews.Values.OrderBy(r => r.Started).Select(r => new { r.Id, r.Label, state = r.State, url = $"/reviews/{r.Id}/" });
-            return Results.Json(new { repository = Path.GetFileName(top), ranges, reviews = open }, FactsJson.Options);
+            return Results.Json(new { repository = Path.GetFileName(top), ranges, pulls, github = notice, reviews = open }, FactsJson.Options);
         });
 
         web.MapPost("/api/reviews", async (HttpContext ctx) =>
         {
             var body = await JsonSerializer.DeserializeAsync<BeginBody>(ctx.Request.Body, FactsJson.Options);
-            if (string.IsNullOrWhiteSpace(body?.Range)) return Results.BadRequest(new { message = "a range is required" });
+            if (body?.Pull is null && string.IsNullOrWhiteSpace(body?.Range)) return Results.BadRequest(new { message = "a range or a pull request is required" });
             try
             {
-                var url = Begin(body.Range.Trim(), body.Label);
+                var url = body.Pull is { } pull ? await BeginPullAsync(pull, body.From) : Begin(body.Range!.Trim(), body.Label);
                 return Results.Json(new { id = url.Split('/')[2], url }, FactsJson.Options);
             }
             catch (ArgumentException ex)
             {
                 return Results.BadRequest(new { message = ex.Message });
+            }
+            catch (GitHubException ex)
+            {
+                return Results.Json(new { message = ex.Message }, FactsJson.Options, statusCode: StatusCodes.Status502BadGateway);
             }
         });
 
@@ -456,6 +636,8 @@ public sealed class ReviewServer : IAsyncDisposable
             ctx.Response.Headers.CacheControl = "no-cache";
             var ct = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted, stopping.Token).Token;
             var sent = 0;
+            lock (review) review.Watchers++;
+            EnsureWatching(review);
             try
             {
                 while (!ct.IsCancellationRequested)
@@ -472,6 +654,10 @@ public sealed class ReviewServer : IAsyncDisposable
             catch (OperationCanceledException)
             {
                 // The browser closed the stream, or the server is stopping.
+            }
+            finally
+            {
+                lock (review) review.Watchers--;
             }
         });
 
@@ -521,6 +707,16 @@ public sealed class ReviewServer : IAsyncDisposable
             return Results.Json(new { marks = reviewed.Marks(result.Changeset, result.Target.Root) }, FactsJson.Options);
         });
 
+        web.MapGet("/api/reviews/{id}/pull", (string id) =>
+            reviews.TryGetValue(id, out var r) && r.Snapshot is { } snapshot ? Results.Json(snapshot, FactsJson.Options) : Results.NotFound());
+
+        web.MapPost("/api/reviews/{id}/pull/refresh", async (string id) =>
+        {
+            if (!reviews.TryGetValue(id, out var review) || review.Pull is null) return Results.NotFound();
+            await RefreshPullAsync(review);
+            return Results.Json(new { snapshot = review.Snapshot, stale = review.Stale }, FactsJson.Options);
+        });
+
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
             reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
 
@@ -546,6 +742,7 @@ public sealed class ReviewServer : IAsyncDisposable
                 solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
                 mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
                 narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root),
+                pull = r.Snapshot, pullCommits = r.OpenedCommits, pullStale = r.Stale,
             };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
             return Results.Text(script, "text/javascript; charset=utf-8");
@@ -566,6 +763,36 @@ public sealed class ReviewServer : IAsyncDisposable
         review.Add(new { type = "reviewed", marks = paths.ToDictionary(p => p, p => marks.GetValueOrDefault(p) ?? "", StringComparer.Ordinal) });
     }
 
+    /// <summary>
+    /// Returns the open pull requests for the picker, those that request the reviewer's review first, each saying
+    /// whether its head commit is present locally, or none and the reason when GitHub cannot be read.
+    /// </summary>
+    private async Task<(object[] Pulls, string? Notice)> ListPullsAsync()
+    {
+        if (options.GitHub is not { } github) return ([], options.GitHubNotice);
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+            limit.CancelAfter(TimeSpan.FromSeconds(8));
+            var list = await github.ListPullsAsync(limit.Token);
+            // One git process answers for every head: it prints those that exist and passes over the rest.
+            var present = (Git.TryRun(options.Directory, ["rev-list", "--no-walk", "--ignore-missing", .. list.Select(p => p.HeadOid)]) ?? "")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.Ordinal);
+            var pulls = list.OrderByDescending(p => p.ReviewRequested)
+                .Select(p => (object)new { p.Number, p.Title, p.Url, p.Author, p.IsDraft, p.ReviewDecision, p.Checks, p.ReviewRequested, local = present.Contains(p.HeadOid) })
+                .ToArray();
+            return (pulls, null);
+        }
+        catch (GitHubException ex)
+        {
+            return ([], ex.Message);
+        }
+        catch (OperationCanceledException) when (!stopping.IsCancellationRequested)
+        {
+            return ([], "GitHub took too long to list the pull requests.");
+        }
+    }
+
     private IResult Page(string name, string contentType) => Results.Text(ReadViewer(name), contentType);
 
     /// <summary>Returns one of the viewer's files, from the viewer directory when the options name one and from the tool's embedded copy otherwise.</summary>
@@ -577,7 +804,7 @@ public sealed class ReviewServer : IAsyncDisposable
         return reader.ReadToEnd();
     }
 
-    private sealed record BeginBody(string? Range, string? Label);
+    private sealed record BeginBody(string? Range, string? Label, int? Pull, string? From);
 
     private sealed record MapBody(string? Action);
 
@@ -651,13 +878,16 @@ public sealed class ReviewServer : IAsyncDisposable
     /// Represents one review in this session: its two commits, the events it has produced so far, and its result once
     /// it has one. Every event is kept, so that a page opened late replays the review from its start.
     /// </summary>
-    private sealed class Review(string id, string baseCommit, string headCommit, string label)
+    private sealed class Review(string id, string? baseCommit, string headCommit, string label)
     {
         private readonly List<string> events = [];
         private TaskCompletionSource signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource poke = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public string Id { get; } = id;
-        public string Base { get; } = baseCommit;
+
+        /// <summary>Gets the base commit, which a pull request's review learns only once its commits are present.</summary>
+        public string? Base { get; private set; } = baseCommit;
         public string Head { get; } = headCommit;
         public string Label { get; } = label;
         public DateTime Started { get; } = DateTime.UtcNow;
@@ -674,6 +904,54 @@ public sealed class ReviewServer : IAsyncDisposable
 
         /// <summary>Gets or sets the worktree of the head commit that narratives read, or <see langword="null"/> before the first needs it.</summary>
         public Worktree? Worktree { get; set; }
+
+        /// <summary>Gets the number of the pull request the review belongs to, or <see langword="null"/>.</summary>
+        public int? Pull { get; private set; }
+
+        /// <summary>Gets the commit a review of the commits since the reviewer's last review starts from, or <see langword="null"/>.</summary>
+        public string? Since { get; init; }
+
+        /// <summary>Gets or sets the latest snapshot of the review's pull request.</summary>
+        public PullSnapshot? Snapshot { get; set; }
+
+        /// <summary>Gets the number of commits the pull request held when the review began, which the new-push notice counts from.</summary>
+        public int? OpenedCommits { get; private set; }
+
+        /// <summary>Gets or sets the renames GitHub reports for the pull request, by head path, relative to the repository's top.</summary>
+        public IReadOnlyDictionary<string, string>? Renames { get; set; }
+
+        /// <summary>Gets or sets the snapshot last sent to the pages, as JSON, so that an unchanged one is not sent again.</summary>
+        public string? SentSnapshot { get; set; }
+
+        /// <summary>Gets or sets why the pages' snapshot is stale, or <see langword="null"/> when it is current.</summary>
+        public string? Stale { get; set; }
+
+        /// <summary>Gets or sets the time before which GitHub asked not to be read again.</summary>
+        public DateTime QuietUntil { get; set; }
+
+        /// <summary>Gets or sets how many pages have the review's event stream open.</summary>
+        public int Watchers { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether a loop follows the review's pull request.</summary>
+        public bool Watching { get; set; }
+
+        /// <summary>Attaches the review to a pull request, as it stood when the review began.</summary>
+        public void Attach(int number, PullSnapshot snapshot)
+        {
+            Pull = number;
+            Snapshot = snapshot;
+            OpenedCommits = snapshot.Commits;
+        }
+
+        /// <summary>Records the base commit of a pull request's review once its commits are present.</summary>
+        public void Resolve(string baseCommit) => Base = baseCommit;
+
+        /// <summary>Returns a task that completes at the next refresh request, replacing the one before.</summary>
+        public Task NextPoke()
+        {
+            poke = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return poke.Task;
+        }
 
         /// <summary>Gets the current result together with its run, read at one moment.</summary>
         public (ReviewResult? Result, int Run) Current { get { lock (this) return (Result, Run); } }

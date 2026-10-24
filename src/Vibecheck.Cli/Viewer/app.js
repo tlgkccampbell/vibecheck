@@ -1960,6 +1960,69 @@
     wrap.addEventListener("pointerleave", () => showTip(null));
   }
 
+  // ---------- Pull request ----------
+
+  // The review's pull request as the server's pull events deliver it, and why it is stale when GitHub cannot be read.
+  // The bar under the top bar shows its state, and a notice offers a new review when the author pushes. See
+  // docs/pull-requests.md sections 2, 3.3 and 4.6.
+  const PULL = { snapshot: META.pull || null, stale: META.pullStale || null };
+  // How the bar words GitHub's check rollup states, review decisions and merge states, each with the pill's tone.
+  const CHECK_TEXT = { SUCCESS: ["checks pass", "good"], FAILURE: ["checks fail", "bad"], ERROR: ["checks fail", "bad"], PENDING: ["checks pending", "wait"], EXPECTED: ["checks pending", "wait"] };
+  const DECISION_TEXT = { APPROVED: ["approved", "good"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "wait"] };
+  const MERGE_TEXT = { BLOCKED: "merging is blocked", BEHIND: "behind its base branch", DIRTY: "has conflicts", UNSTABLE: "mergeable, with failing checks", CLEAN: "ready to merge", HAS_HOOKS: "ready to merge" };
+
+  // Returns a pill with a text and its tone, or null when there is no text.
+  const pill = (pair) => pair ? el("span", { class: "pill " + pair[1] }, pair[0]) : null;
+
+  // Shows the pull request's number, title, author, state, checks and review decision in the bar, and the new-push
+  // notice when its head has moved past the review's.
+  function renderPull() {
+    const bar = $("#pullbar"), p = PULL.snapshot;
+    if (!p) { bar.hidden = true; $("#pushnotice").hidden = true; return; }
+    const state = p.state === "OPEN" ? (p.isDraft ? "draft" : "open") : p.state.toLowerCase();
+    bar.replaceChildren(...[
+      el("a", { class: "pull-number", href: p.url, target: "_blank", rel: "noopener", title: "Open the pull request on GitHub" }, "#" + p.number),
+      el("span", { class: "pull-title" }, p.title),
+      p.author ? el("span", { class: "by" }, "by " + p.author) : null,
+      pill([state, state === "open" ? "good" : state === "merged" ? "" : "wait"]),
+      pill(CHECK_TEXT[p.checks] || ["no checks", ""]),
+      pill(DECISION_TEXT[p.reviewDecision]),
+      p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
+      el("span", { class: "spacer" }),
+      PULL.stale ? el("span", { class: "stale", title: PULL.stale }, "Stale: " + PULL.stale) : null,
+      API ? el("button", { class: "link", onclick: refreshPull, title: "Read the pull request from GitHub now" }, "Refresh") : null].filter(Boolean));
+    bar.hidden = false;
+    renderPush();
+  }
+
+  // Asks the server to read the pull request at once. The answer arrives as a pull event.
+  function refreshPull() {
+    fetch(`${API}/pull/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  }
+
+  // Shows the notice of a push: how many commits arrived since the review began, with a review of the new head and,
+  // when the reviewer has reviewed before, a review of the commits since that review.
+  function renderPush() {
+    const box = $("#pushnotice"), p = PULL.snapshot;
+    if (!API || !p || p.state !== "OPEN" || !CS.head || p.headOid === CS.head) { box.hidden = true; return; }
+    const added = META.pullCommits != null ? p.commits - META.pullCommits : 0;
+    const what = added > 0 ? `${plural(added, "new commit was", "new commits were")} pushed to #${p.number}.` : `#${p.number} was force-pushed.`;
+    const since = p.latestReviewCommit && p.latestReviewCommit !== p.headOid
+      ? el("button", { class: "btn", onclick: () => openPull(p.latestReviewCommit) }, "Review the commits since your last review") : null;
+    box.replaceChildren(...[el("span", {}, what), el("button", { class: "btn", onclick: () => openPull(null) }, "Review the new head"), since].filter(Boolean));
+    box.hidden = false;
+  }
+
+  // Starts a review of the pull request's current head, from its base or from a given commit, and follows it on the
+  // progress page. This review stays open until the reviewer leaves it.
+  async function openPull(from) {
+    const request = from ? { pull: PULL.snapshot.number, from } : { pull: PULL.snapshot.number };
+    const r = await fetch("/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) { location.href = "/?review=" + encodeURIComponent(body.id); return; }
+    $("#pushnotice").replaceChildren(el("span", {}, body.message || `The review could not start (${r.status}).`));
+  }
+
   // ---------- Map notices ----------
 
   // Follows the review's event stream when the vibecheck server serves the page. A concept map that Claude is making, or
@@ -2005,6 +2068,11 @@
       const fresh = e.seq >= META.events;
       // The marks sent before the page loaded are already in META.reviewed.
       if (e.type === "reviewed") { if (fresh) applyMarks(e.marks); return; }
+      if (e.type === "pull") {
+        if (e.stale) PULL.stale = e.message; else { PULL.snapshot = e.snapshot; PULL.stale = null; }
+        renderPull();
+        return;
+      }
       if (e.type === "ready" && fresh) { source.close(); location.reload(); }
       else if (e.type === "stage" && fresh && switching) show("busy", "switch", spinner(), el("span", {}, `Switching to the concept map: ${e.message}`));
       else if (e.type === "map" && !switching) {
@@ -2074,6 +2142,7 @@
       $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
     }
     renderSummary();
+    renderPull();
     installTip();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });

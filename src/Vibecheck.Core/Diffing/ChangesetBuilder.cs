@@ -9,11 +9,13 @@ public static class ChangesetBuilder
     /// <summary>
     /// Combines a base and a head facts document into a changeset document, with every file that git reports as changed
     /// between two revisions and the hunks of each, read by <see cref="GitHunks"/>. File paths are relative to
-    /// <paramref name="repo"/>.
+    /// <paramref name="repo"/>. Renames are paired as <paramref name="renames"/> pairs them when it is given, as
+    /// <see cref="GitHunks.Reconcile"/> describes, and as git pairs them otherwise.
     /// </summary>
-    public static Changeset Build(Facts baseFacts, Facts headFacts, string repo, string baseRev, string headRev)
+    public static Changeset Build(Facts baseFacts, Facts headFacts, string repo, string baseRev, string headRev, IReadOnlyDictionary<string, string>? renames = null)
     {
         var changes = GitHunks.Changes(repo, baseRev, headRev);
+        if (renames is not null) changes = GitHunks.Reconcile(changes, renames);
         return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changes), changes);
     }
 

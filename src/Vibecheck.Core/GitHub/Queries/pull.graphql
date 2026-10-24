@@ -1,0 +1,22 @@
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      state
+      isDraft
+      author { login }
+      headRefName
+      headRefOid
+      baseRefName
+      baseRefOid
+      reviewDecision
+      mergeStateStatus
+      viewerDidAuthor
+      commits { totalCount }
+      viewerLatestReview { state commit { oid } }
+      lastCommit: commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+    }
+  }
+}

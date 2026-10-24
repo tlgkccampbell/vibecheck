@@ -1,0 +1,124 @@
+{
+ "data": {
+  "viewer": {
+   "login": "reviewer"
+  },
+  "repository": {
+   "pullRequests": {
+    "nodes": [
+     {
+      "number": 13894,
+      "title": "Support nested skill discovery without skills directories",
+      "url": "https://github.com/cli/cli/pull/13894",
+      "isDraft": true,
+      "author": {
+       "login": "user-1"
+      },
+      "headRefOid": "8f44336ccb889465115aa85319c275c8dec1c3b7",
+      "baseRefName": "trunk",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "reviewRequests": {
+       "nodes": [
+        {
+         "requestedReviewer": null
+        },
+        {
+         "requestedReviewer": null
+        },
+        {
+         "requestedReviewer": {
+          "login": "user-2"
+         }
+        },
+        {
+         "requestedReviewer": null
+        },
+        {
+         "requestedReviewer": null
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "state": "SUCCESS"
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "number": 12942,
+      "title": "Add `--editor` flag to `gh issue edit` and `gh pr edit`",
+      "url": "https://github.com/cli/cli/pull/12942",
+      "isDraft": false,
+      "author": {
+       "login": "user-3"
+      },
+      "headRefOid": "bdedb68faa1f542ba865cd8acf18eaade5293e00",
+      "baseRefName": "trunk",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "reviewRequests": {
+       "nodes": [
+        {
+         "requestedReviewer": {
+          "login": "reviewer"
+         }
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "state": "SUCCESS"
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "number": 13247,
+      "title": "fix(project close): filter projects by open/closed state in interactive prompt",
+      "url": "https://github.com/cli/cli/pull/13247",
+      "isDraft": false,
+      "author": {
+       "login": "user-3"
+      },
+      "headRefOid": "0657dea831d767158bd9aadabc394ceb6e44b8af",
+      "baseRefName": "trunk",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "reviewRequests": {
+       "nodes": [
+        {
+         "requestedReviewer": null
+        },
+        {
+         "requestedReviewer": {
+          "login": "user-4"
+         }
+        }
+       ]
+      },
+      "commits": {
+       "nodes": [
+        {
+         "commit": {
+          "statusCheckRollup": {
+           "state": "SUCCESS"
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

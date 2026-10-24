@@ -576,7 +576,8 @@ the facts say, as part of the normal test run.
 
 | Command | Purpose |
 |---|---|
-| `vibecheck review [<range>]` | Serves the review workflow of [review-workflow.md](review-workflow.md) on the loopback interface and opens it in the browser, on the range given or on a picker. `vibecheck` with no command does the same. |
+| `vibecheck review [<range>]` | Serves the review workflow of [review-workflow.md](review-workflow.md) on the loopback interface and opens it in the browser, on the range given or on a picker. `vibecheck` with no command does the same. The picker lists the open pull requests of the repository that `gh` names; `--no-github` leaves GitHub out. |
+| `vibecheck pr <number>` | Serves the review workflow and opens it on a pull request, given by number or by its address on GitHub, as [pull-requests.md](pull-requests.md) section 4 describes. It fetches the pull request's commits when they are missing, without writing any ref, and compares them as GitHub does. It takes the options of `review`. |
 | `vibecheck init --solution <sln>` | Emits the deterministic skeleton as `vibecheck.json` beside the solution, or at the path `--map` names, and the facts document as `vibecheck.facts.json` beside the map. Refuses to overwrite an existing map. See section 5.1. |
 | `vibecheck units` | Writes the unit listing of section 5.2 for the solution the map names, with the map's exclusions applied. |
 | `vibecheck check` | Produces the facts for the working tree and prints the warnings and the metrics. Exit code 1 on a failure, or on a warning with `--strict`. `--facts <path>` also writes the facts document. |

@@ -5,6 +5,7 @@ using System.Text.Json;
 using Vibecheck.Assist;
 using Vibecheck.Cli;
 using Vibecheck.Format;
+using Vibecheck.GitHub;
 using Vibecheck.Reviewing;
 using Xunit;
 
@@ -99,12 +100,140 @@ public class ReviewServerTests
         Assert.Contains("\"reviewed\":{\"" + TestData.X1 + "\":\"reviewer\"}", await client.GetStringAsync(server.BaseAddress + url + "changeset.js"), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Returns a pull request's snapshot with a head and a base. Its base branch is <c>main</c>, it holds the
+    /// commits given, and its other fields are fixed.
+    /// </summary>
+    private static PullSnapshot Snapshot(int number, string head, string baseTip, string title = "Call the service", int commits = 1) =>
+        new(number, title, $"https://github.com/o/r/pull/{number}", "OPEN", false, "author", "feature", head, "main", baseTip, "REVIEW_REQUIRED", "BLOCKED", "SUCCESS", false, commits, null, null);
+
+    [Fact]
+    public async Task OpensAPullRequestFetchingItsCommitsAndFollowsItWhileItsPageIsOpen()
+    {
+        // The pull request's head lives only in the upstream's refs/pull, as on GitHub, so opening it must fetch it.
+        using var upstream = new TempRepo();
+        ReviewPipelineTests.WriteApp(upstream, "class Thing { }\n");
+        upstream.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var baseTip = upstream.Commit("one");
+        upstream.Git("checkout", "--quiet", "-b", "feature");
+        ReviewPipelineTests.WriteApp(upstream, "class Thing { void Go() => Service.Run(); }\n");
+        var head = upstream.Commit("two");
+        upstream.Git("update-ref", "refs/pull/5/head", head);
+        upstream.Git("checkout", "--quiet", "main");
+        upstream.Git("branch", "--quiet", "-D", "feature");
+        using var clone = new TempRepo();
+        clone.Git("remote", "add", "origin", upstream.Path);
+        clone.Git("fetch", "--quiet", "origin");
+        clone.Git("checkout", "--quiet", "-b", "main", "origin/main");
+        var refs = clone.Git("for-each-ref");
+
+        var github = new FakeGitHub
+        {
+            Pulls = [new PullSummary(9, "Other", "u", "x", false, baseTip, "main", null, null, false), new PullSummary(5, "Call the service", "u", "author", false, head, "main", "REVIEW_REQUIRED", "SUCCESS", true)],
+            Snapshots = { [5] = Snapshot(5, head, baseTip) },
+        };
+        await using var server = new ReviewServer(Options(clone) with { Directory = Path.Combine(clone.Path, "app"), GitHub = github, PollInterval = TimeSpan.FromMilliseconds(100) });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+
+        var ranges = await client.GetFromJsonAsync<JsonElement>(server.BaseAddress + "/api/ranges");
+        var pulls = ranges.GetProperty("pulls").EnumerateArray().ToList();
+        Assert.Equal([5, 9], pulls.Select(p => p.GetProperty("number").GetInt32()));
+        Assert.Equal([false, true], pulls.Select(p => p.GetProperty("local").GetBoolean()));
+
+        var begun = await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { pull = 5 });
+        var id = (await begun.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+        Assert.Equal($"pr5-{head[..7]}", id);
+        var api = $"{server.BaseAddress}/api/reviews/{id}";
+        var events = await ReadEventsAsync(client, api + "/events");
+        Assert.Equal("ready", events[^1].GetProperty("type").GetString());
+        Assert.Contains(events, e => e.GetProperty("type").GetString() == "stage" && e.GetProperty("stage").GetString() == "fetch" && e.GetProperty("message").GetString()!.StartsWith("fetching #5"));
+        // The base is unknown until the commits are present, and is then the merge base with GitHub's base.
+        Assert.Contains(events, e => e.GetProperty("type").GetString() == "review" && e.TryGetProperty("base", out var b) && b.GetString() == baseTip);
+        Assert.Equal(refs, clone.Git("for-each-ref"));
+        var script = await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js");
+        Assert.Contains("\"pullCommits\":1", script, StringComparison.Ordinal);
+        Assert.Contains($"\"headOid\":\"{head}\"", script, StringComparison.Ordinal);
+
+        // While the page is open the server polls, and sends a snapshot only when it changed, or word that it is stale.
+        github.Snapshots[5] = Snapshot(5, head, baseTip, title: "Call the service, renamed");
+        var renamed = await ReadEventsAsync(client, api + "/events", e => e.TryGetProperty("snapshot", out var p) && p.GetProperty("title").GetString()!.EndsWith("renamed"));
+        github.Fail = new GitHubRateLimitException("slow down", TimeSpan.FromMilliseconds(300));
+        var stale = await ReadEventsAsync(client, api + "/events", e => e.TryGetProperty("stale", out _));
+        Assert.Equal("slow down", stale[^1].GetProperty("message").GetString());
+        Assert.Equal(2, stale.Count(e => e.TryGetProperty("snapshot", out _)));
+        Assert.True(github.Reads >= 3);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(api + "/pull")).StatusCode);
+    }
+
+    [Fact]
+    public async Task AttachesARangeWhoseHeadIsAPullRequestsHead()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        var github = new FakeGitHub
+        {
+            Pulls = [new PullSummary(3, "Call", "u", "author", false, after, "main", null, null, false)],
+            Snapshots = { [3] = Snapshot(3, after, before) },
+        };
+        await using var server = new ReviewServer(Options(repo) with { Directory = Path.Combine(repo.Path, "app"), GitHub = github });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+
+        var events = await ReadEventsAsync(client, $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}/events");
+        Assert.Contains(events, e => e.TryGetProperty("snapshot", out var p) && p.GetProperty("number").GetInt32() == 3);
+    }
+
+    [Fact]
+    public async Task WithoutGitHubThePickerSaysWhyAndAPullRequestCannotOpen()
+    {
+        using var repo = new TempRepo();
+        repo.Write("a.txt", "1");
+        repo.Commit("one");
+        await using var server = new ReviewServer(Options(repo) with { GitHubNotice = "gh is missing" });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        var ranges = await client.GetFromJsonAsync<JsonElement>(server.BaseAddress + "/api/ranges");
+        Assert.Equal("gh is missing", ranges.GetProperty("github").GetString());
+        Assert.Empty(ranges.GetProperty("pulls").EnumerateArray());
+        var refused = await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { pull = 1 });
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Equal("gh is missing", (await refused.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString());
+    }
+
+    /// <summary>Answers as GitHub would from pull requests held in memory, counting the snapshots it is asked for.</summary>
+    private sealed class FakeGitHub : IGitHub
+    {
+        public GitHubRepository Repository { get; } = new("github.com", "o", "r");
+        public List<PullSummary> Pulls { get; init; } = [];
+        public Dictionary<int, PullSnapshot> Snapshots { get; } = [];
+        public List<PullFile> Files { get; init; } = [];
+        public Exception? Fail { get; set; }
+        public int Reads;
+
+        public Task<IReadOnlyList<PullSummary>> ListPullsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<PullSummary>>(Pulls);
+
+        public Task<PullSnapshot?> GetPullAsync(int number, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Reads);
+            if (Fail is not null) throw Fail;
+            return Task.FromResult(Snapshots.GetValueOrDefault(number));
+        }
+
+        public Task<IReadOnlyList<PullFile>> GetPullFilesAsync(int number, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<PullFile>>(Files);
+    }
+
     private static ReviewServerOptions Options(TempRepo repo) => new()
     {
         Directory = repo.Path,
         Analyze = ReviewPipelineTests.Fake([]),
         Build = false,
-        PullRequests = false,
         Log = Console.Error.WriteLine,
     };
 

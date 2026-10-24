@@ -1,0 +1,19 @@
+query($owner: String!, $name: String!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      nodes {
+        number
+        title
+        url
+        isDraft
+        author { login }
+        headRefOid
+        baseRefName
+        reviewDecision
+        reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+  }
+}

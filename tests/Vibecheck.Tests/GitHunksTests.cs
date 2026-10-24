@@ -44,6 +44,13 @@ public class GitHunksTests
     }
 
     [Fact]
+    public void TheNewlineThatEndsTheDiffAddsNoLine()
+    {
+        var hunk = GitHunks.Parse("diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-x\n+y\n").Single().Hunks.Single();
+        Assert.Equal([["-", "x"], ["+", "y"]], hunk.Lines);
+    }
+
+    [Fact]
     public void PathsAreRelativeToTheDirectoryGivenWhenItIsBelowTheRepositoryTop()
     {
         using var repo = new TempRepo();

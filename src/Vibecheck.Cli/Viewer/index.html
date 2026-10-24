@@ -91,6 +91,17 @@
   @keyframes notice-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 
+  /* The bar of the review's pull request, which the vibecheck server's pull events fill. */
+  .pullbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 13px; }
+  .pull-number { font-family: var(--mono); font-weight: 600; }
+  .pull-title { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+  .pill { font-size: 11px; letter-spacing: .04em; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+  .pill.good { border-color: var(--added); color: var(--added); }
+  .pill.bad { border-color: var(--removed); color: var(--removed); }
+  .pill.wait { border-color: var(--modified); color: var(--modified); }
+  .pullbar .spacer { flex: 1; }
+  .stale { color: var(--warn); font-size: 12px; }
+
   /* Narratives, which Claude writes and the vibecheck server streams: the summary under the top bar, the tooltip on an
      edge, and a block in the details panel. Each is marked as written by a model. */
   .summary { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface); font-size: 13px; }
@@ -418,6 +429,8 @@
   </div>
 </div>
 <div class="notice" id="notice" role="status" hidden></div>
+<div class="pullbar" id="pullbar" hidden></div>
+<div class="notice ready" id="pushnotice" role="status" hidden></div>
 <div class="summary" id="summary" aria-live="polite" hidden></div>
 
 <div class="main">
