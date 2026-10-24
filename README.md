@@ -41,16 +41,18 @@ dotnet test --filter "FullyQualifiedName!~Sample"
 
 ## Installing
 
-`archmap` is a .NET tool. Pack it and install it from the local package folder:
+`archmap` is a .NET tool. To install it from this working tree, or to replace an
+installed copy with the current code, run:
 
 ```
-dotnet pack src/Archmap.Cli -c Release -o nupkg
-dotnet tool install --global archmap --configfile tool.nuget.config
+pwsh scripts/reinstall-tool.ps1
 ```
 
-To pick up later changes, pack again with a higher `<Version>` in
-`src/Archmap.Cli/Archmap.Cli.csproj` and run `dotnet tool update --global archmap
---configfile tool.nuget.config`. `tool.nuget.config` names the local folder as the
+The script packs the tool into `nupkg/` with a version of its own, the project's
+`<Version>` with a `-dev.` suffix and a timestamp, so that NuGet never reuses an
+older package cached under the same version. It then uninstalls any installed copy
+and installs the new one. Stop any running `archmap` first, since it holds the
+installed files open. `tool.nuget.config` names the local folder as the
 only source for `archmap`, which works where a user-level NuGet configuration uses
 package source mapping and so refuses `--add-source`. Without installing, run
 `dotnet run --project src/Archmap.Cli --` from this repository.
