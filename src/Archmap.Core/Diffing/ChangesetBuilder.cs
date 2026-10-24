@@ -15,7 +15,7 @@ public static class ChangesetBuilder
             Head = headFacts.Commit,
             Map = headFacts.Map,
             Structural = DiffStructure(baseFacts, headFacts),
-            Content = Rollup(baseFacts.Map, headFacts.Map, files),
+            Content = Rollup(baseFacts.Map, headFacts.Map, files, (hunks ?? []).Where(h => h.Trivial == true).Select(h => h.Path).ToHashSet(StringComparer.Ordinal)),
             Files = files,
             Types = DiffTypes(baseFacts, headFacts),
             Edges = DiffEdges(baseFacts, headFacts),
@@ -126,8 +126,11 @@ public static class ChangesetBuilder
         return result;
     }
 
-    /// <summary>Rolls file changes up through the hierarchy. A file counts under every node that contains any leaf its types bind to.</summary>
-    private static SortedDictionary<string, NodeContent> Rollup(ArchMap baseMap, ArchMap headMap, List<FileChange> files)
+    /// <summary>
+    /// Rolls file changes up through the hierarchy. A file counts under every node that contains any leaf its types bind
+    /// to. The trivial paths are the modified files whose edits are all trivial.
+    /// </summary>
+    private static SortedDictionary<string, NodeContent> Rollup(ArchMap baseMap, ArchMap headMap, List<FileChange> files, HashSet<string> trivial)
     {
         static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsUnder(l, id));
         var content = new SortedDictionary<string, NodeContent>(StringComparer.Ordinal);
@@ -139,12 +142,13 @@ public static class ChangesetBuilder
             var added = files.Count(f => f.Status == "added" && Under(f.LeavesHead, id));
             var removed = files.Count(f => f.Status == "removed" && Under(f.LeavesBase, id));
             var modified = files.Count(f => f.Status == "modified" && Under(f.LeavesHead, id));
+            var trivialCount = files.Count(f => f.Status == "modified" && trivial.Contains(f.Path) && Under(f.LeavesHead, id));
             string status;
             if (id != Identifiers.Root && id != ArchMap.Unsorted && !baseMap.Nodes.ContainsKey(id)) status = "added";
             else if (id != Identifiers.Root && id != ArchMap.Unsorted && !headMap.Nodes.ContainsKey(id)) status = "removed";
             else if (added + removed + modified == 0) status = "unchanged";
             else status = headMap.IsContainer(id) ? "children" : "modified";
-            content[id] = new NodeContent(total, added, removed, modified, status);
+            content[id] = new NodeContent(total, added, removed, modified, status, trivialCount);
         }
         return content;
     }

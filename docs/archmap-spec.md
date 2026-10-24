@@ -537,6 +537,15 @@ as the differences:
   per-level and per-view edges and cycles at head.
 - **Hunks**: the textual diff per file, attached to the file's leaves, so that the
   viewer can descend from a node to its code without a second tool.
+- **Trivial edits**: an edit to a C# file is trivial when the code on both sides
+  parses to the same sequence of tokens, so that it touches only comments,
+  documentation comments, whitespace, line breaks, `#region` lines or `#pragma`
+  lines. Other directives, and code that an `#if` leaves out of the parse, count as
+  code. Each hunk and each file whose edits are all trivial is marked, and Content
+  counts the trivial files under each node. The viewer shows a node whose changes are
+  all trivial in a muted style rather than as modified. Moving code to other lines
+  can still reach the program through caller-information attributes and stack
+  traces, and the marks accept that.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a
@@ -557,7 +566,7 @@ the facts say, as part of the normal test run.
 | `archmap why <from> <to>` | Lists the type pairs behind the edge between two nodes, with counts, from a facts document given with `--facts` or from a fresh analysis. |
 | `archmap fmt` | Rewrites both files in canonical form. `--check` reports without writing. |
 | `archmap facts` | Emits the facts document for the working tree, recording the HEAD commit, suffixed `+dirty` when the tree has changes. |
-| `archmap diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, attaches hunks from `git diff` between the two commits. |
+| `archmap diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, attaches hunks from `git diff` between the two commits, with trivial edits marked. |
 
 Every command takes `--map <path>`; the default is `./archmap.json`, and the
 repository root is the map's directory.

@@ -64,8 +64,12 @@ public sealed record TypeMove(string Name, string? LeafBase, string? LeafHead, s
 /// </summary>
 public sealed record TypeChange(string Name, string? LeafBase, string? LeafHead, IReadOnlyList<string> Files, string Status);
 
-/// <summary>File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>, <c>modified</c>, <c>children</c> or <c>unchanged</c>.</summary>
-public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status);
+/// <summary>
+/// File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>,
+/// <c>modified</c>, <c>children</c> or <c>unchanged</c>. Trivial counts the modified files whose edits are all
+/// trivial, as <see cref="TrivialEdits"/> defines it.
+/// </summary>
+public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status, int Trivial = 0);
 
 /// <summary>A file's change status and the leaves its types bound to at base and at head.</summary>
 public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead);
@@ -83,7 +87,11 @@ public sealed record PairChange(string From, string To, int Base, int Head);
 /// <summary>A node's metrics at base and at head. Either is null when the node exists at one end only.</summary>
 public sealed record MetricsChange(NodeMetrics? Base, NodeMetrics? Head);
 
-public sealed record FileHunks(string Path, List<Hunk> Hunks);
+/// <summary>The hunks of one file. Trivial is true when every edit to the file is trivial, as <see cref="TrivialEdits"/> defines it, and null otherwise.</summary>
+public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = null);
 
-/// <summary>One hunk of a unified diff. Each line is a two-element array of marker (<c>" "</c>, <c>"-"</c> or <c>"+"</c>) and text.</summary>
-public sealed record Hunk(string Header, List<string[]> Lines);
+/// <summary>
+/// One hunk of a unified diff. Each line is a two-element array of marker (<c>" "</c>, <c>"-"</c> or <c>"+"</c>) and
+/// text. Trivial is true when the hunk's edit is trivial, as <see cref="TrivialEdits"/> defines it, and null otherwise.
+/// </summary>
+public sealed record Hunk(string Header, List<string[]> Lines, bool? Trivial = null);
