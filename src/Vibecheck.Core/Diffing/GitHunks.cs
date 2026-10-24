@@ -90,12 +90,24 @@ public static class GitHunks
     private static string? Blob(string id) => id.Trim('0').Length == 0 ? null : id;
 
     /// <summary>
-    /// Returns the hunks of every file that changed between two revisions, with trivial edits marked. The changes are
-    /// those that <see cref="Changes"/> returns for the same revisions. The paths returned are relative to
-    /// <paramref name="repo"/>, which may be any directory inside the repository, and each file's hunks are keyed by
-    /// its path at head, or at base for a removed file.
+    /// Returns the text of every C# file among the changes at base and at head, by the file's path, with null at an end
+    /// where the file does not exist. The texts are what <see cref="TrivialEdits"/> reads.
     /// </summary>
-    public static List<FileHunks> Collect(string repo, string baseRev, string headRev, IReadOnlyList<GitChange> changes)
+    public static Dictionary<string, (string? Base, string? Head)> Texts(string repo, IReadOnlyList<GitChange> changes)
+    {
+        var wanted = changes.Where(c => TrivialEdits.Applies(c.Path)).ToList();
+        var blobs = ReadBlobs(repo, wanted.SelectMany(c => new[] { c.BlobBase, c.BlobHead }).OfType<string>().Distinct().ToList());
+        return wanted.ToDictionary(c => c.Path, c => (c.BlobBase is { } b ? blobs.GetValueOrDefault(b) : null, c.BlobHead is { } h ? blobs.GetValueOrDefault(h) : null), StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the hunks of every file that changed between two revisions. The changes are those that
+    /// <see cref="Changes"/> returns for the same revisions. The paths returned are relative to <paramref name="repo"/>,
+    /// which may be any directory inside the repository, and each file's hunks are keyed by its path at head, or at base
+    /// for a removed file. With <paramref name="mark"/>, each C# file present at both revisions has the edits that
+    /// change no code marked by <see cref="TrivialEdits"/>; <see cref="ChangesetBuilder"/> marks by every rule instead.
+    /// </summary>
+    public static List<FileHunks> Collect(string repo, string baseRev, string headRev, IReadOnlyList<GitChange> changes, bool mark = true)
     {
         if (changes.Count == 0) return [];
         var output = Git.RunExact(repo, [.. DiffOptions, "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", baseRev, headRev]);
@@ -107,13 +119,9 @@ public static class GitHunks
             var touched = repaired.SelectMany(c => new[] { c.Path, c.PreviousPath ?? c.Path }).ToHashSet(StringComparer.Ordinal);
             files = files.Where(f => !touched.Contains(f.Path)).Concat(repaired.Select(c => DiffOne(repo, baseRev, headRev, c)).OfType<FileHunks>()).ToList();
         }
-        var byPath = changes.ToDictionary(c => c.Path, StringComparer.Ordinal);
-        GitChange? Both(FileHunks f) =>
-            byPath.TryGetValue(f.Path, out var c) && c.BlobBase is not null && c.BlobHead is not null && TrivialEdits.Applies(c.Path) ? c : null;
-        var texts = ReadBlobs(repo, files.Select(Both).Where(c => c is not null).SelectMany(c => new[] { c!.BlobBase!, c.BlobHead! }).Distinct().ToList());
-        return files.Select(f =>
-            Both(f) is { } c && texts.TryGetValue(c.BlobBase!, out var before) && texts.TryGetValue(c.BlobHead!, out var after)
-                ? TrivialEdits.Mark(f, before, after) : f).ToList();
+        if (!mark) return files;
+        var texts = Texts(repo, changes.Where(c => c.BlobBase is not null && c.BlobHead is not null).ToList());
+        return files.Select(f => texts.TryGetValue(f.Path, out var t) && t.Base is not null && t.Head is not null ? TrivialEdits.Mark(f, t.Base, t.Head) : f).ToList();
     }
 
     /// <summary>

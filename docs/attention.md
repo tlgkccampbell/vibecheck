@@ -218,11 +218,11 @@ handled by the rename detection of pull-requests.md section 4.5.
 
 ### 5.3 Using directives
 
-A hunk whose changed lines are all `using` directives, in a file whose other tokens
-are unchanged, is trivial with the reason "usings only". A directive is not a
-dependency, as spec section 3 says, and both ends compiled. The one way such an edit
-reaches the program is by making a more specific extension method applicable, which
-the marks accept as they accept line numbers.
+A hunk whose changed lines are all `using` directives is trivial with the reason
+"usings only", and a file whose other tokens are unchanged takes the same reason. A
+directive is not a dependency, as spec section 3 says, and both ends compiled. The
+one way such an edit reaches the program is by making a more specific extension
+method applicable, which the marks accept as they accept line numbers.
 
 ### 5.4 Generated files
 
@@ -235,9 +235,12 @@ reason on its header is there so that the reviewer can unmark it.
 
 ### 5.5 In the changeset
 
-`FileHunks.Trivial` and `Hunk.Trivial` stay booleans, and both gain `Reason`, a short
-string from a fixed list, with the names or path it mentions. The reviewed store
-records the reason it pre-marked a file with, as it records "no code changed" today.
+`FileHunks.Trivial` and `Hunk.Trivial` stay booleans, and both gain `Reason`: a kind
+from a fixed list, with the names or path it mentions, and, for a rename consequence,
+the identifier of the rename's decision. A hunk that is trivial by the rename rule is
+still a consequence of that decision, so the decision counts it. The reviewed store
+records the kind it pre-marked a file with, as it records "no code changed" today,
+and the viewer takes the names and paths from the hunks.
 
 ## 6. The reading path
 

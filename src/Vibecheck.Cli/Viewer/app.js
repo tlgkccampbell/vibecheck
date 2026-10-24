@@ -131,12 +131,53 @@
 
   // ---------- Reviewed files ----------
   // A changed file is reviewed when the reviewer has set it aside, or when the tool has and the reviewer has not
-  // unmarked it. The server keeps the marks. Each maps a path to the reason the file is reviewed: "reviewer", "trivial"
-  // for a file whose edits touch no code, or "renamed" for a file renamed without changes. A reviewed file is set aside
-  // wherever it appears while reviewed files are muted. See docs/pull-requests.md section 5.
+  // unmarked it. The server keeps the marks. Each maps a path to the reason the file is reviewed: "reviewer", "renamed"
+  // for a file renamed without changes, or the kind of the file's reason in the changeset's hunks: "trivial" for a file
+  // whose edits touch no code, "rename", "moved", "reordered", "usings" or "generated", as docs/attention.md section 5
+  // defines them. A reviewed file is set aside wherever it appears while reviewed files are muted. See
+  // docs/pull-requests.md section 5.
   const REVIEWED = new Map(Object.entries(META.reviewed || {}));
-  const REASON_TEXT = { trivial: "no code changed", renamed: "renamed without changes" };
   const CHANGED_FILES = CS.files.filter((f) => f.status !== "unchanged");
+  const FILE_HUNKS = new Map(CS.hunks.map((h) => [h.path, h]));
+
+  // Returns the words for the reason an edit is trivial, or a file is set aside, as docs/attention.md section 5 names
+  // them: the kind, with the names or path it mentions. The hunk, when given, says which way a move went.
+  function reasonText(reason, hunk) {
+    if (!reason) return null;
+    switch (reason.kind) {
+      case "trivial": return "no code changed";
+      case "renamed": return "renamed without changes";
+      case "rename": return `renamed ${memberName(reason.previous || "", "member")} to ${memberName(reason.symbol || "", "member")}`;
+      case "moved": return `${movedFrom(hunk) ? "moved from" : "moved to"} ${reason.path}`;
+      case "reordered": return "members reordered";
+      case "usings": return "usings only";
+      case "generated": return "generated";
+      default: return null;
+    }
+  }
+  // Returns a value indicating whether a hunk, or any hunk of a file given by its hunks, adds lines, in which case
+  // its moved declarations came from the other file; otherwise they went there.
+  const movedFrom = (hunk) => !hunk || (Array.isArray(hunk) ? hunk : [hunk]).some((h) => h.lines.some((l) => l[0] === "+"));
+  // Returns the note on a reviewed file's header for the reason it is reviewed: the words, with the rename's decision,
+  // the other file of a move, or the hand-written files of a generated file's types as links. Null for the reviewer's
+  // own marks.
+  function reasonNote(path, why) {
+    const file = FILE_HUNKS.get(path);
+    const reason = file && file.reason && file.reason.kind === why ? file.reason : { kind: why };
+    const text = reasonText(reason, file ? file.hunks : null);
+    if (!text) return null;
+    const note = el("span", { class: "file-note" }, text);
+    if (reason.kind === "rename" && DECISIONS.has(reason.decision)) {
+      const d = DECISIONS.get(reason.decision);
+      note.append(" · ", el("button", { class: "link", onclick: () => openHunk(d.file, d.hunk), title: "Open the rename's decision" }, "decision"));
+    } else if (reason.kind === "moved" && fileOf(reason.path)) {
+      note.replaceChildren(movedFrom(file.hunks) ? "moved from " : "moved to ", el("button", { class: "link", onclick: () => openFile(reason.path), title: reason.path }, reason.path.split("/").pop()));
+    } else if (reason.kind === "generated") {
+      const others = [...new Set(CS.types.filter((t) => t.files.includes(path)).flatMap((t) => t.files).filter((p) => p !== path))];
+      if (others.length) note.append(" · hand-written: ", ...others.flatMap((p, i) => [i ? ", " : "", el("button", { class: "link", onclick: () => openFile(p), title: p }, p.split("/").pop())]));
+    }
+    return note;
+  }
 
   // ---------- Decisions and consequences ----------
   // A decision is a hunk that changes a declaration, and a consequence is a hunk whose every changed line follows from
@@ -1217,7 +1258,7 @@
     const digits = String(Math.max(nums.a, nums.b) + rows.length).length;
     const ln = () => el("col", { style: `width: calc(${digits}ch + 17px)` });
     const trivial = hunk.trivial && state.opts.mute;
-    const table = el("table", { class: "diff" + (trivial ? " trivial" : "") }, el("caption", {}, hunk.header + (trivial ? " · no code changed" : "")),
+    const table = el("table", { class: "diff" + (trivial ? " trivial" : "") }, el("caption", {}, hunk.header + (trivial ? " · " + (reasonText(hunk.reason, hunk) || "no code changed") : "")),
       el("colgroup", {}, ln(), el("col", {}), ln(), el("col", {})));
     const body = el("tbody");
     const lit = highlightHunk(path, hunk.lines);
@@ -1429,7 +1470,7 @@
     const chip = fs !== "reviewed" && consequenceOnly(path) ? "consequence" : fs;
     head.append(el("span", { class: "chip chip-" + chip }, chip), el("span", { class: "file-path" }, path));
     if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
-    if (done && REASON_TEXT[REVIEWED.get(path)]) head.append(el("span", { class: "file-note" }, REASON_TEXT[REVIEWED.get(path)]));
+    if (done) head.append(reasonNote(path, REVIEWED.get(path)) || "");
     const talk = threadsOf(path), notes = annotationsOf(path);
     const problems = [...notes.lines.values()].flat().concat(notes.top).filter(isProblem).length;
     if (problems) head.append(el("span", { class: "file-note problem-note" }, plural(problems, "check problem", "check problems")));

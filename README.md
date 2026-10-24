@@ -15,8 +15,8 @@ all five of its phases are built: reviewed files and the full diff, opening pull
 reading the discussion, writing, and checks in detail.
 Directing the reviewer's attention, with decisions and their consequences, semantic
 triviality, a reading path, new concepts and a glossary, is designed in
-[docs/attention.md](docs/attention.md); its first phase, decisions and their consequences,
-is built.
+[docs/attention.md](docs/attention.md); its first two phases, decisions and their
+consequences and semantic triviality, are built.
 
 ## Layout
 
@@ -235,8 +235,12 @@ Each changed file has a reviewed checkbox in the leaf view, and a block offers t
 all of its files at once. A reviewed file is set aside: its chip and its types are
 muted, its diffs are collapsed, it sorts last, and a block whose changed files are all
 reviewed is drawn muted. The top bar shows how many files are reviewed. A file whose
-edits touch only comments, whitespace or layout, and a file renamed without changes,
-start reviewed, and unmarking one sticks. A mark belongs to the file's change: it is
+edits touch only comments, whitespace or layout, a file renamed without changes, and a
+file a generator wrote start reviewed, with the reason on the file's header, and
+unmarking one sticks. So does a file whose lines differ only by a renamed
+declaration's name, with a link to the rename's decision, one whose declarations moved
+unchanged between the files of a type or were reordered within it, and one whose
+edits are `using` directives alone. A mark belongs to the file's change: it is
 kept in `reviewed.json` in the repository's cache folder, keyed by the path and git's
 blobs at both ends, so a later range that leaves the file alone keeps the mark and one
 that changes it clears it. **Mute reviewed files** turns the muting off but keeps the

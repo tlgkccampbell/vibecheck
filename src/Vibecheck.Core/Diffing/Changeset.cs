@@ -108,8 +108,17 @@ public sealed record PairChange(string From, string To, int Base, int Head);
 /// <summary>A node's metrics at base and at head. Either is null when the node exists at one end only.</summary>
 public sealed record MetricsChange(NodeMetrics? Base, NodeMetrics? Head);
 
-/// <summary>The hunks of one file. Trivial is true when every edit to the file is trivial, as <see cref="TrivialEdits"/> defines it, and null otherwise.</summary>
-public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = null);
+/// <summary>
+/// The hunks of one file. Trivial is true when every edit to the file is trivial, as <see cref="TrivialEdits"/> defines
+/// it, and null otherwise. The reason says why the tool sets the file aside: the kind of trivial edit its hunks hold,
+/// or <see cref="EditReason.Generated"/> for a file a generator wrote, which is set aside whether or not its edits are
+/// trivial. It is null for a file the tool does not set aside.
+/// </summary>
+public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = null)
+{
+    /// <summary>Gets why the tool sets the file aside, or <see langword="null"/> when it does not.</summary>
+    public EditReason? Reason { get; init; }
+}
 
 /// <summary>
 /// One hunk of a unified diff. Each line is a two-element array of marker (<c>" "</c>, <c>"-"</c> or <c>"+"</c>) and
@@ -117,6 +126,9 @@ public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = nu
 /// </summary>
 public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Trivial = null)
 {
+    /// <summary>Gets the kind of trivial edit the hunk holds, or <see langword="null"/> when the hunk is not trivial.</summary>
+    public EditReason? Reason { get; init; }
+
     /// <summary>
     /// Gets the identifiers of the decisions this hunk is a consequence of, the one with the most sites in the hunk
     /// first, or <see langword="null"/> when the hunk is not a consequence. See <see cref="Clustering"/>.
@@ -164,3 +176,30 @@ public sealed record DecisionDeclaration(string Symbol, string Change, string Ki
 
 /// <summary>A hunk that follows from a decision, by its file and its index, with the number of its changed lines that reference the decision's declarations.</summary>
 public sealed record Consequence(string File, int Hunk, int Lines);
+
+/// <summary>
+/// Why an edit cannot change what the program does, or why the tool sets a file aside, as <c>docs/attention.md</c>
+/// section 5 describes. The kind is one of the constants of this record, and the other members carry what the kind
+/// mentions: the renamed declaration and its previous symbol for a rename consequence, with the identifier of the
+/// decision that renamed it once the decisions are known; the file at the other end for a moved declaration.
+/// </summary>
+public sealed record EditReason(string Kind, string? Symbol = null, string? Previous = null, string? Path = null, string? Decision = null)
+{
+    /// <summary>The edit touches only comments, whitespace, line breaks, regions and pragmas, so no code changed.</summary>
+    public const string Trivial = "trivial";
+
+    /// <summary>Every changed line differs from its pair on the other side only by a renamed declaration's name.</summary>
+    public const string Rename = "rename";
+
+    /// <summary>The changed lines are declarations moved, unchanged, between files of one type.</summary>
+    public const string Moved = "moved";
+
+    /// <summary>The changed lines are declarations reordered, unchanged, within their file.</summary>
+    public const string Reordered = "reordered";
+
+    /// <summary>The changed lines are <c>using</c> directives alone.</summary>
+    public const string Usings = "usings";
+
+    /// <summary>A generator wrote the file, which an <c>auto-generated</c> header or a <c>.Designer.cs</c> or <c>.g.cs</c> name says.</summary>
+    public const string Generated = "generated";
+}

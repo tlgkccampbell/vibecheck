@@ -1,42 +1,248 @@
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
+using Vibecheck.Analysis;
+using Vibecheck.Checking;
 
 namespace Vibecheck.Diffing;
 
 /// <summary>
-/// Decides whether an edit to a C# file can change the compiled program. An edit is trivial when the code on both sides
-/// is the same sequence of tokens, so that it touches only comments, documentation comments, whitespace, line breaks,
-/// <c>#region</c> lines or <c>#pragma</c> lines. Any other directive and any code an <c>#if</c> leaves out count as
-/// code, since they decide what is compiled. Moving code to other lines still changes line numbers, which reach the
-/// program only through caller-information attributes and stack traces.
+/// Decides whether an edit to a C# file can change the compiled program, and says why it cannot. An edit is trivial
+/// when the code on both sides is the same sequence of tokens, so that it touches only comments, documentation
+/// comments, whitespace, line breaks, <c>#region</c> lines or <c>#pragma</c> lines. Any other directive and any code
+/// an <c>#if</c> leaves out count as code, since they decide what is compiled. Moving code to other lines still
+/// changes line numbers, which reach the program only through caller-information attributes and stack traces.
+/// Four more kinds of edit are trivial by the rules of <c>docs/attention.md</c> section 5, and each is marked with its
+/// <see cref="EditReason"/>: lines that differ only by a renamed declaration's name, declarations moved or reordered
+/// unchanged, <c>using</c> directives alone, and files a generator wrote.
 /// </summary>
 public static partial class TrivialEdits
 {
     /// <summary>Returns a value indicating whether a file name is a C# source file, the only kind this class reads.</summary>
     public static bool Applies(string path) => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Returns the hunks of a file with each hunk, and the file, marked trivial when its edit is trivial.</summary>
+    /// <summary>
+    /// Returns the hunks of a file with each hunk, and the file, marked trivial when its edit changes no code or only
+    /// <c>using</c> directives. The declarations are not known here, so renames and moves are not found.
+    /// </summary>
     /// <param name="file">The hunks of one file, as <see cref="GitHunks.Parse"/> returns them.</param>
     /// <param name="baseText">The whole file at the base revision.</param>
     /// <param name="headText">The whole file at the head revision.</param>
-    public static FileHunks Mark(FileHunks file, string baseText, string headText)
+    public static FileHunks Mark(FileHunks file, string baseText, string headText) =>
+        MarkFile(file, baseText, headText, Rules.None);
+
+    /// <summary>
+    /// Returns the hunks of every file with each hunk, and each file, marked trivial by every rule, and with each file a
+    /// generator wrote marked <see cref="EditReason.Generated"/>. A file whose text at either end is not given, or that
+    /// is not a C# file, is returned as it is, except that a generated file is still recognized by its name.
+    /// </summary>
+    /// <param name="hunks">The hunks of every changed file.</param>
+    /// <param name="texts">The text of each file at base and at head, by the file's path, with null at an end where it does not exist.</param>
+    /// <param name="baseFacts">The facts at base, whose declarations the removed lines are read against.</param>
+    /// <param name="headFacts">The facts at head, whose declarations the added lines are read against.</param>
+    /// <param name="changes">The declaration diff of the two ends, which names the renames.</param>
+    /// <param name="files">The changed files, which give a renamed file's path at base.</param>
+    public static List<FileHunks> Mark(List<FileHunks> hunks, IReadOnlyDictionary<string, (string? Base, string? Head)> texts,
+        Facts baseFacts, Facts headFacts, IReadOnlyList<DeclarationChange> changes, IReadOnlyList<FileChange> files)
+    {
+        var rules = Rules.Of(baseFacts, headFacts, changes);
+        var previous = files.Where(f => f.PreviousPath is not null).ToDictionary(f => f.Path, f => f.PreviousPath!, StringComparer.Ordinal);
+        return hunks.Select(file =>
+        {
+            texts.TryGetValue(file.Path, out var text);
+            var marked = text.Base is not null && text.Head is not null && Applies(file.Path)
+                ? MarkFile(file, text.Base, text.Head, rules with { BasePath = previous.GetValueOrDefault(file.Path, file.Path) })
+                : file;
+            return IsGenerated(file.Path, text.Head ?? text.Base) ? marked with { Reason = new EditReason(EditReason.Generated) } : marked;
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Returns a value indicating whether a generator wrote a file: its name ends in <c>.Designer.cs</c> or <c>.g.cs</c>,
+    /// or its first lines hold an <c>auto-generated</c> comment, as the tools that write such files put there.
+    /// </summary>
+    public static bool IsGenerated(string path, string? text)
+    {
+        if (path.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)) return true;
+        if (text is null || !Applies(path)) return false;
+        // The header is a comment at the top of the file, so only the first few lines are read.
+        var head = text.Length > 600 ? text[..600] : text;
+        return head.Contains("<auto-generated", StringComparison.OrdinalIgnoreCase) || head.Contains("<autogenerated", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The knowledge the rename and move rules need: the names each rename substitutes, the lines of the renamed
+    /// declarations themselves, which are decisions and never consequences, and the declarations that are the same
+    /// at both ends, which may have moved. The base path names the file at base, which differs for a renamed file.
+    /// </summary>
+    private sealed record Rules(Dictionary<string, string> Renames, Dictionary<string, (string Symbol, string Previous)> Renamed,
+        ILookup<string, Declaration> BaseDecisions, ILookup<string, Declaration> HeadDecisions, End Base, End Head)
+    {
+        public string? BasePath { get; init; }
+
+        public static readonly Rules None = new([], [], Empty, Empty, End.Of([]), End.Of([]));
+
+        private static ILookup<string, Declaration> Empty => Array.Empty<Declaration>().ToLookup(d => d.File, StringComparer.Ordinal);
+
+        public static Rules Of(Facts baseFacts, Facts headFacts, IReadOnlyList<DeclarationChange> changes)
+        {
+            // A rename substitutes a name only where the name itself changed. The members of a renamed type pair as
+            // renamed too, with their own names kept, and lines that mention them are consequences like any other.
+            var renames = changes.Where(c => c.Change == "renamed" && c.Previous is not null)
+                .Select(c => (Old: PlainName(c.Previous!), New: PlainName(c.Symbol), c)).Where(r => r.Old != r.New).ToList();
+            var substitutions = new Dictionary<string, string>(StringComparer.Ordinal);
+            var renamed = new Dictionary<string, (string, string)>(StringComparer.Ordinal);
+            foreach (var r in renames)
+            {
+                substitutions.TryAdd(r.Old, r.New);
+                renamed.TryAdd(r.New, (r.c.Symbol, r.c.Previous!));
+            }
+            var baseSymbols = renames.Select(r => r.c.Previous!).ToHashSet(StringComparer.Ordinal);
+            var headSymbols = renames.Select(r => r.c.Symbol).ToHashSet(StringComparer.Ordinal);
+            // A declaration is the same at both ends when the diff lists no change of it. It may still stand on other
+            // lines or in another file at head.
+            var changed = changes.Select(c => c.Symbol).Concat(changes.Select(c => c.Previous).OfType<string>()).ToHashSet(StringComparer.Ordinal);
+            var atBase = baseFacts.Declarations.Where(d => !changed.Contains(d.Symbol)).ToList();
+            var atHead = headFacts.Declarations.Where(d => !changed.Contains(d.Symbol)).ToList();
+            var same = atBase.Select(d => d.Symbol).Intersect(atHead.Select(d => d.Symbol), StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+            return new Rules(substitutions, renamed,
+                baseFacts.Declarations.Where(d => baseSymbols.Contains(d.Symbol)).ToLookup(d => d.File, StringComparer.Ordinal),
+                headFacts.Declarations.Where(d => headSymbols.Contains(d.Symbol)).ToLookup(d => d.File, StringComparer.Ordinal),
+                End.Of(atBase.Where(d => same.Contains(d.Symbol)).ToList()), End.Of(atHead.Where(d => same.Contains(d.Symbol)).ToList()));
+        }
+    }
+
+    /// <summary>The declarations that are the same at both ends, as one end holds them: by file in line order, and by symbol.</summary>
+    private sealed record End(ILookup<string, Declaration> ByFile, ILookup<string, Declaration> BySymbol)
+    {
+        public static End Of(List<Declaration> same) =>
+            new(same.OrderBy(d => d.FirstLine).ToLookup(d => d.File, StringComparer.Ordinal), same.ToLookup(d => d.Symbol, StringComparer.Ordinal));
+
+        /// <summary>Returns the declaration that holds a one-based line of a file, or <see langword="null"/>. A type holds only the lines that name it and the one that closes it.</summary>
+        public Declaration? Holding(string file, int line) => ByFile[file].FirstOrDefault(d => d.Kind == "type"
+            ? line == d.LastLine || Heads(d, line)
+            : line >= d.FirstLine && line <= d.LastLine);
+
+        /// <summary>Returns the place of a symbol among the file's declarations in line order, or -1 when the file does not hold it.</summary>
+        public int Rank(string file, string symbol) => ByFile[file].Select(d => d.Symbol).ToList().IndexOf(symbol);
+    }
+
+    /// <summary>Returns the identifier a symbol's last segment is written as, without its type arguments.</summary>
+    private static string PlainName(string symbol)
+    {
+        var name = DeclarationDiff.SimpleName(symbol);
+        var angle = name.IndexOf('<');
+        return angle < 0 ? name : name[..angle];
+    }
+
+    private static FileHunks MarkFile(FileHunks file, string baseText, string headText, Rules rules)
     {
         var before = Significant(baseText);
         var after = Significant(headText);
+        var basePath = rules.BasePath ?? file.Path;
         var hunks = file.Hunks.Select(h =>
         {
             if (!h.TryRanges(out var old, out var now)) return h;
-            return Same(Within(before, old), Within(after, now)) ? h with { Trivial = true } : h;
+            var reason = ReasonOf(Within(before, old), Within(after, now), h, old, now, basePath, file.Path, rules);
+            return reason is null ? h : h with { Trivial = true, Reason = reason };
         }).ToList();
-        // The whole file is compared on its own, so the file's mark never rests on how git cut the hunks.
-        var trivial = Same(before, after);
-        return file with { Hunks = hunks, Trivial = trivial ? true : null };
+        // The whole file is compared on its own, so the file's mark never rests on how git cut the hunks. A file whose
+        // hunks are all trivial takes the one kind they share, or the plain kind when they differ.
+        EditReason? fileReason = null;
+        if (Same(before, after, withUsings: true)) fileReason = new EditReason(EditReason.Trivial);
+        else if (Same(before, after, withUsings: false)) fileReason = new EditReason(EditReason.Usings);
+        else if (hunks.Count > 0 && hunks.All(h => h.Trivial == true))
+        {
+            var kinds = hunks.Select(h => h.Reason!).Where(r => r.Kind != EditReason.Trivial).DistinctBy(r => r.Kind).ToList();
+            fileReason = kinds.Count == 1 ? kinds[0] with { Decision = null } : new EditReason(EditReason.Trivial);
+        }
+        return file with { Hunks = hunks, Trivial = fileReason is null ? null : true, Reason = fileReason };
+    }
+
+    /// <summary>Returns why a hunk's edit is trivial, or <see langword="null"/> when it is not: the plain rule first, then usings, renames and moves.</summary>
+    private static EditReason? ReasonOf(List<Item> before, List<Item> after, Hunk hunk, (int Start, int Count) old, (int Start, int Count) now,
+        string basePath, string headPath, Rules rules)
+    {
+        if (Same(before, after, withUsings: true)) return new EditReason(EditReason.Trivial);
+        if (Same(before, after, withUsings: false)) return new EditReason(EditReason.Usings);
+        // The lines that changed, as git marks them, numbered at their own end and zero-based.
+        var (removed, added) = ChangedLines(hunk, old.Start, now.Start);
+        var removedLines = Lines(before, removed);
+        var addedLines = Lines(after, added);
+        if (removedLines.Count + addedLines.Count == 0) return null;
+        return RenameOf(removedLines, addedLines, basePath, headPath, rules) ?? MoveOf(removedLines, addedLines, basePath, headPath, rules);
+    }
+
+    /// <summary>
+    /// Returns the rename reason of a hunk whose every changed line pairs, in order, with a line on the other side that
+    /// has the same tokens once the renamed names are substituted, or <see langword="null"/>. A hunk that touches a
+    /// renamed declaration's own lines is the rename's decision and never its consequence.
+    /// </summary>
+    private static EditReason? RenameOf(List<(int Line, List<Item> Items)> removed, List<(int Line, List<Item> Items)> added, string basePath, string headPath, Rules rules)
+    {
+        if (rules.Renames.Count == 0 || removed.Count != added.Count) return null;
+        if (removed.Any(l => rules.BaseDecisions[basePath].Any(d => Heads(d, l.Line + 1))) || added.Any(l => rules.HeadDecisions[headPath].Any(d => Heads(d, l.Line + 1)))) return null;
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < removed.Count; i++)
+        {
+            var a = removed[i].Items;
+            var b = added[i].Items;
+            if (a.Count != b.Count) return null;
+            for (var k = 0; k < a.Count; k++)
+            {
+                if (a[k].Key == b[k].Key) continue;
+                if (!a[k].Identifier || !rules.Renames.TryGetValue(a[k].Text, out var renamed) || !b[k].Identifier || b[k].Text != renamed) return null;
+                counts[renamed] = counts.GetValueOrDefault(renamed) + 1;
+            }
+        }
+        if (counts.Count == 0) return null;
+        var name = counts.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal).First().Key;
+        var (symbol, previous) = rules.Renamed[name];
+        return new EditReason(EditReason.Rename, symbol, previous);
+    }
+
+    /// <summary>Returns a value indicating whether a one-based line lies in the part of a declaration that names it, before its body.</summary>
+    private static bool Heads(Declaration d, int line) => line >= d.FirstLine && line <= (d.BodyLine ?? d.LastLine);
+
+    /// <summary>
+    /// Returns the move reason of a hunk whose every changed line lies in a declaration that is the same at both ends
+    /// and stands elsewhere at head, or <see langword="null"/>: in another file, which the reason names, or at another
+    /// place in the order of its file's declarations. The lines of a type count only where they name it or close it,
+    /// since its members are declarations of their own.
+    /// </summary>
+    private static EditReason? MoveOf(List<(int Line, List<Item> Items)> removed, List<(int Line, List<Item> Items)> added, string basePath, string headPath, Rules rules)
+    {
+        var symbols = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var l in removed)
+        {
+            if (rules.Base.Holding(basePath, l.Line + 1) is not { } d) return null;
+            symbols.Add(d.Symbol);
+        }
+        foreach (var l in added)
+        {
+            if (rules.Head.Holding(headPath, l.Line + 1) is not { } d) return null;
+            symbols.Add(d.Symbol);
+        }
+        if (symbols.Count == 0) return null;
+        // The hunk's own file is the head path where it adds lines, and the base path where it only removes them.
+        var (here, there) = added.Count > 0 ? (headPath, rules.Base) : (basePath, rules.Head);
+        string? otherFile = null;
+        var reordered = false;
+        foreach (var symbol in symbols)
+        {
+            var baseFiles = rules.Base.BySymbol[symbol].Select(d => d.File).ToHashSet(StringComparer.Ordinal);
+            var headFiles = rules.Head.BySymbol[symbol].Select(d => d.File).ToHashSet(StringComparer.Ordinal);
+            if (!baseFiles.SetEquals(headFiles)) otherFile ??= there.BySymbol[symbol].Select(d => d.File).FirstOrDefault(f => f != here);
+            else if (rules.Base.Rank(basePath, symbol) != rules.Head.Rank(headPath, symbol)) reordered = true;
+            else return null;
+        }
+        return otherFile is not null ? new EditReason(EditReason.Moved, Path: otherFile) : reordered ? new EditReason(EditReason.Reordered) : null;
     }
 
     /// <summary>One token, directive or piece of excluded code, with the first and last lines it covers.</summary>
-    private readonly record struct Item(int First, int Last, string Key);
+    private readonly record struct Item(int First, int Last, string Key, string Text, bool Identifier, bool Using);
 
     /// <summary>Returns the parts of a file that the compiler reads, in order.</summary>
     private static List<Item> Significant(string text)
@@ -44,10 +250,14 @@ public static partial class TrivialEdits
         var source = SourceText.From(text);
         var root = CSharpSyntaxTree.ParseText(source).GetRoot();
         var items = new List<Item>();
-        Item At(TextSpan span, string key) =>
-            new(source.Lines.GetLineFromPosition(span.Start).LineNumber, source.Lines.GetLineFromPosition(Math.Max(span.Start, span.End - 1)).LineNumber, key);
+        Item At(TextSpan span, string key, string tokenText = "", bool identifier = false, bool inUsing = false) =>
+            new(source.Lines.GetLineFromPosition(span.Start).LineNumber, source.Lines.GetLineFromPosition(Math.Max(span.Start, span.End - 1)).LineNumber, key, tokenText, identifier, inUsing);
         foreach (var token in root.DescendantTokens())
-            if (!token.IsKind(SyntaxKind.EndOfFileToken)) items.Add(At(token.Span, token.RawKind + ":" + token.Text));
+        {
+            if (token.IsKind(SyntaxKind.EndOfFileToken)) continue;
+            var inUsing = token.Parent?.AncestorsAndSelf().Any(n => n is UsingDirectiveSyntax) == true;
+            items.Add(At(token.Span, token.RawKind + ":" + token.Text, token.Text, token.IsKind(SyntaxKind.IdentifierToken), inUsing));
+        }
         foreach (var trivia in root.DescendantTrivia())
         {
             if (trivia.IsKind(SyntaxKind.DisabledTextTrivia))
@@ -64,7 +274,37 @@ public static partial class TrivialEdits
     private static List<Item> Within(List<Item> items, (int Start, int Count) range) =>
         range.Count == 0 ? [] : items.Where(i => i.Last >= range.Start && i.First < range.Start + range.Count).ToList();
 
-    private static bool Same(List<Item> a, List<Item> b) => a.Select(i => i.Key).SequenceEqual(b.Select(i => i.Key), StringComparer.Ordinal);
+    /// <summary>Returns a value indicating whether two item lists are the same code, counting or leaving out the tokens of using directives.</summary>
+    private static bool Same(List<Item> a, List<Item> b, bool withUsings)
+    {
+        IEnumerable<string> Keys(List<Item> items) => items.Where(i => withUsings || !i.Using).Select(i => i.Key);
+        return Keys(a).SequenceEqual(Keys(b), StringComparer.Ordinal);
+    }
+
+    /// <summary>Returns the zero-based numbers of a hunk's removed lines at base and its added lines at head.</summary>
+    private static (List<int> Removed, List<int> Added) ChangedLines(Hunk hunk, int baseLine, int headLine)
+    {
+        var removed = new List<int>();
+        var added = new List<int>();
+        foreach (var line in hunk.Lines)
+        {
+            switch (line[0])
+            {
+                case "-": removed.Add(baseLine++); break;
+                case "+": added.Add(headLine++); break;
+                default: baseLine++; headLine++; break;
+            }
+        }
+        return (removed, added);
+    }
+
+    /// <summary>Returns the lines among those given that hold code, each with its items, leaving out using directives and lines of nothing but comments or space.</summary>
+    private static List<(int Line, List<Item> Items)> Lines(List<Item> items, List<int> lines)
+    {
+        var wanted = lines.ToHashSet();
+        return items.Where(i => !i.Using && wanted.Contains(i.First)).GroupBy(i => i.First).OrderBy(g => g.Key)
+            .Select(g => (g.Key, g.ToList())).ToList();
+    }
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
