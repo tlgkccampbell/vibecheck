@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Vibecheck.Checking;
 using Vibecheck.Model;
 
@@ -35,6 +36,7 @@ public sealed record Changeset
     /// <summary>The same metrics for each view's groups at head, keyed by the view.</summary>
     public required SortedDictionary<string, ViewMetrics> Views { get; init; }
 
+    /// <summary>The hunks of every changed file, including those that no type binds, keyed by the file's path.</summary>
     public required List<FileHunks> Hunks { get; init; }
 }
 
@@ -66,13 +68,29 @@ public sealed record TypeChange(string Name, string? LeafBase, string? LeafHead,
 
 /// <summary>
 /// File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>,
-/// <c>modified</c>, <c>children</c> or <c>unchanged</c>. Trivial counts the modified files whose edits are all
-/// trivial, as <see cref="TrivialEdits"/> defines it.
+/// <c>modified</c>, <c>children</c> or <c>unchanged</c>. A renamed file counts as modified under a node that holds one of
+/// its leaves at both ends, as removed under one that holds only its leaves at base, and as added under one that holds
+/// only its leaves at head.
 /// </summary>
-public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status, int Trivial = 0);
+public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status);
 
-/// <summary>A file's change status and the leaves its types bound to at base and at head.</summary>
-public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead);
+/// <summary>
+/// A file's change status and the leaves its types bound to at base and at head. The status is <c>added</c>,
+/// <c>removed</c>, <c>modified</c>, <c>renamed</c> or <c>unchanged</c>. The path is the file's path at head, or at base
+/// for a removed file, and a renamed file also has its path at base. A changed file that no type binds has no leaves at
+/// either end. The blobs are git's object identifiers of the file at each end, when git reports the file as changed.
+/// </summary>
+public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead)
+{
+    /// <summary>Gets the path of a renamed file at base, or <see langword="null"/> for any other file.</summary>
+    public string? PreviousPath { get; init; }
+
+    /// <summary>Gets git's object identifier of the file at base, or <see langword="null"/> when git does not report it or the file is new.</summary>
+    public string? BlobBase { get; init; }
+
+    /// <summary>Gets git's object identifier of the file at head, or <see langword="null"/> when git does not report it or the file is gone.</summary>
+    public string? BlobHead { get; init; }
+}
 
 /// <summary>
 /// A leaf-pair edge with its reference counts at base and head. The status is
@@ -94,4 +112,20 @@ public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = nu
 /// One hunk of a unified diff. Each line is a two-element array of marker (<c>" "</c>, <c>"-"</c> or <c>"+"</c>) and
 /// text. Trivial is true when the hunk's edit is trivial, as <see cref="TrivialEdits"/> defines it, and null otherwise.
 /// </summary>
-public sealed record Hunk(string Header, List<string[]> Lines, bool? Trivial = null);
+public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Trivial = null)
+{
+    /// <summary>Reads the base and head line ranges of the hunk's header, such as <c>@@ -12,7 +12,9 @@</c>, as zero-based first lines and counts.</summary>
+    public bool TryRanges(out (int Start, int Count) old, out (int Start, int Count) now)
+    {
+        old = now = default;
+        var m = HeaderPattern().Match(Header);
+        if (!m.Success) return false;
+        static (int, int) Range(Group start, Group count) => (int.Parse(start.Value) - 1, count.Success ? int.Parse(count.Value) : 1);
+        old = Range(m.Groups[1], m.Groups[2]);
+        now = Range(m.Groups[3], m.Groups[4]);
+        return true;
+    }
+
+    [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")]
+    private static partial Regex HeaderPattern();
+}

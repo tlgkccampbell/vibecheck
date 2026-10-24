@@ -10,6 +10,9 @@ listing of the code's types and verified against the dependency graph.
 The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step review
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
+Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
+all five of its phases are built: reviewed files and the full diff, opening pull requests,
+reading the discussion, writing, and checks in detail.
 Directing the reviewer's attention, with decisions and their consequences, semantic
 triviality, a reading path, new concepts and a glossary, is designed in
 [docs/attention.md](docs/attention.md); none of it is built yet.
@@ -111,12 +114,55 @@ A second review of the same range, or of a range that shares a commit with one s
 before, skips the compilation. `--no-cache` turns the cache off. The server listens
 on `127.0.0.1` only and answers only a browser that opened the link it printed.
 
+## Reviewing a pull request
+
+When the `gh` command is installed and signed in, the picker lists the repository's
+open pull requests, those that request your review first, with their author, draft
+state, checks and review decision. `vibecheck pr 42`, or the pull request's address,
+opens one straight away. The server reads GitHub with the token `gh` gives, which
+stays in its memory and never reaches the page.
+
+Opening a pull request whose commits are not present fetches them with an empty
+refmap, so only objects and `FETCH_HEAD` are written and no branch or remote-tracking
+ref moves. The review compares the head with its merge base with the base branch's tip
+on GitHub, as GitHub does, rather than with a local branch that may be stale, and pairs
+renamed files as GitHub pairs them.
+
+A bar under the top bar shows the pull request's state, checks, review decision and
+merge state. While its page is open the server reads the pull request every 30
+seconds and sends it to the page when it changes; **Refresh** reads it at once, and the
+bar says when GitHub's rate limit has made it stale. When the author pushes, a notice
+offers a review of the new head, or of the commits since your last review. A review of
+a range whose head is the head of exactly one open pull request is attached to it too.
+
+The bar's **Conversation** tab shows the description, comments, reviews and pushes in
+order, with each review's threads. In the **Map** tab, review threads appear under the
+diff lines they belong to, and outdated threads in a list at the top of their file.
+Blocks with unresolved threads carry a count. Your pending review is read back, and its
+comments are marked pending. Bodies are GitHub's HTML, sanitized again in the page,
+which runs under a Content-Security-Policy.
+
+Click a line number in a diff to comment on that line, and Shift-click another on the same
+side to comment on the lines between. **Add single comment** posts at once, and **Start a
+review** gathers comments in a pending review, as on GitHub. Threads take replies and can be
+resolved, comment boxes preview through GitHub's Markdown renderer, and **Suggest change**
+fills in a suggestion block. **Review** in the bar submits the pending review as a comment,
+an approval or a request for changes, or discards it.
+
+The Conversation tab opens with the head commit's checks, failing first, with required checks
+marked; a failed GitHub Actions job shows the end of its log on request. Failures and warnings
+that checks report on lines appear in the diffs and are counted on the map's blocks. Nothing is posted except by one of
+these actions, and the terminal logs each write with GitHub's answer. A closed or merged pull
+request is read-only.
+`--no-github` leaves GitHub out.
+
 ## Using the tool
 
 ```
 vibecheck           [review options]
 vibecheck review    [<base> [<head>] | <range>] [--map <vibecheck.json>] [--root <dir>] [--solution <sln>]
-                  [--no-build] [--no-cache] [--no-ai] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+                  [--no-build] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+vibecheck pr        <number> | <url> [review options]
 vibecheck init      --solution <path.sln> [--root <dir>] [--map <vibecheck.json>] [--facts <out.json>]
 vibecheck units     [--map <vibecheck.json>] [--root <dir>] [--out <units.txt>]
 vibecheck check     [--map <vibecheck.json>] [--root <dir>] [--facts <out.json>] [--strict]
@@ -179,6 +225,21 @@ A view regroups the leaves under a level into other blocks, and a leaf opens its
 types, the files that changed, their diffs, and the type pairs behind each of its
 edges. Changed edges carry a label with the count and the delta; a change of fewer
 than three references or under one percent is drawn as minor and left unlabeled.
+
+Every diff detects renames, so a moved file shows its edits rather than every line
+deleted and added again. Changed files that no type binds, such as project files,
+documents and workflows, open from an **Other files** block on the top level.
+
+Each changed file has a reviewed checkbox in the leaf view, and a block offers to mark
+all of its files at once. A reviewed file is set aside: its chip and its types are
+muted, its diffs are collapsed, it sorts last, and a block whose changed files are all
+reviewed is drawn muted. The top bar shows how many files are reviewed. A file whose
+edits touch only comments, whitespace or layout, and a file renamed without changes,
+start reviewed, and unmarking one sticks. A mark belongs to the file's change: it is
+kept in `reviewed.json` in the repository's cache folder, keyed by the path and git's
+blobs at both ends, so a later range that leaves the file alone keeps the mark and one
+that changes it clears it. **Mute reviewed files** turns the muting off but keeps the
+marks.
 
 To write a changeset document without the viewer, run `changeset` from the repository:
 

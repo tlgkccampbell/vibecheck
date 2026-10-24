@@ -1,0 +1,35 @@
+[
+ {
+  "sha": "51422e8200cf468a3375e1ab213ffa41d3d1a824",
+  "filename": "internal/skills/discovery/discovery.go",
+  "status": "modified",
+  "additions": 35,
+  "deletions": 29,
+  "changes": 64,
+  "blob_url": "https://github.com/cli/cli/blob/8f44336ccb889465115aa85319c275c8dec1c3b7/internal%2Fskills%2Fdiscovery%2Fdiscovery.go",
+  "raw_url": "https://github.com/cli/cli/raw/8f44336ccb889465115aa85319c275c8dec1c3b7/internal%2Fskills%2Fdiscovery%2Fdiscovery.go",
+  "contents_url": "https://api.github.com/repos/cli/cli/contents/internal%2Fskills%2Fdiscovery%2Fdiscovery.go?ref=8f44336ccb889465115aa85319c275c8dec1c3b7"
+ },
+ {
+  "sha": "2f0163f1d5745a808b13ee8e91241fbf680b0b5b",
+  "filename": "internal/skills/discovery/discovery_test.go",
+  "status": "modified",
+  "additions": 75,
+  "deletions": 0,
+  "changes": 75,
+  "blob_url": "https://github.com/cli/cli/blob/8f44336ccb889465115aa85319c275c8dec1c3b7/internal%2Fskills%2Fdiscovery%2Fdiscovery_test.go",
+  "raw_url": "https://github.com/cli/cli/raw/8f44336ccb889465115aa85319c275c8dec1c3b7/internal%2Fskills%2Fdiscovery%2Fdiscovery_test.go",
+  "contents_url": "https://api.github.com/repos/cli/cli/contents/internal%2Fskills%2Fdiscovery%2Fdiscovery_test.go?ref=8f44336ccb889465115aa85319c275c8dec1c3b7"
+ },
+ {
+  "sha": "c52232657c7d226f48df399cb7f3e1147b46b464",
+  "filename": "pkg/cmd/skills/install/install.go",
+  "status": "modified",
+  "additions": 104,
+  "deletions": 48,
+  "changes": 152,
+  "blob_url": "https://github.com/cli/cli/blob/8f44336ccb889465115aa85319c275c8dec1c3b7/pkg%2Fcmd%2Fskills%2Finstall%2Finstall.go",
+  "raw_url": "https://github.com/cli/cli/raw/8f44336ccb889465115aa85319c275c8dec1c3b7/pkg%2Fcmd%2Fskills%2Finstall%2Finstall.go",
+  "contents_url": "https://api.github.com/repos/cli/cli/contents/pkg%2Fcmd%2Fskills%2Finstall%2Finstall.go?ref=8f44336ccb889465115aa85319c275c8dec1c3b7"
+ }
+]

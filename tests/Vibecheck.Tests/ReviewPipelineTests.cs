@@ -56,6 +56,30 @@ public class ReviewPipelineTests
         new(Path.Combine(repo.Path, dir), baseCommit, headCommit) { Build = false };
 
     [Fact]
+    public async Task PairsRenamesAsTheRequestPairsThemWithPathsFromTheRepositorysTop()
+    {
+        using var repo = new TempRepo();
+        var (before, _) = TwoCommits(repo, () =>
+        {
+            repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+            repo.Write("app/docs/old.md", "Something entirely different.\n");
+        });
+        File.Delete(Path.Combine(repo.Path, "app/docs/old.md"));
+        repo.Write("app/docs/new.md", "A wholly rewritten page.\n");
+        var after = repo.Commit("rewrite the page");
+
+        var request = Request(repo, "app", before, after) with { Renames = new Dictionary<string, string> { ["app/docs/new.md"] = "app/docs/old.md" } };
+        var result = await ReviewPipeline.RunAsync(request, Fake([]));
+
+        var page = result.Changeset.Files.Single(f => f.Path == "docs/new.md");
+        Assert.Equal(("renamed", "docs/old.md"), (page.Status, page.PreviousPath));
+        Assert.DoesNotContain(result.Changeset.Files, f => f.Path == "docs/old.md");
+        // Without the request's pairs, git finds the two too different to be a rename.
+        var plain = await ReviewPipeline.RunAsync(Request(repo, "app", before, after), Fake([]));
+        Assert.Equal("added", plain.Changeset.Files.Single(f => f.Path == "docs/new.md").Status);
+    }
+
+    [Fact]
     public async Task UsesTheMapNearestTheStartDirectoryAtHead()
     {
         using var repo = new TempRepo();

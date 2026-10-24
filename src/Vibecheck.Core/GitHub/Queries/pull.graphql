@@ -1,0 +1,99 @@
+query($owner: String!, $name: String!, $number: Int!, $threads: Boolean = true, $threadsAfter: String, $timeline: Boolean = true, $timelineAfter: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+      number
+      title
+      url
+      state
+      isDraft
+      author { login }
+      bodyHTML
+      createdAt
+      headRefName
+      headRefOid
+      baseRefName
+      baseRefOid
+      reviewDecision
+      mergeStateStatus
+      viewerDidAuthor
+      commits { totalCount }
+      viewerLatestReview { state commit { oid } }
+      lastCommit: commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              state
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    id
+                    databaseId
+                    name
+                    status
+                    conclusion
+                    startedAt
+                    completedAt
+                    detailsUrl
+                    isRequired(pullRequestNumber: $number)
+                    checkSuite { app { name } workflowRun { workflow { name } } }
+                    annotations(first: 50) { nodes { path annotationLevel title message location { start { line } end { line } } } }
+                  }
+                  ... on StatusContext { id context state description targetUrl createdAt isRequired(pullRequestNumber: $number) }
+                }
+              }
+            }
+          }
+        }
+      }
+      pending: reviews(states: PENDING, first: 1) { nodes { id comments { totalCount } } }
+      reviewThreads(first: 100, after: $threadsAfter) @include(if: $threads) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          path
+          diffSide
+          line
+          startLine
+          originalLine
+          originalStartLine
+          subjectType
+          isResolved
+          isOutdated
+          resolvedBy { login }
+          comments(first: 100) {
+            nodes {
+              id
+              author { login }
+              bodyHTML
+              createdAt
+              url
+              state
+              diffHunk
+              originalCommit { oid }
+              pullRequestReview { id }
+            }
+          }
+        }
+      }
+      timelineItems(first: 100, after: $timelineAfter, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW, PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT, BASE_REF_CHANGED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT]) @include(if: $timeline) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          __typename
+          ... on IssueComment { id author { login } bodyHTML createdAt url }
+          ... on PullRequestReview { id author { login } state bodyHTML createdAt submittedAt url commit { oid } }
+          ... on PullRequestCommit { id url commit { oid messageHeadline committedDate author { name user { login } } } }
+          ... on HeadRefForcePushedEvent { id actor { login } createdAt beforeCommit { oid } afterCommit { oid } }
+          ... on BaseRefChangedEvent { id actor { login } createdAt previousRefName currentRefName }
+          ... on ReadyForReviewEvent { id actor { login } createdAt }
+          ... on ConvertToDraftEvent { id actor { login } createdAt }
+          ... on ClosedEvent { id actor { login } createdAt }
+          ... on ReopenedEvent { id actor { login } createdAt }
+          ... on MergedEvent { id actor { login } createdAt commit { oid } mergeRefName }
+        }
+      }
+    }
+  }
+}

@@ -70,16 +70,14 @@ public class TrivialEditsTests
     }
 
     [Fact]
-    public void NodeContentCountsTrivialFiles()
+    public void TrivialMarksRoundTripThroughJson()
     {
         var baseFacts = Checker.Run(TestData.Map(), TestData.Analysis(), new CheckOptions { Commit = "base" });
         var files = TestData.Analysis().Files.Select(f => f.Path is TestData.Y1 or TestData.X1 ? f with { Hash = "changed" } : f).ToList();
         var head = Checker.Run(TestData.Map(), TestData.Analysis() with { Files = files });
         var hunks = new List<FileHunks> { new(TestData.Y1, [new Hunk("@@ -1 +1 @@", [], true)], true), new(TestData.X1, [new Hunk("@@ -1 +1 @@", [])]) };
         var cs = ChangesetBuilder.Build(baseFacts, head, hunks);
-        Assert.Equal((1, 1), (cs.Content["a.y"].Modified, cs.Content["a.y"].Trivial));
-        Assert.Equal((1, 0), (cs.Content["a.x"].Modified, cs.Content["a.x"].Trivial));
-        Assert.Equal((2, 1), (cs.Content["a"].Modified, cs.Content["a"].Trivial));
+        Assert.Equal(2, cs.Content["a"].Modified);
         var back = FactsJson.Deserialize<Changeset>(FactsJson.Serialize(cs));
         Assert.True(back.Hunks[0].Trivial);
         Assert.Null(back.Hunks[1].Hunks[0].Trivial);
@@ -111,7 +109,7 @@ public class TrivialEditsTests
             File.WriteAllText(Path.Combine(repo, "New.cs"), "// Only a comment.\n");
             Git("add", ".");
             Git("commit", "-q", "-m", "head");
-            var files = GitHunks.Collect(repo, "HEAD~1", "HEAD", ["Doc.cs", "Code.cs", "New.cs"]).ToDictionary(f => f.Path);
+            var files = GitHunks.Collect(repo, "HEAD~1", "HEAD", GitHunks.Changes(repo, "HEAD~1", "HEAD")).ToDictionary(f => f.Path);
             Assert.True(files["Doc.cs"].Trivial);
             Assert.Null(files["Code.cs"].Trivial);
             // A file at one end only is added or removed, which is never trivial.

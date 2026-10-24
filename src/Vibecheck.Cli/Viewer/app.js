@@ -24,9 +24,24 @@
 
   const NODES = MAP.nodes, EXTERNALS = MAP.externals, VIEWS = MAP.views;
   const isExternal = (id) => !!EXTERNALS[id];
-  const isLeaf = (id) => id === UNSORTED || !!(NODES[id] && NODES[id].bind);
-  const parentOf = (id) => id === ROOT ? null : id.lastIndexOf(".") < 0 ? ROOT : id.slice(0, id.lastIndexOf("."));
-  const isUnder = (id, anc) => anc === ROOT || id === anc || id.startsWith(anc + ".");
+
+  // The Other files block holds the changed files that no type binds, such as project files, documents and workflows.
+  // It has one leaf for each top-level folder that holds such files and one for the files at the top, or is itself the
+  // leaf when every such file is in one of those places. Its identifiers hold a "~" and a "/", which no map
+  // identifier can, so they never collide with the map's. See docs/pull-requests.md section 4.4.
+  const OTHER = "~other";
+  const OTHER_FILES = CS.files.filter((f) => f.status !== "unchanged" && !f.leavesBase.length && !f.leavesHead.length);
+  const otherGroupOf = (path) => OTHER + "/" + (path.includes("/") ? path.slice(0, path.indexOf("/")) : "");
+  const OTHER_GROUPS = [...new Set(OTHER_FILES.map((f) => otherGroupOf(f.path)))].sort();
+  const OTHER_LEAVES = OTHER_GROUPS.length > 1 ? OTHER_GROUPS : OTHER_FILES.length ? [OTHER] : [];
+  const isOther = (id) => id === OTHER || id.startsWith(OTHER + "/");
+  // Returns the Other files leaf that holds a path.
+  const otherLeafOf = (path) => OTHER_LEAVES.length === 1 ? OTHER : otherGroupOf(path);
+  const otherFilesOf = (id) => OTHER_FILES.filter((f) => id === OTHER || otherGroupOf(f.path) === id);
+
+  const isLeaf = (id) => id === UNSORTED || OTHER_LEAVES.includes(id) || !!(NODES[id] && NODES[id].bind);
+  const parentOf = (id) => id === ROOT ? null : id.startsWith(OTHER + "/") ? OTHER : id.lastIndexOf(".") < 0 ? ROOT : id.slice(0, id.lastIndexOf("."));
+  const isUnder = (id, anc) => anc === ROOT || id === anc || id.startsWith(anc + (anc === OTHER ? "/" : "."));
   const shortName = (type) => type.replace(/^.*::/, "").split(".").pop();
   const namespaceOf = (type) => { const t = type.replace(/^.*::/, ""); const i = t.lastIndexOf("."); return i < 0 ? "" : t.slice(0, i); };
 
@@ -34,9 +49,11 @@
   const CHILDREN = {};
   for (const id of Object.keys(NODES)) (CHILDREN[parentOf(id)] = CHILDREN[parentOf(id)] || []).push(id);
   if (hasUnsorted) (CHILDREN[ROOT] = CHILDREN[ROOT] || []).push(UNSORTED);
+  if (OTHER_FILES.length) (CHILDREN[ROOT] = CHILDREN[ROOT] || []).push(OTHER);
+  if (OTHER_GROUPS.length > 1) CHILDREN[OTHER] = OTHER_GROUPS.slice();
   for (const k of Object.keys(CHILDREN)) CHILDREN[k].sort();
   const childrenOf = (id) => CHILDREN[id] || [];
-  const ALL_LEAVES = Object.keys(NODES).filter(isLeaf).concat(hasUnsorted ? [UNSORTED] : []);
+  const ALL_LEAVES = Object.keys(NODES).filter(isLeaf).concat(hasUnsorted ? [UNSORTED] : [], OTHER_LEAVES);
   const leavesUnder = (id) => isLeaf(id) ? [id] : ALL_LEAVES.filter((l) => l !== UNSORTED && isUnder(l, id)).concat(id === ROOT && hasUnsorted ? [UNSORTED] : []);
 
   // The categories of section 2.1 of the specification. Each is drawn in one of five color families and with an icon
@@ -79,6 +96,8 @@
   function nameOf(id) {
     if (id === ROOT) return META.solution || MAP.solution;
     if (id === UNSORTED) return "Unsorted";
+    if (id === OTHER) return "Other files";
+    if (isOther(id)) return id.length > OTHER.length + 1 ? id.slice(OTHER.length + 1) + "/" : "Top-level files";
     if (NODES[id]) return NODES[id].name;
     if (EXTERNALS[id]) return EXTERNALS[id].name;
     if (id.startsWith("g:")) { const [v, g] = id.slice(2).split("/"); return VIEWS[v].groups[g].name; }
@@ -87,6 +106,8 @@
   function purposeOf(id) {
     if (id === ROOT) return META.title ? `Changeset ${META.range || ""}: ${META.title}` : "";
     if (id === UNSORTED) return "Types that no leaf binds. The map should be extended to place them.";
+    if (id === OTHER) return "Changed files that no type binds, such as project files, documents and workflows.";
+    if (isOther(id)) return id.length > OTHER.length + 1 ? `Changed files under ${id.slice(OTHER.length + 1)}/ that no type binds.` : "Changed files at the top that no type binds.";
     if (NODES[id]) return NODES[id].purpose || "";
     if (EXTERNALS[id]) return EXTERNALS[id].purpose || "External assembly.";
     if (id.startsWith("g:")) { const [v, g] = id.slice(2).split("/"); return VIEWS[v].groups[g].purpose || ""; }
@@ -95,9 +116,11 @@
 
   // Indexes over the changeset.
   const FILES = new Map(CS.files.map((f) => [f.path, f]));
+  // The renamed files by their paths at base, which the types at base still list.
+  const RENAMED_FROM = new Map(CS.files.filter((f) => f.previousPath).map((f) => [f.previousPath, f]));
+  // Returns the file at a path, which may be a renamed file's path at base, or null.
+  const fileOf = (path) => FILES.get(path) || RENAMED_FROM.get(path) || null;
   const HUNKS = new Map(CS.hunks.map((h) => [h.path, h.hunks]));
-  // The modified files whose every edit is trivial: comments, whitespace or layout, which cannot change the program.
-  const TRIVIAL_FILES = new Set(CS.hunks.filter((h) => h.trivial).map((h) => h.path));
   const TYPES_BY_LEAF = new Map();
   for (const t of CS.types) {
     const leaf = t.leafHead || t.leafBase;
@@ -105,34 +128,83 @@
     TYPES_BY_LEAF.get(leaf).push(t);
   }
   const typesOf = (leaf) => TYPES_BY_LEAF.get(leaf) || [];
-  // Returns a file's status, which is "trivial" for a modified file whose edits are all trivial while those are muted.
+
+  // ---------- Reviewed files ----------
+  // A changed file is reviewed when the reviewer has set it aside, or when the tool has and the reviewer has not
+  // unmarked it. The server keeps the marks. Each maps a path to the reason the file is reviewed: "reviewer", "trivial"
+  // for a file whose edits touch no code, or "renamed" for a file renamed without changes. A reviewed file is set aside
+  // wherever it appears while reviewed files are muted. See docs/pull-requests.md section 5.
+  const REVIEWED = new Map(Object.entries(META.reviewed || {}));
+  const REASON_TEXT = { trivial: "no code changed", renamed: "renamed without changes" };
+  const CHANGED_FILES = CS.files.filter((f) => f.status !== "unchanged");
+
+  // Returns the leaves a changed file counts under, as the changeset's content counts it: its leaves at head, its
+  // leaves at base when it was removed, and its leaves at both ends when it was renamed. A file that no type binds
+  // counts under its Other files leaf.
+  function countedLeaves(f) {
+    if (!f.leavesBase.length && !f.leavesHead.length) return [otherLeafOf(f.path)];
+    if (f.status === "removed") return f.leavesBase;
+    return f.status === "renamed" ? [...new Set(f.leavesBase.concat(f.leavesHead))] : f.leavesHead;
+  }
+
+  // Returns the paths of the changed files that count under each node, by the rule of countedLeaves: a file counts
+  // under each leaf it counts under, under every ancestor of those leaves, and under the top level. It depends on the
+  // files alone, so the marks can be laid over it whenever they change.
+  function filesByNode(files) {
+    const out = new Map();
+    for (const f of files) {
+      const ids = new Set([ROOT]);
+      for (const l of countedLeaves(f)) for (let x = l; x && x !== ROOT; x = parentOf(x)) ids.add(x);
+      for (const id of ids) { if (!out.has(id)) out.set(id, []); out.get(id).push(f.path); }
+    }
+    return out;
+  }
+  const FILES_BY_NODE = filesByNode(CHANGED_FILES);
+
+  // Returns the paths of a node's or a group's changed files, how many there are, and how many of them are reviewed.
+  function reviewedCount(key) {
+    const paths = key.startsWith("g:") ? [...new Set(groupLeaves(key).flatMap((l) => FILES_BY_NODE.get(l) || []))] : FILES_BY_NODE.get(key) || [];
+    return { paths, changed: paths.length, reviewed: paths.filter((p) => REVIEWED.has(p)).length };
+  }
+
+  // Returns a file's status, which is "reviewed" for a changed file that is reviewed while reviewed files are muted.
   const fileStatus = (path) => {
-    const st = (FILES.get(path) || {}).status || "unchanged";
-    return st === "modified" && state.opts.trivial && TRIVIAL_FILES.has(path) ? "trivial" : st;
+    const f = fileOf(path);
+    const st = f ? f.status : "unchanged";
+    return st !== "unchanged" && state.opts.mute && REVIEWED.has(f.path) ? "reviewed" : st;
   };
-  // Returns a type's status: its own when it was added, removed or moved, and otherwise the strongest of its files'.
+  // Returns a type's status: "reviewed" when every changed file that declares it is, its own when it was added,
+  // removed or moved, and otherwise "modified" when any of its files changed.
   const typeStatus = (t) => {
+    const changed = t.files.map(fileStatus).filter((f) => f !== "unchanged");
+    if (changed.length && changed.every((f) => f === "reviewed")) return "reviewed";
     if (t.status !== "unchanged") return t.status;
-    const files = t.files.map(fileStatus);
-    return files.some((f) => f !== "unchanged" && f !== "trivial") ? "modified" : files.includes("trivial") ? "trivial" : "unchanged";
+    return changed.length ? "modified" : "unchanged";
   };
   const typeTouched = (t) => typeStatus(t) !== "unchanged";
   const CHANGED_EDGES = CS.edges.filter((e) => e.status !== "unchanged");
   const CONTENT = CS.content, METRICS = CS.metrics;
 
-  function contentOf(id) { return CONTENT[id] || { files: 0, added: 0, removed: 0, modified: 0, status: "unchanged", trivial: 0 }; }
-  // Returns the status drawn for a node or a group. While trivial edits are muted, a node whose changed files were all
-  // modified, and all trivially, is "trivial", and so is a group whose changed leaves all are. Triviality rises no
-  // further than the changes beneath it allow.
+  // Returns the file counts of a node. The top level also counts the files that no type binds.
+  function contentOf(id) {
+    if (isOther(id)) return otherContent(id);
+    const c = CONTENT[id] || { files: 0, added: 0, removed: 0, modified: 0, status: "unchanged" };
+    if (id !== ROOT || !OTHER_FILES.length) return c;
+    const o = otherContent(OTHER);
+    return { files: c.files + o.files, added: c.added + o.added, removed: c.removed + o.removed, modified: c.modified + o.modified, status: c.status === "unchanged" ? "children" : c.status };
+  }
+  // Returns the file counts of the Other files block or one of its leaves, where a renamed file counts as modified.
+  function otherContent(id) {
+    const files = otherFilesOf(id), count = (st) => files.filter((f) => f.status === st).length;
+    return { files: files.length, added: count("added"), removed: count("removed"), modified: count("modified") + count("renamed"), status: isLeaf(id) ? "modified" : "children" };
+  }
+  // Returns the status drawn for a node or a group. While reviewed files are muted, one whose changed files are all
+  // reviewed is "reviewed". A group otherwise shows the changes inside its leaves.
   function statusOf(key) {
-    if (key.startsWith("g:")) {
-      const changed = groupLeaves(key).map(statusOf).filter((st) => st !== "unchanged");
-      return !changed.length ? "unchanged" : changed.every((st) => st === "trivial") ? "trivial" : "children";
-    }
-    const c = contentOf(key);
-    const trivial = state.opts.trivial && (c.status === "modified" || c.status === "children")
-      && c.added + c.removed === 0 && c.modified > 0 && c.trivial === c.modified;
-    return trivial ? "trivial" : c.status;
+    const r = reviewedCount(key);
+    if (state.opts.mute && r.changed > 0 && r.reviewed === r.changed) return "reviewed";
+    if (key.startsWith("g:")) return groupLeaves(key).some((l) => statusOf(l) !== "unchanged") ? "children" : "unchanged";
+    return contentOf(key).status;
   }
   function groupLeaves(key) { const [v, g] = key.slice(2).split("/"); return VIEWS[v].groups[g].leaves; }
   function metricsOf(key) {
@@ -159,7 +231,7 @@
     if (!key) return { level: ROOT };
     if (key.startsWith("leaf:")) { const id = key.slice(5); return isLeaf(id) ? { leaf: id } : { level: ROOT }; }
     const [level, rest] = key.split("@");
-    if (!(level === ROOT || (NODES[level] && !isLeaf(level)))) return { level: ROOT };
+    if (!(level === ROOT || ((NODES[level] || level === OTHER) && !isLeaf(level)))) return { level: ROOT };
     if (!rest) return { level };
     const [view, group] = rest.split("/");
     if (!VIEWS[view] || VIEWS[view].level !== level) return { level };
@@ -645,6 +717,7 @@
   const fitText = (str, width, advance) => truncate(str, Math.max(1, Math.floor(width / advance)));
 
   const truncate = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const fmtDelta = (b, h) => h === b ? "" : (h > b ? "+" : "−") + Math.abs(h - b);
   const statusClass = (st) => st === "unchanged" ? "" : " st-" + st;
   const strokeWidth = (n) => (1 + Math.log2(1 + n) / 2.2).toFixed(2);
@@ -656,7 +729,14 @@
     selected: null,
     // The selections the details panel came from, most recent last, so that its Back button can return to them.
     back: [],
-    opts: { threshold: "1", externals: false, dim: true, trivial: true },
+    // The talk option keeps only the blocks with unresolved threads in the Changes panel.
+    opts: { threshold: "1", externals: false, dim: true, mute: true, talk: false },
+    // The tab the page shows: "map" or "conversation".
+    tab: "map",
+    // The lines selected to comment on: a path, a hunk index, a side, and the first and last line indexes, or null.
+    compose: null,
+    // The reviewed files whose diffs the reader has shown, by path.
+    expanded: new Set(),
     current: null, // { level, layout }
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
@@ -700,15 +780,16 @@
     if (inner.h < 10) return;
     if (child.kind === "node" && isLeaf(child.id) || child.kind === "unsorted") {
       // One bar per type, colored by what happened to it.
-      const types = typesOf(child.id).slice().sort((a, b) => (typeTouched(b) ? 1 : 0) - (typeTouched(a) ? 1 : 0));
-      const shown = Math.min(types.length, 12);
-      const cols = types.length > 6 ? 2 : 1;
+      // A leaf of Other files has no types, so its bars stand for its files.
+      const items = isOther(child.id) ? otherFilesOf(child.id).map((f) => fileStatus(f.path))
+        : typesOf(child.id).slice().sort((a, b) => (typeTouched(b) ? 1 : 0) - (typeTouched(a) ? 1 : 0)).map(typeStatus);
+      const shown = Math.min(items.length, 12);
+      const cols = items.length > 6 ? 2 : 1;
       const rows = Math.ceil(shown / cols);
       const gap = Math.min(5, inner.h / Math.max(rows, 1));
       for (let i = 0; i < shown; i++) {
-        const t = types[i];
-        const ts = typeStatus(t);
-        const cls = "mini-type" + (ts === "unchanged" ? "" : ["added", "removed", "trivial"].includes(ts) ? " mini-type-" + ts : " mini-type-changed");
+        const ts = items[i];
+        const cls = "mini-type" + (ts === "unchanged" ? "" : ["added", "removed", "reviewed"].includes(ts) ? " mini-type-" + ts : " mini-type-changed");
         const col = i % cols, row = Math.floor(i / cols);
         const cw = (inner.w - 6 * (cols - 1)) / cols;
         g.append(svg("rect", { x: inner.x + col * (cw + 6), y: inner.y + row * gap, width: Math.max(8, cw * (0.55 + ((i * 7) % 5) / 10)), height: 2, class: cls }));
@@ -786,7 +867,7 @@
       const st = statusOf(c.key);
       const leaf = c.kind === "unsorted" || (c.kind === "node" && isLeaf(c.id));
       const cat = categoryOf(c.id);
-      const cls = "node" + statusClass(st) + familyClass(c.id) + (c.kind === "unsorted" ? " unsorted" : "") + (leaf ? " leaf" : " container") +
+      const cls = "node" + statusClass(st) + familyClass(c.id) + (c.kind === "unsorted" ? " unsorted" : "") + (isOther(c.id) ? " other" : "") + (leaf ? " leaf" : " container") +
         (level.inCycle.has(c.key) ? " in-cycle" : "") + (c.key === state.selected ? " selected" : "");
       const g = svg("g", { class: cls, "data-key": c.key, tabindex: 0,
         onclick: (ev) => clickSelect(ev, c.key),
@@ -803,11 +884,10 @@
       const m = metricsOf(c.key), content = c.kind === "group" ? groupContent(c) : contentOf(c.key);
       const changedFiles = content.added + content.removed + content.modified;
       // The badge on the top edge says what happened, with the count of changed files when there is one.
-      const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
       const badge = st === "added" ? "added" : st === "removed" ? "removed"
         : st === "modified" ? (changedFiles ? plural(changedFiles, "file changed", "files changed") : "modified")
         : st === "children" ? (changedFiles ? `${changedFiles} changed inside` : "changes inside")
-        : st === "trivial" ? (leaf ? "no code changed" : "no code changed inside") : null;
+        : st === "reviewed" ? (leaf ? "reviewed" : "reviewed inside") : null;
       if (badge) {
         const bw = badge.length * MONO.badge + 12;
         const bg = svg("g", { class: "badge" });
@@ -815,8 +895,29 @@
         bg.append(text(r.x + r.w - bw / 2 - 8, r.y + 3, badge.toUpperCase(), { class: "badge-text", "text-anchor": "middle" }));
         g.append(bg);
       }
+      const talk = openThreadsUnder(c.key).length, problems = problemsUnder(c.key).length;
+      let left = r.x + 8;
+      if (talk) {
+        const tw = String(talk).length * MONO.badge + 26, tx = r.x + 8;
+        const tg = svg("g", { class: "talk-badge" });
+        tg.append(svg("rect", { x: tx, y: r.y - 8, width: tw, height: 15, rx: 7.5, class: "talk-bg" }));
+        tg.append(svg("path", { d: `M${tx + 7},${r.y - 4} h9 v6 h-5 l-2.5,2.5 v-2.5 h-1.5 z`, class: "talk-icon" }));
+        tg.append(text(tx + 19, r.y + 3, String(talk), { class: "talk-text" }));
+        tg.append(svg("title", {}, `${plural(talk, "unresolved review thread", "unresolved review threads")} on files under ${nameOf(c.id)}`));
+        g.append(tg);
+        left = tx + tw + 6;
+      }
+      if (problems) {
+        const label = "✕ " + problems, pw = label.length * MONO.badge + 12;
+        const pg = svg("g", { class: "problem-badge" });
+        pg.append(svg("rect", { x: left, y: r.y - 8, width: pw, height: 15, rx: 7.5, class: "problem-bg" }));
+        pg.append(text(left + pw / 2, r.y + 3, label, { class: "problem-text", "text-anchor": "middle" }));
+        pg.append(svg("title", {}, `${plural(problems, "check failure or warning", "check failures and warnings")} on files under ${nameOf(c.id)}`));
+        g.append(pg);
+      }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
-      g.append(text(r.x + 10, r.y + 43, fitText(`${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`, r.w - 20, MONO.meta), { class: "meta" }));
+      const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
+      g.append(text(r.x + 10, r.y + 43, fitText(meta, r.w - 20, MONO.meta), { class: "meta" }));
       g.append(svg("circle", { cx: r.x + r.w - 26, cy: r.y + 14, r: 3, class: "cycle-mark" }));
       const glyph = text(r.x + r.w - 9, r.y + 19, leaf ? "≡" : "⤵", { class: "enter-glyph", "text-anchor": "end",
         onclick: (ev) => { ev.stopPropagation(); enter(c); } });
@@ -942,7 +1043,10 @@
     return td;
   }
 
-  function diffTable(path, hunk) {
+  // Returns the split diff of one hunk of a file. The threads given, keyed by hunk and line index as threadsOf keys
+  // them, show under their lines.
+  // The annotations given, keyed the same way, show under their lines after the threads.
+  function diffTable(path, hunk, index, threads, notes) {
     const nums = parseHeader(hunk.header);
     let la = nums.a, lb = nums.b;
     // The columns are fixed: each line-number column fits the hunk's largest line number, and the two code columns
@@ -950,20 +1054,40 @@
     const rows = pairLines(hunk.lines);
     const digits = String(Math.max(nums.a, nums.b) + rows.length).length;
     const ln = () => el("col", { style: `width: calc(${digits}ch + 17px)` });
-    const trivial = hunk.trivial && state.opts.trivial;
+    const trivial = hunk.trivial && state.opts.mute;
     const table = el("table", { class: "diff" + (trivial ? " trivial" : "") }, el("caption", {}, hunk.header + (trivial ? " · no code changed" : "")),
       el("colgroup", {}, ln(), el("col", {}), ln(), el("col", {})));
     const body = el("tbody");
     const lit = highlightHunk(path, hunk.lines);
     const text = (i) => i === null ? null : hunk.lines[i][1];
+    // While the pull request takes comments, a line number selects its line to comment on, and Shift extends the selection.
+    const writable = canWrite() && index !== undefined;
+    const c = state.compose && state.compose.path === path && state.compose.hunk === index ? state.compose : null;
+    const picked = (side, i) => c && c.side === side && i !== null && i >= c.first && i <= c.last;
+    const number = (side, i, n, kind) => {
+      const td = el("td", { class: "ln " + kind + (writable && i !== null ? " pick" : "") + (picked(side, i) ? " picked" : "") }, i === null ? "" : String(n));
+      if (writable && i !== null) {
+        td.title = "Comment on this line. Shift-click to select a range.";
+        td.addEventListener("click", (ev) => pick(path, index, side, i, ev.shiftKey));
+      }
+      return td;
+    };
     for (const row of rows) {
       const lk = row.l === null ? "empty" : row.kind === "ctx" ? "ctx" : "del";
       const rk = row.r === null ? "empty" : row.kind === "ctx" ? "ctx" : "add";
-      body.append(el("tr", {},
-        el("td", { class: "ln " + lk }, row.l === null ? "" : String(la++)),
-        codeCell(lk, text(row.l), lit && row.l !== null ? lit.left[row.l] : null),
-        el("td", { class: "ln " + rk }, row.r === null ? "" : String(lb++)),
-        codeCell(rk, text(row.r), lit && row.r !== null ? lit.right[row.r] : null)));
+      const left = codeCell(lk, text(row.l), lit && row.l !== null ? lit.left[row.l] : null), right = codeCell(rk, text(row.r), lit && row.r !== null ? lit.right[row.r] : null);
+      if (picked("LEFT", row.l)) left.classList.add("picked");
+      if (picked("RIGHT", row.r)) right.classList.add("picked");
+      if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) c.number = c.side === "LEFT" ? la : lb;
+      body.append(el("tr", {}, number("LEFT", row.l, la, lk), left, number("RIGHT", row.r, lb, rk), right));
+      if (row.l !== null) la++;
+      if (row.r !== null) lb++;
+      if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, lineComposer(path, hunk))));
+      const at = [...new Set([row.l, row.r])].filter((i) => i !== null).map((i) => index + ":" + i);
+      const marks = notes ? at.flatMap((k) => notes.get(k) || []) : [];
+      if (marks.length) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, ...marks.map((a) => annotationBox(a)))));
+      const here = threads ? at.flatMap((k) => threads.get(k) || []) : [];
+      if (here.length) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, ...here.map((t) => threadBox(t)))));
     }
     table.append(body);
     return el("div", { class: "diff-scroll" }, table);
@@ -982,12 +1106,78 @@
     return ul;
   }
 
+  // Puts reviewed items after the rest, keeping the order within each part.
+  const reviewedLast = (items, isReviewed) => items.filter((x) => !isReviewed(x)).concat(items.filter(isReviewed));
+
+  // Returns a file's header and diffs for the leaf view. A changed file's header carries its reviewed checkbox, and a
+  // reviewed file's diffs stay collapsed while reviewed files are muted, until the reader shows them. A renamed file
+  // names its path at base, and a path at base that a type still lists links to the renamed file.
+  function fileBlock(path) {
+    const f = fileOf(path), fs = fileStatus(path);
+    if (f && f.path !== path) {
+      return el("div", { class: "file file-" + fs },
+        el("div", { class: "file-head" }, el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path),
+          el("span", { class: "file-note" }, "renamed to"), el("button", { class: "link", onclick: () => openFile(f.path), title: "Show the renamed file's diff" }, f.path)));
+    }
+    const changed = !!f && f.status !== "unchanged";
+    const done = changed && REVIEWED.has(path);
+    const hunks = HUNKS.get(path) || [];
+    const head = el("div", { class: "file-head" });
+    if (changed) head.append(el("input", { type: "checkbox", checked: done, "aria-label": "Reviewed", title: done ? "Reviewed. Clear it to review the file again." : "Mark the file reviewed",
+      onchange: (ev) => setReviewed([path], ev.target.checked) }));
+    head.append(el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path));
+    if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
+    if (done && REASON_TEXT[REVIEWED.get(path)]) head.append(el("span", { class: "file-note" }, REASON_TEXT[REVIEWED.get(path)]));
+    const talk = threadsOf(path), notes = annotationsOf(path);
+    const problems = [...notes.lines.values()].flat().concat(notes.top).filter(isProblem).length;
+    if (problems) head.append(el("span", { class: "file-note problem-note" }, plural(problems, "check problem", "check problems")));
+    const open = [...talk.lines.values()].flat().concat(talk.top).filter((t) => !t.isResolved).length;
+    if (open) head.append(el("span", { class: "file-note talk-note" }, plural(open, "unresolved thread", "unresolved threads")));
+    const muted = done && state.opts.mute;
+    const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
+    const diffs = el("div", { class: "file-diffs" });
+    const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(diffTable(path, h, i, talk.lines, notes.lines))); };
+    if (muted && !state.expanded.has(path)) diffs.hidden = true;
+    else fill();
+    if (muted && hunks.length) {
+      head.append(el("button", { class: "link", onclick: (ev) => {
+        const show = diffs.hidden;
+        if (show) { fill(); state.expanded.add(path); } else state.expanded.delete(path);
+        diffs.hidden = !show;
+        ev.target.textContent = show ? "Hide diff" : "Show diff";
+      } }, diffs.hidden ? "Show diff" : "Hide diff"));
+    }
+    if (notes.top.length) block.append(el("div", { class: "file-threads" }, ...notes.top.map((a) => annotationBox(a))));
+    if (talk.top.length) block.append(el("div", { class: "file-threads" }, ...talk.top.map((t) => threadBox(t, { top: true }))));
+    block.append(diffs);
+    return block;
+  }
+
+  // Returns the line that says how many of a node's changed files are reviewed, with a button that marks them all, or
+  // unmarks them all once they all are. It is null for a node without changed files.
+  function reviewedBar(key) {
+    const r = reviewedCount(key);
+    if (!r.changed) return null;
+    const all = r.reviewed === r.changed;
+    return el("div", { class: "reviewed-bar" }, el("span", {}, `${r.reviewed} of ${plural(r.changed, "changed file", "changed files")} reviewed`),
+      el("button", { class: "btn", onclick: () => setReviewed(r.paths, !all) }, all ? "Unmark all" : "Mark all reviewed"));
+  }
+
   function renderLeaf(id) {
     const wrap = el("div", { class: "leaf" });
     const m = metricsOf(id), content = contentOf(id);
     wrap.append(el("div", {},
       el("div", { class: "leaf-title" }, nameOf(id).toUpperCase()),
       el("div", { class: "leaf-sub" }, purposeOf(id))));
+    if (isOther(id)) {
+      // Files that no type binds have no types and no edges, so the leaf lists the files themselves.
+      const files = reviewedLast(otherFilesOf(id).map((f) => f.path), (p) => fileStatus(p) === "reviewed");
+      wrap.append(reviewedBar(id) || "", el("h3", {}, plural(files.length, "changed file", "changed files")));
+      const card = el("section", { class: "typecard" });
+      for (const path of files) card.append(fileBlock(path));
+      wrap.append(card);
+      return wrap;
+    }
     const metrics = el("div", { class: "metrics" });
     const mb = m.base, mh = m.head;
     const stat = (label, b, h, fmt = (x) => String(x)) => {
@@ -1000,28 +1190,23 @@
     metrics.append(stat("internal refs", mb ? mb.internal : null, mh ? mh.internal : null));
     metrics.append(stat("crossing refs", mb ? mb.crossing : null, mh ? mh.crossing : null));
     wrap.append(metrics);
+    const bar = reviewedBar(id);
+    if (bar) wrap.append(bar);
 
-    // Changed types with their files and hunks.
+    // Changed types with their files and hunks, the reviewed ones last.
     const types = typesOf(id);
-    const touched = types.filter(typeTouched);
+    const touched = reviewedLast(types.filter(typeTouched), (t) => typeStatus(t) === "reviewed");
     wrap.append(el("h3", {}, touched.length ? `${touched.length} of ${types.length} types changed` : `No changes among ${types.length} types`));
-    const chipText = (st) => st === "trivial" ? "no code changed" : st;
     for (const t of touched) {
       const ts = typeStatus(t);
       const card = el("section", { class: "typecard" + statusClass(ts) });
       const head = el("header", {},
-        el("span", { class: "chip chip-" + ts }, chipText(ts)),
+        el("span", { class: "chip chip-" + ts }, ts),
         el("span", { class: "typename" }, shortName(t.name)),
         el("span", { class: "typens" }, namespaceOf(t.name)));
       if (t.status === "moved") head.append(el("span", { class: "typens" }, `from ${t.leafBase} to ${t.leafHead}`));
       card.append(head);
-      for (const path of t.files) {
-        const fs = fileStatus(path);
-        const fileEl = el("div", { class: "file file-" + fs },
-          el("div", { class: "file-head" }, el("span", { class: "chip chip-" + fs }, chipText(fs)), el("span", { class: "file-path" }, path)));
-        for (const h of HUNKS.get(path) || []) fileEl.append(diffTable(path, h));
-        card.append(fileEl);
-      }
+      for (const path of reviewedLast(t.files, (p) => fileStatus(p) === "reviewed")) card.append(fileBlock(path));
       wrap.append(card);
     }
 
@@ -1054,7 +1239,7 @@
     const tl = el("div", { class: "typelist" });
     for (const t of types.slice().sort((a, b) => shortName(a.name).localeCompare(shortName(b.name)))) {
       const ts = typeStatus(t);
-      tl.append(el("span", { class: ts === "added" ? "t-added" : ts === "trivial" ? "t-trivial" : ts !== "unchanged" ? "t-changed" : "", title: t.name + "\n" + t.files.join("\n") }, shortName(t.name)));
+      tl.append(el("span", { class: ts === "added" ? "t-added" : ts === "reviewed" ? "t-reviewed" : ts !== "unchanged" ? "t-changed" : "", title: t.name + "\n" + t.files.join("\n") }, shortName(t.name)));
     }
     all.append(tl);
     wrap.append(all);
@@ -1097,6 +1282,8 @@
   function changeTree(id) {
     const st = statusOf(id);
     if (st === "unchanged") return null;
+    const talk = openThreadsUnder(id).length;
+    if (state.opts.talk && !talk) return null;
     const leaves = leavesUnder(id);
     const c = contentOf(id);
     const li = el("li");
@@ -1104,7 +1291,7 @@
     const isCur = !loc().leaf && !loc().view && loc().level === id || loc().leaf === id;
     li.append(el("button", { class: "row st-" + st + (isCur ? " current" : ""), onclick: () => showInContext(id) },
       el("span", { class: "dot" }), treeIcon(id), el("span", { class: "row-name" }, nameOf(id)),
-      el("span", { class: "row-meta" }, st === "added" ? "new" : st === "removed" ? "removed" : `${c.added + c.removed + c.modified} files · ${edges} edges`)));
+      el("span", { class: "row-meta" }, state.opts.talk ? plural(talk, "thread", "threads") : st === "added" ? "new" : st === "removed" ? "removed" : `${c.added + c.removed + c.modified} files · ${edges} edges`)));
     if (!isLeaf(id)) {
       const kids = childrenOf(id).map(changeTree).filter(Boolean);
       if (kids.length) li.append(el("ul", {}, ...kids));
@@ -1115,6 +1302,9 @@
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
+    const talk = openThreadsUnder(ROOT).length;
+    if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
+      el("input", { type: "checkbox", checked: state.opts.talk, onchange: (ev) => { state.opts.talk = ev.target.checked; renderChanges(); } }), ` Only unresolved threads (${talk})`));
     const tree = changeTree(ROOT);
     box.append(tree ? el("ul", { class: "tree" }, tree) : el("p", { class: "hint" }, "No file changed under any leaf."));
 
@@ -1152,7 +1342,8 @@
     const cur = state.current;
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
-      if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf));
+      if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf) || "");
+      box.append(threadList(l.leaf) || "", problemList(l.leaf) || "");
       box.append(el("p", { class: "hint" }, "Changed types show their diffs. Click an edge row to see the type pairs behind it. Esc goes back to the schematic."));
       return;
     }
@@ -1176,7 +1367,10 @@
     if (!sel) {
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
-      if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id));
+      if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
+      const bar = reviewedBar(id);
+      if (bar) box.append(bar);
+      box.append(threadList(id) || "", problemList(id) || "");
       const m = metricsOf(id);
       if (m.head) box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
       else if (id === ROOT) box.append(kv("Types", deltaText(CS.types.filter((t) => t.leafBase).length, CS.types.filter((t) => t.leafHead).length)));
@@ -1196,7 +1390,7 @@
       box.append(el("h2", {}, nameOf(child.id)), el("p", { class: "ident" }, child.id), el("p", { class: "purpose" }, purposeOf(child.id)));
       const st = statusOf(child.key);
       box.append(kv("Status", st === "children" ? "contains changes" : st));
-      if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id));
+      if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id) || "");
       const m = metricsOf(child.key), content = child.kind === "group" ? groupContent(child) : contentOf(child.key);
       if (m.head) {
         box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
@@ -1204,6 +1398,9 @@
         box.append(kv("Crossing refs", deltaText(m.base ? m.base.crossing : null, m.head.crossing)));
       }
       box.append(kv("Files", `${content.files}` + (content.added + content.removed + content.modified ? ` · +${content.added} −${content.removed} ~${content.modified}` : "")));
+      const bar = reviewedBar(child.key);
+      if (bar) box.append(bar);
+      box.append(threadList(child.key) || "", problemList(child.key) || "");
       if (level.inCycle.has(child.key)) {
         const cyc = level.cycles.find((c) => c.includes(child.key));
         box.append(el("p", { class: "warn" }, "In a cycle with " + cyc.filter((k) => k !== child.key).map(nameOf).join(", ") + "."));
@@ -1241,7 +1438,7 @@
       box.append(kv("Status", edge.status));
       box.append(kv("References", deltaText(edge.base, edge.head)));
       box.append(kv("Leaf pairs", String(edge.members.length)));
-      if (edge.status !== "unchanged") { const n = edgeNarrative(edge); box.append(narrativeBlock(n, n ? n.key : null)); }
+      if (edge.status !== "unchanged") { const n = edgeNarrative(edge); box.append(narrativeBlock(n, n ? n.key : null) || ""); }
       if (edge.members.length > 1 || edge.members[0].from !== from || edge.members[0].to !== to) {
         box.append(el("h3", {}, "Made of"));
         const ul = el("ul", { class: "evidence" });
@@ -1503,6 +1700,19 @@
     const m = await mount();
     if (m) setViewBox(arrive(m));
   }
+  // Opens the leaf view that holds a changed file, by its leaves at head or else at base, and scrolls to the file.
+  async function openFile(path) {
+    const f = fileOf(path);
+    if (!f) return;
+    const leaf = f.leavesHead[0] || f.leavesBase[0] || otherLeafOf(f.path);
+    rememberView();
+    state.trail = [{ level: ROOT }, ...ancestors(parentOf(leaf)).map((x) => ({ level: x })), { leaf }];
+    state.selected = null;
+    await mount();
+    const target = document.querySelector(`[data-file="${CSS.escape(f.path)}"]`);
+    if (target) target.scrollIntoView({ block: "start" });
+  }
+
   function ancestors(id) { const out = []; for (let x = id; x && x !== ROOT; x = parentOf(x)) out.unshift(x); return out; }
 
   // Shows a leaf-pair edge at the lowest tree level that draws it as an edge between two blocks or a block and a pin.
@@ -1696,7 +1906,8 @@
   // Returns the details panel's block for a narrative: its text marked as Claude's, the evidence it rests on and a
   // regenerate action. While narratives are being written and this one has not arrived, it says so. Otherwise it is null.
   function narrativeBlock(n, key = n && n.key) {
-    if (NARR.state === "off") return null;
+    // Claude explains the map's parts, and the Other files block is not one of them.
+    if (NARR.state === "off" || (key && key.startsWith("node:" + OTHER))) return null;
     const busy = key && NARR.pending.has(key);
     if (!n && !busy && NARR.state !== "writing" && NARR.state !== "waiting") return key && NARR.errors.has(key) ? el("p", { class: "warn" }, NARR.errors.get(key)) : null;
     const box = el("section", { class: "narrative" }, el("h3", {}, "Why it changed"));
@@ -1812,6 +2023,617 @@
     wrap.addEventListener("pointerleave", () => showTip(null));
   }
 
+  // ---------- Pull request ----------
+
+  // The review's pull request as the server's pull events deliver it, and why it is stale when GitHub cannot be read.
+  // The bar under the top bar shows its state, and a notice offers a new review when the author pushes. See
+  // docs/pull-requests.md sections 2, 3.3 and 4.6.
+  // Each thread's place in this review's diffs arrives with the snapshot, by thread identifier (section 7.1).
+  // The places of the annotations of the checks arrive the same way, keyed by check and annotation (section 9).
+  const PULL = { snapshot: META.pull || null, stale: META.pullStale || null, places: META.pullThreads || {}, notes: META.pullAnnotations || {} };
+  // How the bar words GitHub's check rollup states, review decisions and merge states, each with the pill's tone.
+  const CHECK_TEXT = { SUCCESS: ["checks pass", "good"], FAILURE: ["checks fail", "bad"], ERROR: ["checks fail", "bad"], PENDING: ["checks pending", "wait"], EXPECTED: ["checks pending", "wait"] };
+  const DECISION_TEXT = { APPROVED: ["approved", "good"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "wait"] };
+  const MERGE_TEXT = { BLOCKED: "merging is blocked", BEHIND: "behind its base branch", DIRTY: "has conflicts", UNSTABLE: "mergeable, with failing checks", CLEAN: "ready to merge", HAS_HOOKS: "ready to merge" };
+
+  // Returns a pill with a text and its tone, or null when there is no text.
+  const pill = (pair) => pair ? el("span", { class: "pill " + pair[1] }, pair[0]) : null;
+
+  // Shows the tabs, the pull request's number, title, author, state, checks and review decision, and the size of the
+  // viewer's pending review in the bar, and the new-push notice when its head has moved past the review's.
+  function renderPull() {
+    const bar = $("#pullbar"), p = PULL.snapshot, d = discussion();
+    if (!p) { bar.hidden = true; $("#pushnotice").hidden = true; return; }
+    const tab = (name, label) => el("button", { class: state.tab === name ? "on" : "", onclick: () => showTab(name) }, label);
+    const pr = p.state === "OPEN" ? (p.isDraft ? "draft" : "open") : p.state.toLowerCase();
+    bar.replaceChildren(...[
+      el("span", { class: "seg", role: "tablist" }, tab("map", "Map"), tab("conversation", "Conversation")),
+      el("a", { class: "pull-number", href: p.url, target: "_blank", rel: "noopener", title: "Open the pull request on GitHub" }, "#" + p.number),
+      el("span", { class: "pull-title" }, p.title),
+      p.author ? el("span", { class: "by" }, "by " + p.author) : null,
+      pill([pr, pr === "open" ? "good" : pr === "merged" ? "" : "wait"]),
+      pill(CHECK_TEXT[p.checks] || ["no checks", ""]),
+      pill(DECISION_TEXT[p.reviewDecision]),
+      d && d.pending ? pill([`your pending review: ${plural(d.pending.comments, "comment", "comments")}`, "wait"]) : null,
+      p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
+      el("span", { class: "spacer" }),
+      PULL.stale ? el("span", { class: "stale", title: PULL.stale }, "Stale: " + PULL.stale) : null,
+      canWrite() ? el("button", { class: "btn primary", onclick: toggleReviewBox, title: "Submit your review: a comment, an approval or a request for changes" }, "Review")
+        : API && p.state !== "OPEN" ? el("span", { class: "by" }, "read-only") : null,
+      API ? el("button", { class: "link", onclick: refreshPull, title: "Read the pull request from GitHub now" }, "Refresh") : null].filter(Boolean));
+    bar.hidden = false;
+    renderPush();
+  }
+
+  // Asks the server to read the pull request at once. The answer arrives as a pull event.
+  function refreshPull() {
+    fetch(`${API}/pull/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  }
+
+  // Shows the notice of a push: how many commits arrived since the review began, with a review of the new head and,
+  // when the reviewer has reviewed before, a review of the commits since that review.
+  function renderPush() {
+    const box = $("#pushnotice"), p = PULL.snapshot;
+    if (!API || !p || p.state !== "OPEN" || !CS.head || p.headOid === CS.head) { box.hidden = true; return; }
+    const added = META.pullCommits != null ? p.commits - META.pullCommits : 0;
+    const what = added > 0 ? `${plural(added, "new commit was", "new commits were")} pushed to #${p.number}.` : `#${p.number} was force-pushed.`;
+    const since = p.latestReviewCommit && p.latestReviewCommit !== p.headOid
+      ? el("button", { class: "btn", onclick: () => openPull(p.latestReviewCommit) }, "Review the commits since your last review") : null;
+    box.replaceChildren(...[el("span", {}, what), el("button", { class: "btn", onclick: () => openPull(null) }, "Review the new head"), since].filter(Boolean));
+    box.hidden = false;
+  }
+
+  // Starts a review of the pull request's current head, from its base or from a given commit, and follows it on the
+  // progress page. This review stays open until the reviewer leaves it.
+  async function openPull(from) {
+    const request = from ? { pull: PULL.snapshot.number, from } : { pull: PULL.snapshot.number };
+    const r = await fetch("/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) { location.href = "/?review=" + encodeURIComponent(body.id); return; }
+    $("#pushnotice").replaceChildren(el("span", {}, body.message || `The review could not start (${r.status}).`));
+  }
+
+  // ---------- Discussion ----------
+
+  // The pull request's review threads, and where each goes in this review's diffs. The server places them: a thread
+  // with a hunk shows under its line, a thread without one is listed at the top of its file, and a thread on a file
+  // this review's diff does not hold appears only in the conversation. See docs/pull-requests.md sections 6 and 7.
+  const discussion = () => (PULL.snapshot && PULL.snapshot.discussion) || null;
+  const allThreads = () => { const d = discussion(); return d ? d.threads : []; };
+
+  // Returns the threads on a file of this review: those under each line, keyed by hunk and line index, and those
+  // listed at the top of the file.
+  function threadsOf(path) {
+    const lines = new Map(), top = [];
+    for (const t of allThreads()) {
+      const p = PULL.places[t.id];
+      if (!p || p.path !== path) continue;
+      if (p.hunk === null || p.hunk === undefined) { top.push(t); continue; }
+      const k = p.hunk + ":" + p.line;
+      if (!lines.has(k)) lines.set(k, []);
+      lines.get(k).push(t);
+    }
+    return { lines, top };
+  }
+
+  // Returns the unresolved threads on the changed files under a node or a group, which count by the rule of
+  // reviewedCount, the rule of section 5.3.
+  function openThreadsUnder(key) {
+    const threads = allThreads();
+    if (!threads.length) return [];
+    const paths = new Set(reviewedCount(key).paths);
+    return threads.filter((t) => !t.isResolved && PULL.places[t.id] && paths.has(PULL.places[t.id].path));
+  }
+
+  // The elements a comment body keeps, and those it drops with everything inside them. Any other element is replaced
+  // by its contents.
+  const BODY_TAGS = new Set("a abbr b blockquote br code dd del details div dl dt em h1 h2 h3 h4 h5 h6 hr i img input ins kbd li ol p pre q s samp small span strong sub summary sup table tbody td tfoot th thead tr tt ul".split(" "));
+  const BODY_DROPPED = new Set("script style iframe frame frameset object embed form template svg math noscript link meta base textarea select button audio video".split(" "));
+
+  // Returns a comment body that GitHub rendered as HTML, as nodes that are safe to insert. GitHub sanitizes the HTML,
+  // and the page sanitizes it again, so that a gap in either does not become script in a page that can call the
+  // server. The HTML is parsed in an inert document, and only the allowed elements and attributes are copied. Links
+  // open in a new tab, and only web and mail links and https images survive. See docs/pull-requests.md section 11.
+  function safeBody(html) {
+    const doc = new DOMParser().parseFromString(html || "", "text/html");
+    const base = PULL.snapshot ? PULL.snapshot.url : location.href;
+    const address = (value, schemes) => { try { const u = new URL(value || "", base); return schemes.includes(u.protocol) ? u.href : null; } catch (e) { return null; } };
+    const copy = (from, to) => {
+      for (const n of from.childNodes) {
+        if (n.nodeType === Node.TEXT_NODE) { to.append(n.data); continue; }
+        if (n.nodeType !== Node.ELEMENT_NODE || BODY_DROPPED.has(n.localName)) continue;
+        if (!BODY_TAGS.has(n.localName)) { copy(n, to); continue; }
+        const tag = n.localName, e = document.createElement(tag);
+        if (tag === "a") {
+          const href = address(n.getAttribute("href"), ["http:", "https:", "mailto:"]);
+          if (href) { e.href = href; e.target = "_blank"; e.rel = "noopener noreferrer"; }
+        } else if (tag === "img") {
+          const src = address(n.getAttribute("src"), ["https:"]);
+          if (!src) continue;
+          e.src = src; e.alt = n.getAttribute("alt") || ""; e.loading = "lazy"; e.referrerPolicy = "no-referrer";
+        } else if (tag === "input") {
+          if (n.getAttribute("type") !== "checkbox") continue;
+          e.type = "checkbox"; e.checked = n.hasAttribute("checked"); e.disabled = true;
+        } else if (tag === "ol" && /^\d+$/.test(n.getAttribute("start") || "")) e.start = +n.getAttribute("start");
+        else if ((tag === "td" || tag === "th") && /^(left|right|center)$/.test(n.getAttribute("align") || "")) e.style.textAlign = n.getAttribute("align");
+        else if (tag === "details" && n.hasAttribute("open")) e.open = true;
+        if (n.hasAttribute("title")) e.title = n.getAttribute("title");
+        copy(n, e);
+        to.append(e);
+      }
+    };
+    const out = document.createDocumentFragment();
+    copy(doc.body, out);
+    return out;
+  }
+
+  const when = (at) => at ? new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  const shortOid = (oid) => oid ? oid.slice(0, 7) : "";
+
+  // Returns a comment with its author, its time, whether it is pending, and its body.
+  function commentBox(c) {
+    return el("div", { class: "comment" + (c.pending ? " pending" : "") },
+      el("div", { class: "comment-head" }, el("b", {}, c.author || "ghost"), el("a", { class: "when", href: c.url, target: "_blank", rel: "noopener" }, when(c.at)),
+        c.pending ? el("span", { class: "pill wait" }, "pending") : null),
+      el("div", { class: "body" }, safeBody(c.bodyHtml)));
+  }
+
+  // Returns where a thread was written: the whole file, a line, or a range of lines, on the side it was written on.
+  function threadLines(t) {
+    if (t.onFile) return "the file";
+    const end = t.isOutdated ? t.originalLine : t.line, start = t.isOutdated ? t.originalStartLine : t.startLine;
+    const where = start && start !== end ? `lines ${start}–${end}` : `line ${end}`;
+    return t.side === "LEFT" ? where + " at base" : where;
+  }
+
+  // Returns the last lines of the hunk a thread was written against, for a thread whose lines this diff does not show.
+  function hunkTail(diffHunk, count) {
+    const lines = diffHunk.split("\n").filter((l) => !l.startsWith("@@")).slice(-count);
+    return el("pre", { class: "thread-hunk" }, ...lines.map((l) => el("span", { class: l[0] === "+" ? "add" : l[0] === "-" ? "del" : "" }, l + "\n")));
+  }
+
+  // Returns a review thread with its comments. A resolved thread is collapsed to one line. A thread listed at the top
+  // of its file, or shown in the conversation, says where it was written and shows the hunk it was written against.
+  // The options are top, for the list at the top of a file, and away, for the conversation.
+  function threadBox(t, opts = {}) {
+    const placed = PULL.places[t.id];
+    const why = t.isResolved ? "resolved" + (t.resolvedBy ? " by " + t.resolvedBy : "") : t.isOutdated ? "outdated"
+      : opts.top && !t.onFile ? "not on this review's lines" : null;
+    const replies = t.comments.length - 1;
+    const box = el("details", { class: "thread" + (t.isResolved ? " resolved" : "") + (t.comments.some((c) => c.pending) ? " pending" : ""), open: !t.isResolved, "data-thread": opts.away ? null : t.id },
+      el("summary", {},
+        el("span", { class: "thread-where" }, opts.away ? `${t.path} · ${threadLines(t)}` : threadLines(t)),
+        why ? el("span", { class: "pill" + (t.isResolved ? " good" : "") }, why) : null,
+        el("span", { class: "thread-count" }, replies > 0 ? plural(replies, "reply", "replies") : ""),
+        t.isResolved && t.comments[0] ? el("span", { class: "thread-excerpt" }, `${t.comments[0].author || "ghost"}: ${t.comments[0].bodyHtml.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 90)}`) : null));
+    if (opts.away && placed) box.append(el("button", { class: "link thread-show", onclick: () => openThread(t) }, "Show in the diff"));
+    if ((opts.top || opts.away) && !t.onFile && t.comments[0] && t.comments[0].diffHunk) box.append(hunkTail(t.comments[0].diffHunk, 4));
+    for (const c of t.comments) box.append(commentBox(c));
+    if (!opts.away && canWrite()) box.append(threadControls(t));
+    return box;
+  }
+
+  // Returns the list of a node's unresolved threads for the details panel, each opening its line, or null when it has
+  // none.
+  function threadList(key) {
+    const open = openThreadsUnder(key);
+    if (!open.length) return null;
+    const ul = el("ul", { class: "list" });
+    for (const t of open) {
+      const path = PULL.places[t.id].path;
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => openThread(t), title: path },
+        el("span", { class: "row-name" }, path.slice(path.lastIndexOf("/") + 1)), el("span", { class: "row-meta" }, threadLines(t)))));
+    }
+    return el("div", {}, el("h3", {}, plural(open.length, "unresolved thread", "unresolved threads")), ul);
+  }
+
+  // Opens the Map tab on the diff that shows a thread, and scrolls to the thread.
+  async function openThread(t) {
+    const p = PULL.places[t.id];
+    if (!p) return;
+    if (state.tab !== "map") showTab("map");
+    state.expanded.add(p.path);
+    await openFile(p.path);
+    const target = document.querySelector(`[data-thread="${CSS.escape(t.id)}"]`);
+    if (!target) return;
+    target.open = true;
+    target.scrollIntoView({ block: "center" });
+    target.classList.remove("flash");
+    void target.offsetWidth;
+    target.classList.add("flash");
+  }
+
+  // Shows the Map tab or the Conversation tab.
+  function showTab(tab) {
+    state.tab = tab;
+    $(".main").hidden = tab !== "map";
+    $("#conversation").hidden = tab !== "conversation";
+    renderPull();
+    renderConversation();
+  }
+
+  const REVIEW_TEXT = { APPROVED: ["approved these changes", "good"], CHANGES_REQUESTED: ["requested changes", "bad"], COMMENTED: ["reviewed", ""], DISMISSED: ["reviewed, since dismissed", ""] };
+
+  // Returns one entry of the timeline. A description, comment or review is a card with its body, and a review lists
+  // the threads that started in it. Any other entry is one line.
+  function timelineEntry(item, threads) {
+    const who = el("b", {}, item.author || "ghost");
+    const time = item.url ? el("a", { class: "when", href: item.url, target: "_blank", rel: "noopener" }, when(item.at)) : el("span", { class: "when" }, when(item.at));
+    const line = (...kids) => el("div", { class: "talk-event" }, who, " ", ...kids, time);
+    switch (item.kind) {
+      case "description":
+      case "comment":
+      case "review": {
+        const verb = item.kind === "description" ? ["opened this pull request", ""] : item.kind === "comment" ? ["commented", ""] : REVIEW_TEXT[item.state] || ["reviewed", ""];
+        const card = el("section", { class: "card" + (item.kind === "review" ? " review st-" + (item.state || "").toLowerCase() : "") },
+          el("header", {}, who, el("span", { class: verb[1] ? "verb " + verb[1] : "verb" }, verb[0]), item.kind === "review" && item.commit ? el("code", {}, shortOid(item.commit)) : null, time));
+        if (item.bodyHtml && item.bodyHtml.trim()) card.append(el("div", { class: "body" }, safeBody(item.bodyHtml)));
+        else if (item.kind === "description") card.append(el("div", { class: "body hint" }, "No description provided."));
+        if (threads.length) card.append(el("div", { class: "card-threads" }, ...threads.map((t) => threadBox(t, { away: true }))));
+        return card;
+      }
+      case "force-push": return line("force-pushed from ", el("code", {}, shortOid(item.from)), " to ", el("code", {}, shortOid(item.commit)));
+      case "base-changed": return line("changed the base from ", el("code", {}, item.from), " to ", el("code", {}, item.to));
+      case "ready": return line("marked this ready for review");
+      case "draft": return line("converted this to a draft");
+      case "closed": return line("closed this");
+      case "reopened": return line("reopened this");
+      case "merged": return line("merged ", el("code", {}, shortOid(item.commit)), " into ", el("code", {}, item.to || ""));
+      default: return line(item.kind);
+    }
+  }
+
+  // Returns a run of pushed commits as one entry, with each commit's headline.
+  function pushEntry(commits) {
+    const authors = [...new Set(commits.map((c) => c.author || "ghost"))];
+    const list = el("ul", { class: "talk-commits" }, ...commits.map((c) => el("li", {}, el("a", { href: c.url, target: "_blank", rel: "noopener" }, el("code", {}, shortOid(c.commit))), " ", c.text || "")));
+    return el("div", { class: "talk-event" }, el("b", {}, authors.join(", ")), ` pushed ${plural(commits.length, "commit", "commits")}`, el("span", { class: "when" }, when(commits[commits.length - 1].at)), list);
+  }
+
+  // Shows the Conversation tab: the checks, then the timeline, oldest first, starting with the description. Each
+  // review lists the threads that started in it, and threads of the viewer's pending review follow at the end.
+  function renderConversation() {
+    const box = $("#conversation"), p = PULL.snapshot, d = discussion();
+    if (box.hidden) return;
+    const col = el("div", { class: "talk-col" });
+    box.replaceChildren(col);
+    if (!p) return;
+    // The list of checks below says what the rollup says, so the line above it gives the rollup only when there is no list.
+    const listed = allChecks().length > 0;
+    col.append(el("div", { class: "talk-checks" }, listed ? null : el("span", {}, "Checks"), listed ? null : pill(CHECK_TEXT[p.checks] || ["no checks", ""]), pill(DECISION_TEXT[p.reviewDecision]),
+      p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
+      el("span", { class: "spacer" }), el("a", { href: p.url, target: "_blank", rel: "noopener" }, "Open on GitHub")));
+    const checks = checkList();
+    if (checks) col.append(checks);
+    if (!d) { col.append(el("p", { class: "hint" }, "GitHub has not sent the discussion yet.")); return; }
+    const reviews = new Set(d.timeline.filter((i) => i.kind === "review").map((i) => i.id));
+    const started = new Map();
+    const rest = [];
+    for (const t of d.threads) {
+      const review = t.comments[0] && t.comments[0].review;
+      if (review && reviews.has(review)) { if (!started.has(review)) started.set(review, []); started.get(review).push(t); }
+      else rest.push(t);
+    }
+    let commits = [];
+    const flush = () => { if (commits.length) col.append(pushEntry(commits)); commits = []; };
+    for (const item of d.timeline) {
+      if (item.kind === "commit") { commits.push(item); continue; }
+      flush();
+      col.append(timelineEntry(item, started.get(item.id) || []));
+    }
+    flush();
+    const pending = rest.filter((t) => t.comments.some((c) => c.pending)), other = rest.filter((t) => !pending.includes(t));
+    if (pending.length) col.append(el("section", { class: "card review pending" }, el("header", {}, el("b", {}, "Your pending review"),
+      el("span", { class: "verb wait" }, plural(d.pending ? d.pending.comments : pending.length, "comment", "comments") + ", visible only to you")),
+      el("div", { class: "card-threads" }, ...pending.map((t) => threadBox(t, { away: true })))));
+    if (other.length) col.append(el("section", { class: "card" }, el("header", {}, el("b", {}, "Other review threads")),
+      el("div", { class: "card-threads" }, ...other.map((t) => threadBox(t, { away: true })))));
+    if (canWrite()) col.append(conversationComposer());
+  }
+
+  // ---------- Checks ----------
+
+  // The checks of the pull request's head commit, and the annotations their runs left. The server places each
+  // annotation in this review's diffs as it places threads: under its last line in a review of the head, at the top of
+  // its file otherwise, and only in its check's row when the diff does not hold its path. Failures and warnings count on
+  // the map, so a failing build points at the blocks it concerns. See docs/pull-requests.md section 9.
+  const allChecks = () => (PULL.snapshot && PULL.snapshot.checkList) || [];
+  const CHECK_ORDER = { failure: 0, pending: 1, cancelled: 2, neutral: 3, success: 4, skipped: 5 };
+  const CHECK_TONE = { failure: "bad", pending: "wait", cancelled: "", neutral: "", success: "good", skipped: "" };
+  const isProblem = (a) => a.level === "FAILURE" || a.level === "WARNING";
+
+  // Returns every annotation with its check and the key the server places it by.
+  function allAnnotations() {
+    return allChecks().flatMap((check) => check.annotations.map((a, i) => ({ ...a, check, key: check.id + "/" + i })));
+  }
+
+  // Returns the annotations on a file of this review: those under each line, keyed by hunk and line index as threadsOf
+  // keys threads, and those listed at the top of the file.
+  function annotationsOf(path) {
+    const lines = new Map(), top = [];
+    for (const a of allAnnotations()) {
+      const p = PULL.notes[a.key];
+      if (!p || p.path !== path) continue;
+      if (p.hunk === null || p.hunk === undefined) { top.push(a); continue; }
+      const k = p.hunk + ":" + p.line;
+      if (!lines.has(k)) lines.set(k, []);
+      lines.get(k).push(a);
+    }
+    return { lines, top };
+  }
+
+  // Returns the failures and warnings on the changed files under a node or a group, by the rule of reviewedCount.
+  function problemsUnder(key) {
+    const notes = allAnnotations().filter((a) => isProblem(a) && PULL.notes[a.key]);
+    if (!notes.length) return [];
+    const paths = new Set(reviewedCount(key).paths);
+    return notes.filter((a) => paths.has(PULL.notes[a.key].path));
+  }
+
+  // Returns an annotation: its level, its check, its lines and its message, which is plain text. The away option shows
+  // its path too, for a check's row in the conversation.
+  function annotationBox(a, opts = {}) {
+    const lines = a.startLine !== a.endLine ? `lines ${a.startLine}–${a.endLine}` : `line ${a.endLine}`;
+    const box = el("div", { class: "annotation level-" + a.level.toLowerCase(), "data-note": opts.away ? null : a.key },
+      el("div", { class: "annotation-head" }, el("span", { class: "pill " + (a.level === "FAILURE" ? "bad" : a.level === "WARNING" ? "wait" : "") }, a.level.toLowerCase()),
+        el("b", {}, a.check.name), el("span", { class: "thread-where" }, opts.away ? `${a.path} · ${lines}` : lines), a.title ? el("span", {}, a.title) : null),
+      el("div", { class: "annotation-message" }, a.message));
+    if (opts.away && PULL.notes[a.key]) box.append(el("button", { class: "link", onclick: () => openNote(a) }, "Show in the diff"));
+    return box;
+  }
+
+  // Opens the Map tab on the diff that shows an annotation, and scrolls to it.
+  async function openNote(a) {
+    const p = PULL.notes[a.key];
+    if (!p) return;
+    if (state.tab !== "map") showTab("map");
+    state.expanded.add(p.path);
+    await openFile(p.path);
+    const target = document.querySelector(`[data-note="${CSS.escape(a.key)}"]`);
+    if (target) target.scrollIntoView({ block: "center" });
+  }
+
+  // Returns the list of a node's failures and warnings for the details panel, each opening its line, or null when it
+  // has none.
+  function problemList(key) {
+    const problems = problemsUnder(key);
+    if (!problems.length) return null;
+    const ul = el("ul", { class: "list" });
+    for (const a of problems) {
+      const path = PULL.notes[a.key].path;
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => openNote(a), title: `${a.check.name}: ${a.message}` },
+        el("span", { class: "row-name" }, path.slice(path.lastIndexOf("/") + 1)), el("span", { class: "row-meta" }, `${a.level.toLowerCase()} · line ${a.endLine}`))));
+    }
+    return el("div", {}, el("h3", {}, plural(problems.length, "check problem", "check problems")), ul);
+  }
+
+  // Returns how long a check ran, such as "1m 24s", or nothing when it has not finished.
+  function duration(check) {
+    if (!check.started || !check.completed) return "";
+    const s = Math.max(0, Math.round((new Date(check.completed) - new Date(check.started)) / 1000));
+    return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  }
+
+  // Returns the checks for the top of the Conversation tab, failing first: each with its state, name, workflow,
+  // whether it is required, how long it ran, and its page. A failed GitHub Actions job shows the end of its log on
+  // request, and annotations that no diff line of this review shows are listed under their check.
+  function checkList() {
+    const checks = allChecks().slice().sort((a, b) => (CHECK_ORDER[a.state] ?? 9) - (CHECK_ORDER[b.state] ?? 9) || (b.required - a.required));
+    if (!checks.length) return null;
+    const failing = checks.filter((c) => c.state === "failure").length;
+    const list = el("div", { class: "checks" });
+    for (const c of checks) {
+      const row = el("div", { class: "check st-" + c.state },
+        el("span", { class: "pill " + (CHECK_TONE[c.state] || "") }, c.state),
+        el("span", { class: "check-name" }, c.name), c.workflow ? el("span", { class: "check-workflow" }, c.workflow) : null,
+        c.required ? el("span", { class: "chip" }, "required") : null, c.description ? el("span", { class: "check-workflow" }, c.description) : null,
+        el("span", { class: "spacer" }), el("span", { class: "check-time" }, duration(c)),
+        c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, "Details") : null);
+      const box = el("div", { class: "check-box" }, row);
+      if (c.state === "failure" && c.jobId && API) {
+        const log = el("pre", { class: "check-log" });
+        log.hidden = true;
+        row.append(el("button", { class: "link", onclick: async (ev) => {
+          if (!log.hidden) { log.hidden = true; ev.target.textContent = "Show log"; return; }
+          log.hidden = false; ev.target.textContent = "Hide log";
+          if (log.childElementCount || log.textContent) return;
+          log.textContent = "Reading the log…";
+          const r = await fetch(`${API}/pull/checks/${c.jobId}/log`).catch(() => null);
+          const body = r ? await r.json().catch(() => ({})) : {};
+          log.textContent = r && r.ok ? body.lines.join("\n") : body.message || "The log could not be read.";
+          log.scrollTop = log.scrollHeight;
+        } }, "Show log"));
+        box.append(log);
+      }
+      const away = c.annotations.map((a, i) => ({ ...a, check: c, key: c.id + "/" + i })).filter((a) => !(PULL.notes[a.key] && PULL.notes[a.key].hunk !== null && PULL.notes[a.key].hunk !== undefined));
+      if (away.length) box.append(el("div", { class: "check-notes" }, ...away.map((a) => annotationBox(a, { away: true }))));
+      list.append(box);
+    }
+    return el("section", { class: "card" }, el("header", {}, el("b", {}, "Checks"),
+      el("span", { class: failing ? "verb bad" : "verb" }, failing ? `${failing} of ${checks.length} failing` : plural(checks.length, "check", "checks"))), list);
+  }
+
+  // ---------- Writing ----------
+
+  // The reviewer comments on lines, replies to threads, resolves them, and submits a review, all through the server,
+  // which writes to GitHub as the reviewer and reads the pull request again, so the page updates from the pull event
+  // that follows. Unsent text survives a reload through sessionStorage, and nothing else keeps it. See
+  // docs/pull-requests.md section 8.
+
+  // Returns a value indicating whether the page can write to the pull request: it is served, attached to a pull
+  // request, and the pull request is open. A closed or merged pull request is shown read-only.
+  const canWrite = () => !!(API && PULL.snapshot && PULL.snapshot.state === "OPEN");
+  const pendingReview = () => { const d = discussion(); return d ? d.pending : null; };
+
+  // Sends JSON to a path of the server and returns whether it succeeded, with the answer's body.
+  async function send(path, body, method = "POST") {
+    const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).catch(() => null);
+    if (!r) return { ok: false, body: { message: "The vibecheck server could not be reached." } };
+    return { ok: r.ok, body: await r.json().catch(() => ({})) };
+  }
+
+  // Draws what pull events brought while a comment box held the focus.
+  function flushPull() {
+    if (!PULL.dirty) return;
+    PULL.dirty = false;
+    redraw();
+    renderConversation();
+  }
+
+  // Reads and writes the unsent text of a comment box, by a key that names the box.
+  const draftKey = (key) => `vibecheck-draft:${META.review}:${key}`;
+  const readDraft = (key) => { try { return sessionStorage.getItem(draftKey(key)) || ""; } catch (e) { return ""; } };
+  const saveDraft = (key, text) => { try { if (text) sessionStorage.setItem(draftKey(key), text); else sessionStorage.removeItem(draftKey(key)); } catch (e) { /* storage unavailable */ } };
+
+  // Returns a comment box: a text area that takes Markdown, a preview that GitHub renders, and buttons. Each action has
+  // a label and a run function that takes the text and returns the server's answer. A successful action clears the
+  // box's draft and calls done. The options are key, placeholder, suggestion, the text that Suggest change puts in a
+  // suggestion block, extra, nodes shown beside the buttons, check, which returns a reason the text cannot be sent,
+  // and onCancel.
+  function composer(opts) {
+    const area = el("textarea", { class: "composer-text", rows: 4, placeholder: opts.placeholder || "Leave a comment. Markdown is supported." });
+    area.value = readDraft(opts.key);
+    const preview = el("div", { class: "body composer-preview" });
+    preview.hidden = true;
+    const error = el("div", { class: "composer-error", role: "alert" });
+    const write = el("button", { class: "on", onclick: () => show(false) }, "Write");
+    const look = el("button", { onclick: () => show(true) }, "Preview");
+    async function show(previewing) {
+      write.className = previewing ? "" : "on"; look.className = previewing ? "on" : "";
+      area.hidden = previewing; preview.hidden = !previewing;
+      if (!previewing) { area.focus(); return; }
+      preview.replaceChildren(el("span", { class: "hint" }, "Rendering…"));
+      const r = await send("/api/markdown", { text: area.value });
+      preview.replaceChildren(r.ok ? (area.value.trim() ? safeBody(r.body.html) : el("span", { class: "hint" }, "Nothing to preview.")) : el("span", { class: "composer-error" }, r.body.message || "The preview failed."));
+    }
+    const buttons = opts.actions.map((a) => el("button", { class: "btn" + (a.primary ? " primary" : ""), onclick: async (ev) => {
+      const text = area.value;
+      const why = opts.check ? opts.check(text, a) : !text.trim() ? "Write something first." : null;
+      if (why) { error.textContent = why; return; }
+      for (const b of buttons) b.disabled = true;
+      error.textContent = "";
+      // The server sends the pull event that shows the write before it answers, and the redraw that follows rebuilds
+      // this box from its draft, so the draft goes first and comes back only when the write fails.
+      saveDraft(opts.key, "");
+      const r = await a.run(text);
+      for (const b of buttons) b.disabled = false;
+      if (!r.ok) { saveDraft(opts.key, text); error.textContent = r.body.message || "GitHub refused it."; return; }
+      area.value = "";
+      if (opts.done) opts.done();
+      flushPull();
+    } }, a.label));
+    area.addEventListener("input", () => saveDraft(opts.key, area.value));
+    // The page waits to redraw until the reviewer leaves the box, so that a pull event does not take the text away
+    // mid-word. A box that closes is left without a blur event, so sending and cancelling draw what waited as well.
+    area.addEventListener("blur", flushPull);
+    const tools = el("div", { class: "composer-tools" }, el("span", { class: "seg" }, write, look));
+    if (opts.suggestion !== undefined) tools.append(el("button", { class: "link", title: "Put the selected lines in a suggestion block, for you to edit", onclick: () => {
+      area.value += (area.value && !area.value.endsWith("\n") ? "\n" : "") + "```suggestion\n" + opts.suggestion + "\n```\n";
+      saveDraft(opts.key, area.value);
+      show(false);
+    } }, "Suggest change"));
+    const row = el("div", { class: "composer-actions" }, ...(opts.extra || []), el("span", { class: "spacer" }), error,
+      opts.onCancel ? el("button", { class: "link", onclick: () => { opts.onCancel(); flushPull(); } }, "Cancel") : null, ...buttons);
+    const box = el("div", { class: "composer" }, tools, area, preview, row);
+    requestAnimationFrame(() => { if (opts.focus && box.isConnected) area.focus(); });
+    return box;
+  }
+
+  // Selects a line of a diff to comment on, or extends the selection to it with Shift on the same side of the same
+  // hunk, and draws the comment box under the last selected line.
+  function pick(path, hunk, side, line, extend) {
+    const c = state.compose;
+    if (extend && c && c.path === path && c.hunk === hunk && c.side === side) state.compose = { path, hunk, side, first: Math.min(c.first, line), last: Math.max(c.last, line) };
+    else state.compose = { path, hunk, side, first: line, last: line };
+    redraw();
+  }
+
+  // Returns the box that comments on the selected lines: posted at once, or added to the pending review, which the
+  // first such comment starts.
+  function lineComposer(path, hunk) {
+    const c = state.compose, lines = hunk.lines.slice(c.first, c.last + 1);
+    const pending = pendingReview();
+    const target = { path, hunk: c.hunk, first: c.first, last: c.last, side: c.side };
+    const close = () => { state.compose = null; redraw(); };
+    // The selection's lines on its side, which a range's first line number counts back from.
+    const counted = lines.filter((l) => l[0] !== (c.side === "RIGHT" ? "-" : "+")).length;
+    const label = c.first === c.last ? `Comment on line ${c.number}` : `Comment on lines ${c.number - counted + 1}–${c.number}`;
+    return el("div", { class: "line-composer" }, el("div", { class: "composer-title" }, label + (c.side === "LEFT" ? " at base" : "")), composer({
+      key: "line:" + path, focus: true, onCancel: close, done: close,
+      suggestion: c.side === "RIGHT" ? lines.filter((l) => l[0] !== "-").map((l) => l[1]).join("\n") : undefined,
+      actions: [
+        { label: "Add single comment", run: (text) => send(`${API}/pull/comments`, { ...target, body: text }) },
+        { label: pending ? "Add review comment" : "Start a review", primary: true, run: (text) => send(`${API}/pull/comments`, { ...target, body: text, review: true }) },
+      ],
+    }));
+  }
+
+  // Returns a thread's controls: a reply box behind a button, and Resolve or Unresolve. A reply joins the pending
+  // review when there is one, as on GitHub.
+  function threadControls(t) {
+    const pending = pendingReview();
+    const bar = el("div", { class: "thread-actions" });
+    const resolve = el("button", { class: "btn", onclick: async () => {
+      resolve.disabled = true;
+      const r = await send(`${API}/pull/threads/${encodeURIComponent(t.id)}/resolved`, { resolved: !t.isResolved });
+      resolve.disabled = false;
+      if (!r.ok) bar.append(el("span", { class: "composer-error" }, r.body.message || "GitHub refused it."));
+    } }, t.isResolved ? "Unresolve" : "Resolve conversation");
+    // A box opened by the reviewer takes the focus. One restored from its draft by a redraw does not, since a focused
+    // box holds back the redraws that pull events ask for.
+    const open = (focus) => {
+      bar.replaceChildren(composer({ key: "reply:" + t.id, placeholder: "Reply…", focus, onCancel: () => bar.replaceChildren(...idle()), done: () => bar.replaceChildren(...idle()),
+        actions: [{ label: pending ? "Add reply to review" : "Reply", primary: true, run: (text) => send(`${API}/pull/threads/${encodeURIComponent(t.id)}/replies`, { body: text }) }] }));
+    };
+    const idle = () => [el("button", { class: "reply-open", onclick: () => open(true) }, "Reply…"), resolve];
+    if (readDraft("reply:" + t.id)) open(false); else bar.append(...idle());
+    return bar;
+  }
+
+  const EVENT_TEXT = { COMMENT: "Comment", APPROVE: "Approve", REQUEST_CHANGES: "Request changes" };
+
+  // Shows or hides the review box under the bar: a summary, the choice of comment, approval or request for changes,
+  // and the pending review's discard. GitHub refuses an approval or a request for changes from the author, and a
+  // comment or request for changes with no summary and no comments, so the box says so before it sends.
+  function toggleReviewBox() {
+    const box = $("#reviewbox");
+    if (!box.hidden) { box.hidden = true; return; }
+    renderReviewBox();
+    box.hidden = false;
+  }
+  function renderReviewBox() {
+    const box = $("#reviewbox"), p = PULL.snapshot, pending = pendingReview();
+    if (!p || !canWrite()) { box.hidden = true; return; }
+    let choice = "COMMENT";
+    const choices = el("div", { class: "review-choices" }, ...Object.keys(EVENT_TEXT).map((e) => {
+      const blocked = e !== "COMMENT" && p.viewerDidAuthor;
+      return el("label", { class: blocked ? "blocked" : "", title: blocked ? "GitHub does not let the author approve their own pull request or request changes to it." : "" },
+        el("input", { type: "radio", name: "review-event", value: e, checked: e === "COMMENT", disabled: blocked, onchange: () => { choice = e; } }), " " + EVENT_TEXT[e]);
+    }));
+    const discard = pending ? el("button", { class: "link danger", onclick: () => {
+      discard.replaceWith(el("span", { class: "confirm" }, `Discard ${plural(pending.comments, "pending comment", "pending comments")}?`,
+        el("button", { class: "btn danger", onclick: async (ev) => {
+          ev.target.disabled = true;
+          const r = await send(`${API}/pull/review`, {}, "DELETE");
+          if (r.ok) box.hidden = true; else { ev.target.disabled = false; ev.target.after(el("span", { class: "composer-error" }, r.body.message || "GitHub refused it.")); }
+        } }, "Discard")));
+    } }, "Discard review") : null;
+    box.replaceChildren(
+      el("div", { class: "review-head" }, el("b", {}, "Finish your review"), el("span", { class: "hint" }, pending ? `${plural(pending.comments, "pending comment", "pending comments")} will be submitted with it` : "No pending comments"),
+        p.viewerDidAuthor ? el("span", { class: "hint" }, "· you opened this pull request, so you can only comment") : null),
+      composer({ key: "review", placeholder: "Leave a summary", focus: true, extra: [choices, discard],
+        check: (text) => choice !== "APPROVE" && !text.trim() && !(pending && pending.comments) ? `${EVENT_TEXT[choice]} needs a summary or comments.` : null,
+        done: () => { box.hidden = true; },
+        actions: [{ label: "Submit review", primary: true, run: (text) => send(`${API}/pull/review`, { event: choice, body: text }) }] }));
+  }
+
+  // Returns the box at the bottom of the conversation that adds a comment to it.
+  function conversationComposer() {
+    return el("section", { class: "card" }, el("header", {}, el("b", {}, "Add a comment")),
+      el("div", { class: "card-threads" }, composer({ key: "conversation",
+        actions: [{ label: "Comment", primary: true, run: (text) => send(`${API}/pull/comments`, { body: text }) }] })));
+  }
+
   // ---------- Map notices ----------
 
   // Follows the review's event stream when the vibecheck server serves the page. A concept map that Claude is making, or
@@ -1855,6 +2677,20 @@
       const e = JSON.parse(m.data);
       if (e.type === "narrative" || e.type === "narratives") { narrativeEvent(e); return; }
       const fresh = e.seq >= META.events;
+      // The marks sent before the page loaded are already in META.reviewed.
+      if (e.type === "reviewed") { if (fresh) applyMarks(e.marks); return; }
+      // The snapshot and the places sent before the page loaded are already in META.
+      if (e.type === "pull") {
+        if (!fresh) return;
+        if (e.stale) PULL.stale = e.message;
+        else { PULL.snapshot = e.snapshot; PULL.places = e.threads || {}; PULL.notes = e.annotations || {}; PULL.stale = null; }
+        renderPull();
+        if (!$("#reviewbox").hidden) renderReviewBox();
+        if (e.stale) return;
+        if (document.activeElement && document.activeElement.matches(".composer-text")) PULL.dirty = true;
+        else { renderConversation(); redraw(); }
+        return;
+      }
       if (e.type === "ready" && fresh) { source.close(); location.reload(); }
       else if (e.type === "stage" && fresh && switching) show("busy", "switch", spinner(), el("span", {}, `Switching to the concept map: ${e.message}`));
       else if (e.type === "map" && !switching) {
@@ -1864,6 +2700,51 @@
         else if (e.state === "failed" || e.state === "unavailable") show("error", e.state, el("span", {}, e.message));
       } else if (e.type === "map" && e.state === "failed") { switching = false; show("error", "failed", el("span", {}, e.message)); }
     };
+  }
+
+  // ---------- Reviewed marks ----------
+
+  // Shows how many of the changeset's changed files are reviewed.
+  function renderProgress() {
+    const done = CHANGED_FILES.filter((f) => REVIEWED.has(f.path)).length;
+    $("#progress").textContent = CHANGED_FILES.length ? `${done} of ${CHANGED_FILES.length} files reviewed` : "";
+  }
+
+  // Lays marks over the page's, where each maps a path to its reason, or to nothing when the file is not reviewed.
+  function applyMarks(marks) {
+    for (const [path, why] of Object.entries(marks || {})) { if (why) REVIEWED.set(path, why); else REVIEWED.delete(path); }
+    renderProgress();
+    redraw();
+  }
+
+  // Marks files reviewed or not. The page changes at once. The server, when there is one, stores the marks, answers
+  // with the review's marks, which replace the page's, and tells the other pages that show the same changes.
+  async function setReviewed(paths, reviewed) {
+    const before = new Map(REVIEWED);
+    applyMarks(Object.fromEntries(paths.map((p) => [p, reviewed ? REVIEWED.get(p) || "reviewer" : ""])));
+    if (!API) return;
+    const r = await fetch(`${API}/reviewed`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths, reviewed }) }).catch(() => null);
+    const body = r && r.ok ? await r.json().catch(() => null) : null;
+    REVIEWED.clear();
+    for (const [path, why] of body ? Object.entries(body.marks || {}) : before) REVIEWED.set(path, why);
+    renderProgress();
+    if (!body) $("#progress").textContent += " · the last mark could not be saved";
+    redraw();
+  }
+
+  // Draws the current location again once per frame, keeping the view, the selection and the leaf view's scroll.
+  let redrawFrame = 0;
+  function redraw() {
+    if (redrawFrame) return;
+    redrawFrame = requestAnimationFrame(async () => {
+      redrawFrame = 0;
+      const leafView = $("#leafview"), top = leafView.scrollTop, view = { ...state.view }, back = state.back;
+      const m = await mount();
+      if (m) setViewBox(view);
+      state.back = back;
+      leafView.scrollTop = top;
+      renderDetails();
+    });
   }
 
   // ---------- Boot ----------
@@ -1879,10 +2760,12 @@
       $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
     }
     renderSummary();
+    renderPull();
     installTip();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
-    $("#trivial").addEventListener("change", async (ev) => { rememberView(); state.opts.trivial = ev.target.checked; const m = await mount(); if (m) setViewBox(arrive(m)); });
+    $("#mute").addEventListener("change", (ev) => { state.opts.mute = ev.target.checked; redraw(); });
+    renderProgress();
     $("#flow").addEventListener("change", (ev) => document.body.classList.toggle("flow", ev.target.checked));
     installThemeChoice();
     document.body.classList.toggle("flow", $("#flow").checked);
@@ -1892,7 +2775,7 @@
     $("#fit").addEventListener("click", zoomToFit);
     document.addEventListener("keydown", (ev) => {
       // Keys typed into a text field or a list belong to it. A checkbox or button does not take Escape or the arrows.
-      if (ev.target.matches("input:not([type=checkbox]):not([type=radio]), select, textarea")) return;
+      if (ev.target.matches("input:not([type=checkbox]):not([type=radio]), select, textarea") || state.tab !== "map") return;
       if (ev.key === "Escape" || ev.key === "Backspace") { ev.preventDefault(); up(); }
       else if (ev.key === "Enter" && state.selected && state.current) {
         const c = state.current.level.children.find((x) => x.key === state.selected);

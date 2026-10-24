@@ -27,7 +27,7 @@ public static partial class TrivialEdits
         var after = Significant(headText);
         var hunks = file.Hunks.Select(h =>
         {
-            if (!TryRanges(h.Header, out var old, out var now)) return h;
+            if (!h.TryRanges(out var old, out var now)) return h;
             return Same(Within(before, old), Within(after, now)) ? h with { Trivial = true } : h;
         }).ToList();
         // The whole file is compared on its own, so the file's mark never rests on how git cut the hunks.
@@ -65,21 +65,6 @@ public static partial class TrivialEdits
         range.Count == 0 ? [] : items.Where(i => i.Last >= range.Start && i.First < range.Start + range.Count).ToList();
 
     private static bool Same(List<Item> a, List<Item> b) => a.Select(i => i.Key).SequenceEqual(b.Select(i => i.Key), StringComparer.Ordinal);
-
-    /// <summary>Reads the base and head line ranges of a hunk header such as <c>@@ -12,7 +12,9 @@</c>, as zero-based first lines and counts.</summary>
-    private static bool TryRanges(string header, out (int Start, int Count) old, out (int Start, int Count) now)
-    {
-        old = now = default;
-        var m = Header().Match(header);
-        if (!m.Success) return false;
-        static (int, int) Range(Group start, Group count) => (int.Parse(start.Value) - 1, count.Success ? int.Parse(count.Value) : 1);
-        old = Range(m.Groups[1], m.Groups[2]);
-        now = Range(m.Groups[3], m.Groups[4]);
-        return true;
-    }
-
-    [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")]
-    private static partial Regex Header();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();

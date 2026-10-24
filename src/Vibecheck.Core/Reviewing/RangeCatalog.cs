@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Text.Json;
 using Vibecheck.Diffing;
 
 namespace Vibecheck.Reviewing;
@@ -8,7 +6,7 @@ namespace Vibecheck.Reviewing;
 /// A range the picker offers: the group it is listed under, a label, the range in the form
 /// <see cref="RevisionChangeset.ResolveRange"/> reads, and a detail line.
 /// </summary>
-/// <param name="Group">One of <c>worktree</c> (the uncommitted work), <c>branch</c> (the current branch), <c>commit</c>, <c>branches</c> and <c>pulls</c>.</param>
+/// <param name="Group">One of <c>worktree</c> (the uncommitted work), <c>branch</c> (the current branch), <c>commit</c> and <c>branches</c>.</param>
 public sealed record RangeChoice(string Group, string Label, string Range, string? Detail);
 
 /// <summary>Lists the ranges of a repository that a reviewer is likely to want to review. See <c>docs/review-workflow.md</c> section 2.</summary>
@@ -57,34 +55,6 @@ public static class RangeCatalog
     }
 
     /// <summary>
-    /// Returns the open pull requests that the <c>gh</c> command lists for the repository and whose head commit is
-    /// present locally, each as a range from its base branch. Returns an empty list when <c>gh</c> is missing, fails or
-    /// takes longer than the timeout.
-    /// </summary>
-    public static async Task<List<RangeChoice>> PullRequestsAsync(string dir, TimeSpan timeout)
-    {
-        var json = await RunGhAsync(dir, timeout, "pr", "list", "--json", "number,title,headRefOid,baseRefName", "--limit", "20");
-        if (json is null) return [];
-        var result = new List<RangeChoice>();
-        try
-        {
-            foreach (var pr in JsonDocument.Parse(json).RootElement.EnumerateArray())
-            {
-                var oid = pr.GetProperty("headRefOid").GetString()!;
-                var baseName = pr.GetProperty("baseRefName").GetString()!;
-                if (Git.TryRun(dir, "cat-file", "-e", oid + "^{commit}") is null) continue;
-                var baseRef = Git.TryRun(dir, "rev-parse", "--verify", "--quiet", "origin/" + baseName) is not null ? "origin/" + baseName : baseName;
-                result.Add(new RangeChoice("pulls", $"#{pr.GetProperty("number").GetInt32()} {pr.GetProperty("title").GetString()}", $"{baseRef}...{oid}", oid[..7]));
-            }
-        }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
-        {
-            return [];
-        }
-        return result;
-    }
-
-    /// <summary>
     /// Returns the branch that ranges are compared against: the remote's default branch when it is known, and
     /// otherwise the first of <c>main</c>, <c>master</c>, <c>origin/main</c> and <c>origin/master</c> that exists.
     /// </summary>
@@ -100,32 +70,4 @@ public static class RangeCatalog
         int.TryParse(Git.TryRun(dir, "rev-list", "--count", $"{from}..{to}"), out var n) ? n : 0;
 
     private static string Commits(int n) => n == 1 ? "1 commit" : $"{n} commits";
-
-    private static async Task<string?> RunGhAsync(string dir, TimeSpan timeout, params string[] args)
-    {
-        var psi = new ProcessStartInfo("gh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = dir };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        try
-        {
-            using var process = Process.Start(psi);
-            if (process is null) return null;
-            using var cancel = new CancellationTokenSource(timeout);
-            var output = process.StandardOutput.ReadToEndAsync(cancel.Token);
-            _ = process.StandardError.ReadToEndAsync(cancel.Token);
-            try
-            {
-                await process.WaitForExitAsync(cancel.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                process.Kill(entireProcessTree: true);
-                return null;
-            }
-            return process.ExitCode == 0 ? await output : null;
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
-    }
 }

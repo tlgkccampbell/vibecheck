@@ -5,6 +5,7 @@ using Vibecheck.Bootstrap;
 using Vibecheck.Checking;
 using Vibecheck.Diffing;
 using Vibecheck.Format;
+using Vibecheck.GitHub;
 using Vibecheck.Model;
 using Vibecheck.Reviewing;
 
@@ -17,7 +18,8 @@ public static class Program
         usage:
           vibecheck           [review options]
           vibecheck review    [<base> [<head>] | <range>] [--map <vibecheck.json>] [--root <dir>] [--solution <sln>]
-                            [--no-build] [--no-cache] [--no-ai] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+                            [--no-build] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+          vibecheck pr        <number> | <url> [review options]
           vibecheck init      --solution <path.sln> [--root <dir>] [--map <vibecheck.json>] [--facts <out.json>]
           vibecheck units     [--map <vibecheck.json>] [--root <dir>] [--out <units.txt>]
           vibecheck check     [--map <vibecheck.json>] [--root <dir>] [--facts <out.json>] [--strict]
@@ -30,6 +32,8 @@ public static class Program
         vibecheck with no command, or vibecheck review, opens the viewer in the browser on a range of the repository
         that the current directory is in. Without a range it opens on a picker. The map is --map when given, then the
         vibecheck.json nearest the current directory at the head revision, and otherwise the namespace skeleton.
+        vibecheck pr opens straight into a pull request of the repository that gh names, fetching its commits when
+        they are missing. --no-github leaves GitHub out: the picker lists no pull requests.
 
         The map defaults to ./vibecheck.json, and the layout file sits beside it. The repository root,
         which the map's solution path and every reported path are relative to, defaults to the map's
@@ -47,6 +51,7 @@ public static class Program
             return args[0] switch
             {
                 "review" => await ReviewAsync(positional, options),
+                "pr" => await ReviewAsync(positional, options, pull: true),
                 "init" => await InitAsync(options),
                 "units" => await UnitsAsync(options),
                 "check" => await CheckAsync(options),
@@ -332,12 +337,28 @@ public static class Program
     }
 
     /// <summary>
-    /// Serves the review workflow and opens it in the browser: on the range given, or on the picker when there is none.
-    /// Runs until Ctrl+C, and then cancels the reviews still running and removes their worktrees.
+    /// Returns the number of a pull request given as a number, such as <c>42</c> or <c>#42</c>, or as its address on
+    /// GitHub, which must name the repository that <c>gh</c> names.
     /// </summary>
-    private static async Task<int> ReviewAsync(List<string> positional, Dictionary<string, string> options)
+    internal static int PullNumber(string given, IGitHub? github)
+    {
+        if (int.TryParse(given.TrimStart('#'), out var number) && number > 0) return number;
+        var match = System.Text.RegularExpressions.Regex.Match(given, @"^https?://([^/]+)/([^/]+)/([^/]+)/pull/(\d+)");
+        if (!match.Success) throw new ArgumentException($"\"{given}\" is neither a pull request number nor its address");
+        if (github is not null && !$"{match.Groups[1].Value}/{match.Groups[2].Value}/{match.Groups[3].Value}".Equals($"{github.Repository.Host}/{github.Repository.NameWithOwner}", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"{given} is not a pull request of {github.Repository.NameWithOwner}, the repository here");
+        return int.Parse(match.Groups[4].Value);
+    }
+
+    /// <summary>
+    /// Serves the review workflow and opens it in the browser: on the range given, on the pull request given when
+    /// <paramref name="pull"/> is set, or on the picker when there is neither. Runs until Ctrl+C, and then cancels the
+    /// reviews still running and removes their worktrees.
+    /// </summary>
+    private static async Task<int> ReviewAsync(List<string> positional, Dictionary<string, string> options, bool pull = false)
     {
         if (positional.Count > 2) throw new ArgumentException("review takes a base and an optional head, or one range");
+        if (pull && positional.Count != 1) throw new ArgumentException("pr takes the number or the address of one pull request");
         var dir = Directory.GetCurrentDirectory();
         if (Git.TryRun(dir, "rev-parse", "--show-toplevel") is null) throw new ArgumentException("review must run inside a git repository");
         RoslynAnalyzer.EnsureMSBuild();
@@ -348,6 +369,8 @@ public static class Program
             claude = null;
             Console.Error.WriteLine("claude was not found on the path; reviews without a map draw the namespace skeleton");
         }
+        var (github, githubNotice) = options.ContainsKey("no-github") ? (null, null) : await GitHubAccess.ConnectAsync(dir, TimeSpan.FromSeconds(10));
+        if (githubNotice is not null) Console.Error.WriteLine(githubNotice);
         var serverOptions = new ReviewServerOptions
         {
             Directory = dir,
@@ -362,12 +385,18 @@ public static class Program
             Log = Console.Error.WriteLine,
             Claude = claude,
             Models = options.TryGetValue("model", out var model) ? ClaudeModels.All(model) : ClaudeModels.Default,
+            GitHub = github,
+            GitHubNotice = githubNotice,
             ClaudeNotice = options.ContainsKey("no-ai") ? null
                 : "Claude Code was not found on the path, so the namespace skeleton is drawn. Install Claude Code and sign in, and vibecheck generates a concept map.",
         };
         await using var server = new ReviewServer(serverOptions);
         var url = await server.StartAsync();
-        if (positional.Count > 0)
+        if (pull)
+        {
+            url = server.Link(await server.BeginPullAsync(PullNumber(positional[0], github)));
+        }
+        else if (positional.Count > 0)
         {
             var range = positional.Count == 2 ? $"{positional[0]}..{positional[1]}" : positional[0];
             var page = server.Begin(range);

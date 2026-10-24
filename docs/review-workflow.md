@@ -35,8 +35,9 @@ repositories at once, and any form of enforcement.
 2. With no range on the command line, the first page is a picker. It offers the
    current branch against the default branch, the uncommitted work against `HEAD`,
    recent commits on the current branch, other local branches, and, when the `gh`
-   command is available, open pull requests whose commits are present locally. A
-   free-form field takes any range `vibecheck changeset` accepts, and `:worktree` for
+   command is available and signed in, the repository's open pull requests, including
+   those whose commits are not present locally, which opening one fetches
+   ([pull-requests.md](pull-requests.md) section 4.2). A free-form field takes any range `vibecheck changeset` accepts, and `:worktree` for
    the uncommitted work (section 4.6).
 3. Choosing a range starts a review. The page shows each stage's progress as it runs
    and draws the changeset as soon as it exists.
@@ -46,7 +47,8 @@ repositories at once, and any form of enforcement.
    to the concept map once that is ready, and later offers to save the map into the
    repository.
 
-`vibecheck review <range>` skips the picker and opens straight into that review.
+`vibecheck review <range>` skips the picker and opens straight into that review, and
+`vibecheck pr <number>` into a pull request.
 
 ## 3. Architecture
 
@@ -57,7 +59,9 @@ the page that was in `mock/`, moved into the tool. It still reads
 `window.CHANGESET`, which the server sets from a `changeset.js` it serves beside
 each review's page, so the same page also opens from a file and publishes as an
 artifact. Narratives reach the page through the review's event stream, and a page
-opened from a file shows none.
+opened from a file shows none. The endpoints that read and review pull requests, and
+the routes and events of reviewed files, are in [pull-requests.md](pull-requests.md)
+section 10.
 
 ```
 browser ── viewer (static files, embedded in the tool)
@@ -417,4 +421,5 @@ These land in [vibecheck-spec.md](vibecheck-spec.md) with the phase that makes t
 - How large a range stays useful. A range of a hundred commits has a long commit
   message list and many changed edges, and the batch limits may need to scale with it.
 - Whether pull requests whose commits are not present locally should be fetched, which
-  writes to the reviewer's repository.
+  writes to the reviewer's repository. Settled by [pull-requests.md](pull-requests.md)
+  section 4.2: opening a pull request fetches its commits without writing any ref.

@@ -1,0 +1,35 @@
+mutation AddComment($subject: ID!, $body: String!) {
+  addComment(input: {subjectId: $subject, body: $body}) { clientMutationId }
+}
+
+mutation StartReview($pull: ID!, $commit: GitObjectID!) {
+  addPullRequestReview(input: {pullRequestId: $pull, commitOID: $commit}) { pullRequestReview { id } }
+}
+
+mutation AddThread($review: ID!, $path: String!, $body: String!, $line: Int!, $side: DiffSide!, $startLine: Int, $startSide: DiffSide) {
+  addPullRequestReviewThread(input: {pullRequestReviewId: $review, path: $path, body: $body, line: $line, side: $side, startLine: $startLine, startSide: $startSide}) { thread { id } }
+}
+
+mutation Reply($thread: ID!, $body: String!, $review: ID) {
+  addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body, pullRequestReviewId: $review}) { comment { id } }
+}
+
+mutation Resolve($thread: ID!) {
+  resolveReviewThread(input: {threadId: $thread}) { thread { isResolved } }
+}
+
+mutation Unresolve($thread: ID!) {
+  unresolveReviewThread(input: {threadId: $thread}) { thread { isResolved } }
+}
+
+mutation Submit($review: ID!, $event: PullRequestReviewEvent!, $body: String) {
+  submitPullRequestReview(input: {pullRequestReviewId: $review, event: $event, body: $body}) { pullRequestReview { id state } }
+}
+
+mutation CreateAndSubmit($pull: ID!, $commit: GitObjectID!, $event: PullRequestReviewEvent!, $body: String) {
+  addPullRequestReview(input: {pullRequestId: $pull, commitOID: $commit, event: $event, body: $body}) { pullRequestReview { id state } }
+}
+
+mutation Discard($review: ID!) {
+  deletePullRequestReview(input: {pullRequestReviewId: $review}) { pullRequestReview { id } }
+}

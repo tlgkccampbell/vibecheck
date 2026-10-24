@@ -91,6 +91,17 @@
   @keyframes notice-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 
+  /* The bar of the review's pull request, which the vibecheck server's pull events fill. */
+  .pullbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 13px; }
+  .pull-number { font-family: var(--mono); font-weight: 600; }
+  .pull-title { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+  .pill { font-size: 11px; letter-spacing: .04em; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+  .pill.good { border-color: var(--added); color: var(--added); }
+  .pill.bad { border-color: var(--removed); color: var(--removed); }
+  .pill.wait { border-color: var(--modified); color: var(--modified); }
+  .pullbar .spacer { flex: 1; }
+  .stale { color: var(--warn); font-size: 12px; }
+
   /* Narratives, which Claude writes and the vibecheck server streams: the summary under the top bar, the tooltip on an
      edge, and a block in the details panel. Each is marked as written by a model. */
   .summary { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface); font-size: 13px; }
@@ -166,7 +177,7 @@
   .sw.removed { border-color: var(--removed); border-style: dashed; background: transparent; }
   .sw.modified { border-color: var(--modified); border-width: 2px; }
   .sw.children { border-color: var(--modified); }
-  .sw.trivial { border-color: var(--muted); }
+  .sw.reviewed { border-color: var(--muted); }
   .sw.cycle { border-color: var(--warn); border-style: dotted; }
   .sw.unsorted { border-color: var(--warn); background: var(--warn-bg); }
 
@@ -194,10 +205,12 @@
   .node.st-removed .badge-bg { fill: var(--removed); }
   .node.st-children .badge-bg { fill: var(--surface); stroke: var(--modified); stroke-width: 1.25; }
   .node.st-children .badge-text { fill: var(--modified); }
-  /* A trivial change is drawn in the muted ink, outlined like a change inside, so it shows without calling for review. */
-  .node.st-trivial .badge-bg { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
-  .node.st-trivial .badge-text { fill: var(--muted); }
-  .node.st-trivial .box { stroke: var(--muted); stroke-width: 1.5; }
+  /* A block whose changed files are all reviewed is drawn in the muted ink, outlined like a change inside, so it shows
+     without calling for review. */
+  .node.st-reviewed .badge-bg { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+  .node.st-reviewed .badge-text { fill: var(--muted); }
+  .node.st-reviewed .box { stroke: var(--muted); stroke-width: 1.5; }
+  .node.other .box { stroke-dasharray: 1 3; }
   .node .title { font-size: 12px; font-weight: 600; letter-spacing: .08em; fill: var(--fg); }
   .node .meta { font-size: 10.5px; fill: var(--muted); }
   .node .enter-glyph { font-size: 13px; fill: var(--muted); cursor: pointer; }
@@ -214,13 +227,13 @@
 
   .mini { fill: var(--fam, none); fill-opacity: .3; stroke: var(--line); stroke-width: 1; }
   .mini.st-children { stroke: var(--modified); }
-  .mini.st-trivial { stroke: var(--muted); }
+  .mini.st-reviewed { stroke: var(--muted); }
   .mini.st-modified { stroke: var(--modified); stroke-width: 1.5; }
   .mini.st-added { stroke: var(--added); stroke-width: 1.5; }
   .mini.st-removed { stroke: var(--removed); stroke-dasharray: 2 2; }
   .mini-type { fill: var(--line); }
   .mini-type-changed { fill: var(--modified); }
-  .mini-type-trivial { fill: var(--muted); }
+  .mini-type-reviewed { fill: var(--muted); }
   .mini-type-added { fill: var(--added); }
   .mini-type-removed { fill: var(--removed); }
 
@@ -276,7 +289,7 @@
   .pin.changed .pin-label { fill: var(--fg); }
 
   /* Dim unchanged */
-  body.dim .node:not(.st-added):not(.st-removed):not(.st-modified):not(.st-children):not(.st-trivial):not(.selected):not(.in-focus) { opacity: .5; }
+  body.dim .node:not(.st-added):not(.st-removed):not(.st-modified):not(.st-children):not(.st-reviewed):not(.selected):not(.in-focus) { opacity: .5; }
   body.dim .edge:not(.st-added):not(.st-removed):not(.st-modified):not(.selected):not(.in-focus) { opacity: .16; }
   body.dim .edge.st-minor:not(.selected):not(.in-focus) { opacity: .3; }
   body.dim .pin:not(.changed):not(.selected) { opacity: .4; }
@@ -291,7 +304,7 @@
   .st-added .dot { background: var(--added); }
   .st-removed .dot { background: var(--removed); }
   .st-children .dot { background: transparent; border: 1.5px solid var(--modified); }
-  .st-trivial .dot { background: transparent; border: 1.5px solid var(--muted); }
+  .st-reviewed .dot { background: transparent; border: 1.5px solid var(--muted); }
   .dot.minor { background: transparent; border: 1.5px solid var(--modified); opacity: .6; }
   .tree-icon { width: 14px; height: 14px; flex: none; }
   .legend-icon { width: 14px; height: 14px; }
@@ -331,17 +344,25 @@
   .typecard.st-added > header { border-left: 3px solid var(--added); }
   .typecard.st-removed > header { border-left: 3px solid var(--removed); }
   .typecard.st-modified > header { border-left: 3px solid var(--modified); }
-  .typecard.st-trivial > header { border-left: 3px solid var(--line-strong); }
+  .typecard.st-reviewed > header { border-left: 3px solid var(--line-strong); }
   .typename { font-weight: 600; }
   .typens { color: var(--muted); }
   .file { border-top: 1px solid var(--line); }
-  .file-head { display: flex; align-items: center; gap: 10px; padding: 5px 10px; font-family: var(--mono); font-size: 12px; min-width: 0; color: var(--muted); }
+  .file-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 10px; font-family: var(--mono); font-size: 12px; min-width: 0; color: var(--muted); }
   .file-path { overflow-wrap: anywhere; }
+  .file-head input { margin: 0; flex: none; cursor: pointer; }
+  .file-note { white-space: nowrap; }
+  .file-head .link { margin-left: auto; flex: none; }
+  .file.file-reviewed .file-path { text-decoration: line-through; text-decoration-color: var(--line-strong); }
+  .reviewed-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .reviewed-bar .btn { font-family: inherit; }
+  .progress { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
   .chip { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--line-strong); color: var(--muted); flex: none; }
   .chip-added { border-color: var(--added); color: var(--added); }
   .chip-removed { border-color: var(--removed); color: var(--removed); }
   .chip-modified { border-color: var(--modified); color: var(--modified); }
-  .chip-trivial { border-color: var(--line-strong); color: var(--muted); }
+  .chip-renamed { border-color: var(--modified); color: var(--modified); }
+  .chip-reviewed { border-color: var(--line-strong); color: var(--muted); }
   /* A hunk with no code change loses its red and green, so the eye passes over it. */
   table.diff.trivial { filter: grayscale(1); opacity: .7; }
   .chip-moved { border-color: var(--warn); color: var(--warn); }
@@ -374,9 +395,107 @@
   .typelist { display: flex; flex-wrap: wrap; gap: 4px 10px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
   .typelist .t-added { color: var(--added); }
   .typelist .t-changed { color: var(--fg); }
-  .typelist .t-trivial { text-decoration: underline dotted; }
+  .typelist .t-reviewed { text-decoration: underline dotted; }
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 
+  /* The Conversation tab and review threads, which the vibecheck server's pull events fill. */
+  .pullbar .seg button { font-family: var(--sans); }
+  .conversation { flex: 1; min-height: 0; overflow: auto; padding-block: 14px; }
+  .talk-col { max-width: 900px; margin: 0 auto; display: grid; gap: 12px; }
+  .talk-checks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+  .talk-checks .spacer { flex: 1; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .card > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
+  .card > header code { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .card.st-approved { border-left: 3px solid var(--added); }
+  .card.st-changes_requested { border-left: 3px solid var(--removed); }
+  .card.pending { border-left: 3px solid var(--modified); }
+  .verb { color: var(--muted); }
+  .verb.good { color: var(--added); } .verb.bad { color: var(--removed); } .verb.wait { color: var(--modified); }
+  .when { color: var(--muted); font-size: 12px; margin-left: auto; text-decoration: none; white-space: nowrap; }
+  a.when:hover { text-decoration: underline; }
+  .card-threads { display: grid; gap: 8px; padding: 8px 12px 12px; }
+  .talk-event { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; padding: 2px 12px; font-size: 13px; color: var(--muted); }
+  .talk-event b { color: var(--fg); font-weight: 600; }
+  .talk-event code { font-family: var(--mono); font-size: 12px; }
+  .talk-commits { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 12px; font-size: 12.5px; }
+  .talk-commits li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .body { padding: 8px 12px; overflow-wrap: anywhere; font-size: 14px; }
+  .body > :first-child { margin-top: 0; } .body > :last-child { margin-bottom: 0; }
+  .body img { max-width: 100%; }
+  .body pre { overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 8px; font-family: var(--code); font-size: 12.5px; }
+  .body code { font-family: var(--code); font-size: 90%; }
+  .body blockquote { margin: 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+  .body table { border-collapse: collapse; } .body td, .body th { border: 1px solid var(--line); padding: 2px 6px; }
+  .body h1, .body h2, .body h3 { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--fg); margin: 12px 0 6px; }
+  .thread { border: 1px solid var(--line); border-radius: 4px; background: var(--surface); font-family: var(--sans); font-size: 13px; white-space: normal; }
+  .thread > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px; color: var(--fg); font-family: var(--mono); font-size: 12px; }
+  .thread.resolved > summary { color: var(--muted); }
+  .thread.pending { border-color: var(--modified); }
+  .thread.flash { animation: thread-flash 1.6s ease-out; }
+  @keyframes thread-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
+  .thread-count { color: var(--muted); }
+  .thread-excerpt { color: var(--muted); font-family: var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .thread-show { margin: 0 10px; font-size: 12px; }
+  .thread-hunk { margin: 4px 10px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; font-family: var(--code); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .thread-hunk .add { background: var(--added-bg); } .thread-hunk .del { background: var(--removed-bg); }
+  .comment { border-top: 1px solid var(--line); }
+  .comment-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 10px 0; font-size: 12.5px; }
+  .comment .body { padding: 2px 10px 8px; font-size: 13px; }
+  table.diff td.thread-cell { padding: 6px 10px; background: var(--bg); font-family: var(--sans); font-size: 13px; white-space: normal; }
+  table.diff td.thread-cell .thread + .thread { margin-top: 6px; }
+  .file-threads { display: grid; gap: 6px; padding: 4px 10px 8px; }
+  .talk-note { color: var(--accent); }
+  .talk-filter { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+  svg#stage .talk-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
+  svg#stage .talk-icon { fill: var(--accent); }
+  svg#stage .talk-text { fill: var(--accent); font-size: 9px; font-weight: 600; }
+  /* Comment boxes, the review box and line selection, which write to the pull request through the server. */
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.1); }
+  .btn.danger, .link.danger { color: var(--removed); border-color: var(--removed); }
+  .composer { display: grid; gap: 6px; font-family: var(--sans); font-size: 13px; white-space: normal; }
+  .composer-tools { display: flex; align-items: center; gap: 10px; }
+  .composer-tools .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 10px; }
+  .composer-text { width: 100%; min-height: 80px; resize: vertical; font: 13px var(--code); color: var(--fg); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 4px; padding: 6px 8px; }
+  .composer-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .composer-preview { min-height: 80px; border: 1px solid var(--line); border-radius: 4px; }
+  .composer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .composer-actions .spacer { flex: 1; }
+  .composer-error { color: var(--removed); font-size: 12.5px; }
+  .composer-title { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .line-composer { border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); padding: 8px 10px; }
+  .thread-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+  .thread-actions .composer { flex: 1; }
+  .reply-open { flex: 1; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; color: var(--muted); cursor: text; font-size: 13px; }
+  table.diff td.ln.pick { cursor: pointer; }
+  table.diff td.ln.pick:hover { color: var(--accent); background: var(--bg); }
+  table.diff td.picked { box-shadow: inset 3px 0 0 var(--accent); }
+  table.diff td.code.picked { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+  .reviewbox { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); display: grid; gap: 8px; }
+  .review-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 13px; }
+  .review-choices { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+  .review-choices label.blocked { color: var(--muted); text-decoration: line-through; }
+  .confirm { display: inline-flex; align-items: center; gap: 8px; color: var(--removed); font-size: 13px; }
+  /* The checks of the head commit and the annotations their runs left. */
+  .checks { display: grid; }
+  .check-box + .check-box { border-top: 1px solid var(--line); }
+  .check { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 12px; font-size: 13px; }
+  .check .spacer { flex: 1; }
+  .check-name { font-weight: 600; }
+  .check-workflow, .check-time { color: var(--muted); font-size: 12px; }
+  .check.st-success .check-name, .check.st-skipped .check-name { font-weight: 400; }
+  .check-log { margin: 0 12px 8px; max-height: 320px; overflow: auto; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; font: 12px var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .check-notes { display: grid; gap: 6px; padding: 0 12px 8px; }
+  .annotation { border: 1px solid var(--line); border-left: 3px solid var(--line-strong); border-radius: 4px; background: var(--surface); padding: 4px 10px 6px; font-family: var(--sans); font-size: 13px; white-space: normal; }
+  .annotation.level-failure { border-left-color: var(--removed); }
+  .annotation.level-warning { border-left-color: var(--modified); }
+  .annotation-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; }
+  .annotation-head .thread-where { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .annotation-message { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px var(--code); margin-top: 2px; }
+  .problem-note { color: var(--removed); }
+  svg#stage .problem-bg { fill: var(--surface); stroke: var(--removed); stroke-width: 1; }
+  svg#stage .problem-text { fill: var(--removed); font-size: 9px; font-weight: 600; }
   .loading { padding: 40px; text-align: center; color: var(--muted); font-family: var(--mono); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -389,6 +508,7 @@
   </span>
   <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
   <span class="pr" id="pr"></span>
+  <span class="progress" id="progress" aria-live="polite"></span>
   <span class="spacer"></span>
   <div class="controls">
     <span class="seg" id="viewseg" hidden></span>
@@ -401,12 +521,15 @@
     </select></label>
     <label class="toggle"><input type="checkbox" id="externals"> Externals</label>
     <label class="toggle"><input type="checkbox" id="dim" checked> Dim unchanged</label>
-    <label class="toggle" title="Show edits that touch only comments, whitespace or layout in grey rather than as modifications"><input type="checkbox" id="trivial" checked> Mute trivial edits</label>
+    <label class="toggle" title="Set reviewed files aside: mute them on the map, collapse their diffs and list them last"><input type="checkbox" id="mute" checked> Mute reviewed files</label>
     <label class="toggle" title="Animate the direction of changed and focused edges"><input type="checkbox" id="flow" checked> Flow</label>
     <span class="toggle">Theme <span class="seg" id="theme" title="Follow the system, or always use light or dark"><button data-theme-choice="auto">auto</button><button data-theme-choice="light">light</button><button data-theme-choice="dark">dark</button></span></span>
   </div>
 </div>
 <div class="notice" id="notice" role="status" hidden></div>
+<div class="pullbar" id="pullbar" hidden></div>
+<div class="reviewbox" id="reviewbox" hidden></div>
+<div class="notice ready" id="pushnotice" role="status" hidden></div>
 <div class="summary" id="summary" aria-live="polite" hidden></div>
 
 <div class="main">
@@ -457,7 +580,7 @@
         <span><i class="sw children"></i> changes inside</span>
         <span><i class="sw cycle"></i> in a cycle</span>
         <span><i class="sw unsorted"></i> unsorted</span>
-        <span><i class="sw trivial"></i> no code changed</span>
+        <span><i class="sw reviewed"></i> reviewed</span>
       </div>
       <details class="legend-notes">
         <summary>Reading the diagram</summary>
@@ -465,13 +588,16 @@
           <li>Hexagons are things outside this level. Grey hexagons are external assemblies.</li>
           <li>Each edge is one curve from user to used, bowing to its left. Its width grows with the log of its references.</li>
           <li>Changed edges carry labels and arrows. A change under 3 references or 1% is minor and unlabeled.</li>
-          <li>No code changed means every edit beneath touches only comments, whitespace or layout. Turn off Mute trivial edits to show these as modifications.</li>
+          <li>Reviewed means every changed file beneath is set aside. A file whose edits touch only comments, whitespace or layout, and a file renamed without changes, start reviewed. Turn off Mute reviewed files to show them as they are.</li>
+          <li>Other files holds the changed files that no type binds, such as project files, documents and workflows.</li>
           <li>Hover a block to trace its edges.</li>
         </ul>
       </details>
     </aside>
   </div>
 </div>
+
+<div class="conversation" id="conversation" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
