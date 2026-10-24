@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://archviz.dev/schema/vibecheck.schema.json",
+  "$id": "https://raw.githubusercontent.com/tlgkccampbell/vibecheck/master/schema/vibecheck.schema.json",
   "title": "Architecture map",
   "description": "The checked-in description of a system's nodes, bindings, views and exclusions. See docs/vibecheck-spec.md.",
   "type": "object",

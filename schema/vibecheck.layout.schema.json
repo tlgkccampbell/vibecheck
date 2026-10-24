@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://archviz.dev/schema/vibecheck.layout.schema.json",
+  "$id": "https://raw.githubusercontent.com/tlgkccampbell/vibecheck/master/schema/vibecheck.layout.schema.json",
   "title": "Architecture map layout",
   "description": "Stored node positions per view. Presentation only; never affects conformance.",
   "type": "object",
