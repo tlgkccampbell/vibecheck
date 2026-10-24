@@ -456,6 +456,32 @@ public class ReviewServerTests
         }
     }
 
+    [Fact]
+    public async Task RemembersTheThemeAcrossSessions()
+    {
+        using var repo = new TempRepo();
+        repo.Write("a.txt", "1");
+        repo.Commit("one");
+        using var temp = new TempDirectory();
+        var settings = Path.Combine(temp.Path, "settings.json");
+        using var client = Client();
+        await using (var server = new ReviewServer(Options(repo) with { SettingsPath = settings }))
+        {
+            await client.GetAsync(await server.StartAsync());
+            // The picker paints in the stored theme, which starts as auto: the root says the server holds the settings and names no theme.
+            Assert.Contains("<html data-settings=\"server\" lang=\"en\">", await client.GetStringAsync(server.BaseAddress + "/"), StringComparison.Ordinal);
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(server.BaseAddress + "/api/settings", new { theme = "blue" })).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(server.BaseAddress + "/api/settings", new { theme = "dark" })).StatusCode);
+            Assert.Contains("<html data-settings=\"server\" data-theme=\"dark\" lang=\"en\">", await client.GetStringAsync(server.BaseAddress + "/"), StringComparison.Ordinal);
+        }
+        // A later session on another port reads the choice from the file.
+        await using (var server = new ReviewServer(Options(repo) with { SettingsPath = settings }))
+        {
+            await client.GetAsync(await server.StartAsync());
+            Assert.Contains("data-theme=\"dark\"", await client.GetStringAsync(server.BaseAddress + "/"), StringComparison.Ordinal);
+        }
+    }
+
     private static ReviewServerOptions Options(TempRepo repo) => new()
     {
         Directory = repo.Path,

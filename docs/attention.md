@@ -53,7 +53,7 @@ opinion of it.
    decision's reach across the map.
 5. A file whose edits are a pure rename, a move or a change of `using` directives
    starts out reviewed, with the reason on its header, as trivial files do today.
-6. Following the path, **Next** opens each step where it lives: a block at its level,
+6. Following the path, the forward arrow opens each step where it lives: a block at its level,
    an edge selected, a decision scrolled to. A step is done when its files are
    reviewed, and the bar shows the progress along the path beside the file count.
 
@@ -267,27 +267,43 @@ The same changeset always gives the same path.
   it from other blocks of its level, since decisions in it reach the most.
 - A new concept of section 7, whether or not the reviewer has decided on it.
 
-**Then** holds every other changed block, largest change first within each level, and
-the decisions and files under it that the first tier did not take.
+**Then** holds every other changed leaf, largest change first within each level, and
+under each the decisions and the files with edits of their own that the first tier
+did not take. A leaf whose changed files are all set aside is not a step, since the
+third tier accounts for it. A changed file that no type binds comes last, on its own.
 
-**Set aside** holds the consequences, the trivial files and the files already
-reviewed, as counts with the blocks they are in. The tier exists so that the reviewer
-sees that the volume has been accounted for, not so that they read it.
+**Set aside** holds the consequences, the trivial and generated files and the files
+already reviewed, as counts with the blocks they are in. A file that is both trivial
+and a consequence counts as trivial. The tier exists so that the reviewer sees that
+the volume has been accounted for, not so that they read it.
 
 Steps are deduplicated: a block that a surprise names is not listed again in the
-second tier, and a decision's consequences are not steps. The path has at most forty
-steps in its first two tiers, and a changeset with more lists the rest under its
-blocks as counts.
+second tier, an edge that closed a new cycle is the cycle's step and not an edge step
+of its own, and a decision's consequences are not steps. The path has at most forty
+steps in its first two tiers. A changeset with more drops file steps first, then
+decision steps, whose counts stay on their leaves' steps, and then leaf steps, which
+one closing step names and counts.
 
 ### 6.2 In the viewer
 
-The Path panel lists the tiers with each step's signal in plain words, such as
-"`billing.core` now references `stripe`: 12 references in 3 pairs" or "signature of
-`Session.Require` changed: 14 consequences in 9 files across 4 blocks". A step opens
-where it lives, and **Next** opens the first step whose files are not all reviewed.
-The bar shows "4 of 11 steps read" beside the file count. A step is read when every
-changed file it names is reviewed, so the path and the marks are one state and the
-path never asks for a second kind of mark.
+The Changes panel opens on the path when the changeset has one, and a switch in its
+title shows the changes instead. The path lists the tiers with each step's signal in
+plain words, such as "Billing core now references Stripe: 12 references in 3 pairs"
+or "signature of `Session.Require` changed, public: 14 consequences in 9 files across
+4 blocks". A step opens where it lives: an edge or a cycle at its level or view, with
+the edge selected; a block in its level; a decision at its hunk, with its reach in
+the details panel; a file in its leaf. The step opened last is the current step. It
+is marked in the list, and under it the panel lists its files with their reviewed
+checkboxes and offers **Mark read**, which marks them all, so that what finishes the
+step is in front of the reader. Two arrow buttons move along the path. The forward
+arrow opens the first step after the current one whose files are not all reviewed,
+or the first such step from the top. The back arrow opens the step before the
+current one, read or not, since a reader may move on without finishing a step and
+want it back. The bar shows
+"4 of 11 steps read" beside the file count. A step is read when every changed file it
+names is reviewed, so the path and the marks are one state and the path never asks
+for a second kind of mark. The files an edge step names are the changed files of the
+types on its referencing side.
 
 A step for an edge or a node shows that edge's or node's narrative once it has
 arrived, so the path gets Claude's explanations with no request of its own. When the
@@ -492,8 +508,8 @@ Each phase ends with the tool usable, and with tests that state its new behavior
    mark action. It needs no Claude and helps every review, so it comes first.
 2. **Semantic triviality.** Renames, moves, `using` changes and generated files, with
    their reasons on file headers and in the reviewed store.
-3. **The reading path.** `ReadingPath.Plan`, the `Path` member, the panel, **Next** and
-   the progress in the bar.
+3. **The reading path.** `ReadingPath.Plan`, the `Path` member, the panel, the arrows
+   along it and the progress in the bar.
 4. **The glossary.** The `Glossary` member, the panel, the hover in diffs, and term
    narratives through the narrative pipeline.
 5. **New concepts.** The split of placement into proposal and application, the

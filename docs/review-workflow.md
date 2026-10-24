@@ -84,6 +84,7 @@ The API has these endpoints:
 | `GET /api/reviews/{id}/changeset` | Returns the current changeset document. |
 | `POST /api/reviews/{id}/map` | Switches the review to another map, or saves the generated map into the repository. Phase 3. |
 | `POST /api/reviews/{id}/narratives` | Writes every narrative again, or, given a `key`, one of them. |
+| `POST /api/settings` | Stores the reviewer's theme choice, `auto`, `light` or `dark`, in `settings.json` under the cache root, where every later session reads it. The browser cannot keep it, since each session has a port of its own. |
 
 The event stream opens with a `review` event that names the range, and carries
 `stage` events (a stage reported progress), a `ready` event when the changeset is

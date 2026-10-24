@@ -1642,9 +1642,139 @@
     return li;
   }
 
+  // ---------- The reading path ----------
+  // The order in which to read the changeset, as the changeset plans it: the surprises first, each with its signal,
+  // then the other changed blocks with the decisions and files under them, and last what is set aside. A step is read
+  // when every changed file it names is reviewed. See docs/attention.md section 6.
+  const PATH = CS.path || [];
+  const TIER_TITLE = { first: "Read first", then: "Then", aside: "Set aside" };
+  const stepRead = (s) => s.files.length > 0 && s.files.every((p) => REVIEWED.has(p));
+  const countedSteps = () => PATH.filter((s) => s.tier !== "aside");
+  // Returns the narrative of an edge, cycle or node step once it has arrived, or null.
+  function stepNarrative(s) {
+    if (NARR.state === "off") return null;
+    if (s.kind === "node") return NARR.items.get("node:" + s.target) || null;
+    if (s.kind === "edge" || s.kind === "cycle") return NARR.items.get("edge:" + s.target) || null;
+    return null;
+  }
+  // Returns the step to open next: the first unread step after the current one, or else the first unread step from
+  // the top, or null when every step is read.
+  function nextStep() {
+    const steps = countedSteps();
+    const at = steps.findIndex((s) => s.id === state.step);
+    return steps.slice(at + 1).find((s) => !stepRead(s)) || steps.find((s) => !stepRead(s)) || null;
+  }
+  // Returns the step before the current one in reading order, read or not, so that a step passed over is one press
+  // away, or null at the first step or when none is current.
+  function previousStep() {
+    const steps = countedSteps();
+    const at = steps.findIndex((s) => s.id === state.step);
+    return at > 0 ? steps[at - 1] : null;
+  }
+  // Opens a step where it lives and makes it the current step: an edge or a cycle's closing edge at its level or
+  // view, selected; a block in its level; a decision at its hunk, with its reach in the details panel; a file in its
+  // leaf. A set-aside step opens the leaf of its first file.
+  async function openStep(s) {
+    state.step = s.id;
+    if (state.tab !== "map") showTab("map");
+    if (s.kind === "node") return showInContext(s.target);
+    if (s.kind === "decision") {
+      const d = DECISIONS.get(s.target);
+      if (!d) return;
+      state.decision = d.id;
+      return openHunk(d.file, d.hunk);
+    }
+    if (s.kind === "file") return openFile(s.target);
+    if (s.kind === "aside" || s.kind === "more") return s.files.length ? openFile(s.files[0]) : renderChanges();
+    const loc = s.location || ROOT;
+    rememberView();
+    if (loc.startsWith("view:")) {
+      const v = loc.slice(5), level = VIEWS[v] ? VIEWS[v].level : ROOT;
+      state.trail = [{ level: ROOT }, ...ancestors(level).map((x) => ({ level: x })), { level, view: v }];
+    } else state.trail = [{ level: ROOT }, ...ancestors(loc).map((x) => ({ level: x }))];
+    state.selected = null;
+    const m = await mount();
+    if (!m) return;
+    setViewBox(arrive(m));
+    if (m.level.edges.some((e) => e.key === "edge:" + s.target)) select("edge:" + s.target);
+  }
+  // Returns the current step's files with their reviewed checkboxes, each opening its diff, and the action that marks
+  // them all, so that what finishes the step is in front of the reader.
+  function stepFiles(s) {
+    const box = el("div", { class: "step-files" });
+    const left = s.files.filter((p) => !REVIEWED.has(p));
+    for (const p of s.files) {
+      box.append(el("label", { class: "step-file" + (REVIEWED.has(p) ? " done" : "") },
+        el("input", { type: "checkbox", checked: REVIEWED.has(p), onchange: (ev) => setReviewed([p], ev.target.checked) }),
+        el("button", { class: "link", onclick: () => openFile(p), title: p }, p.split("/").pop())));
+    }
+    // The action keeps its place once the step is read, so that the list below it does not jump.
+    box.append(left.length
+      ? el("button", { class: "btn", onclick: () => setReviewed(left, true), title: "Mark every file of this step reviewed, which makes the step read" },
+        left.length === s.files.length ? "Mark read" : `Mark the other ${plural(left.length, "file", "files")}`)
+      : el("button", { class: "btn", disabled: true, title: "Every file of this step is reviewed" }, "Read"));
+    return box;
+  }
+  // Renders the path into the panel, with its arrows and count in the panel's pinned head.
+  function renderPath(box, head) {
+    const steps = countedSteps(), read = steps.filter(stepRead).length;
+    const next = nextStep(), previous = previousStep();
+    head.append(el("div", { class: "path-head" },
+      el("button", { class: "btn step-arrow", disabled: !previous, onclick: () => previous && openStep(previous), "aria-label": "Previous step",
+        title: previous ? "Previous step, read or not" : "No step before this one" }, "←"),
+      el("button", { class: "btn step-arrow", disabled: !next, onclick: () => next && openStep(next), "aria-label": "Next step",
+        title: next ? "Next step whose files are not all reviewed" : "Every step is read" }, "→"),
+      el("span", {}, read === steps.length ? "Every step is read" : `${read} of ${plural(steps.length, "step", "steps")} read`)));
+    box.append(el("p", { class: "hint" }, "A step opens where it lives, and is read once its files are reviewed."));
+    for (const tier of ["first", "then", "aside"]) {
+      const list = PATH.filter((s) => s.tier === tier);
+      if (!list.length) continue;
+      box.append(el("h3", {}, TIER_TITLE[tier]));
+      const ul = el("ul", { class: "list" });
+      for (const s of list) {
+        const done = tier !== "aside" && stepRead(s);
+        const current = s.id === state.step;
+        const reviewed = s.files.filter((p) => REVIEWED.has(p)).length;
+        const n = stepNarrative(s);
+        const text = el("span", { class: "step-text" }, s.signal);
+        if (n) text.append(el("span", { class: "step-why" }, ...richText(n.text)));
+        const meta = s.files.length ? el("span", { class: "step-meta" }, tier === "aside" ? `${reviewed} of ${s.files.length} reviewed` : done ? "read" : `${reviewed}/${s.files.length} files`) : null;
+        const li = el("li", {}, el("button", { class: "row step" + (done ? " read" : "") + (current ? " current" : ""), onclick: () => openStep(s),
+          title: s.files.length ? `${plural(s.files.length, "file", "files")}, ${reviewed} reviewed` : "" },
+          el("span", { class: "step-kind " + s.kind }, s.kind === "node" ? "block" : s.kind === "aside" ? "aside" : s.kind), text, meta));
+        if (current && s.files.length && tier !== "aside") li.append(stepFiles(s));
+        ul.append(li);
+      }
+      box.append(ul);
+    }
+    revealCurrentStep(box, head);
+  }
+  // Scrolls the panel so that the current step is in view with its files and its mark action, below the pinned head.
+  // A block taller than the room under the head is anchored at its bottom, where the action is, rather than its top.
+  function revealCurrentStep(box, head) {
+    const cur = box.querySelector(".row.step.current");
+    const aside = box.closest("aside");
+    if (!cur || !aside) return;
+    const block = cur.closest("li").getBoundingClientRect(), a = aside.getBoundingClientRect(), style = getComputedStyle(aside);
+    const top = a.top + head.getBoundingClientRect().height;
+    const bottom = a.bottom - parseFloat(style.paddingBottom) - parseFloat(style.borderBottomWidth);
+    if (block.height > bottom - top || block.bottom > bottom) aside.scrollTop += block.bottom - bottom;
+    else if (block.top < top) aside.scrollTop -= top - block.top;
+  }
+
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
+    // The panel's head holds the title and, on the path, the arrows; everything after the title is drawn afresh.
+    const head = $("#changes-head"), title = $("#changes-title");
+    for (const n of [...head.children]) if (n !== title) n.remove();
+    // With a path, the panel switches between the path and the changes, and opens on the path.
+    if (PATH.length) {
+      if (state.panel === undefined) state.panel = "path";
+      const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => { state.panel = name; renderChanges(); } }, label);
+      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, state.panel === "path" ? "Path" : "Changes"), el("span", { class: "seg", role: "tablist" }, tab("path", "Path"), tab("changes", "Changes"))));
+      if (state.panel === "path") { renderPath(box, head); return; }
+    }
     const talk = openThreadsUnder(ROOT).length;
     if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
       el("input", { type: "checkbox", checked: state.opts.talk, onchange: (ev) => { state.opts.talk = ev.target.checked; renderChanges(); } }), ` Only unresolved threads (${talk})`));
@@ -2228,8 +2358,14 @@
   // Wires the theme control. "auto" follows the system's color scheme; "light" and "dark" override it by setting
   // data-theme on the root element, which the style sheet honors over the system setting. The choice is remembered
   // in this browser only.
+  // The theme choice. Served by the vibecheck command, the server keeps it across sessions, since each session has a
+  // port of its own and the browser keeps a page's storage per port; opened from a file, the browser keeps it.
   function installThemeChoice() {
-    const read = () => { try { return localStorage.getItem("vibecheck-theme") || "auto"; } catch (e) { return "auto"; } };
+    const served = !!META.settings;
+    const read = () => {
+      if (served) return META.settings.theme || "auto";
+      try { return localStorage.getItem("vibecheck-theme") || "auto"; } catch (e) { return "auto"; }
+    };
     const apply = (choice) => {
       if (choice === "auto") delete document.documentElement.dataset.theme;
       else document.documentElement.dataset.theme = choice;
@@ -2238,7 +2374,8 @@
     for (const b of $("#theme").querySelectorAll("button")) {
       b.addEventListener("click", () => {
         const choice = b.dataset.themeChoice;
-        try { if (choice === "auto") localStorage.removeItem("vibecheck-theme"); else localStorage.setItem("vibecheck-theme", choice); } catch (e) { /* storage unavailable */ }
+        if (served) fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ theme: choice }) }).catch(() => null);
+        else try { if (choice === "auto") localStorage.removeItem("vibecheck-theme"); else localStorage.setItem("vibecheck-theme", choice); } catch (e) { /* storage unavailable */ }
         apply(choice);
       });
     }
@@ -2340,6 +2477,7 @@
       narrativeFrame = 0;
       renderSummary();
       if (state.current || loc().leaf) renderDetails();
+      if (state.panel === "path") renderChanges();
       if (tipKey) showTip(tipKey);
     });
   }
@@ -3092,7 +3230,9 @@
   // Shows how many of the changeset's changed files are reviewed.
   function renderProgress() {
     const done = CHANGED_FILES.filter((f) => REVIEWED.has(f.path)).length;
-    $("#progress").textContent = CHANGED_FILES.length ? `${done} of ${CHANGED_FILES.length} files reviewed` : "";
+    const steps = countedSteps();
+    $("#progress").textContent = (CHANGED_FILES.length ? `${done} of ${CHANGED_FILES.length} files reviewed` : "")
+      + (steps.length ? ` · ${steps.filter(stepRead).length} of ${plural(steps.length, "step", "steps")} read` : "");
   }
 
   // Lays marks over the page's, where each maps a path to its reason, or to nothing when the file is not reviewed.

@@ -1,7 +1,7 @@
 <title>Vibecheck Viewer</title>
 <script>
   // Applies a stored theme choice before the page draws, so a page set to dark does not flash light first.
-  try { const t = localStorage.getItem("vibecheck-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) { /* storage unavailable */ }
+  try { if (!document.documentElement.dataset.settings) { const t = localStorage.getItem("vibecheck-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } } catch (e) { /* storage unavailable */ }
 </script>
 <meta name="description" content="The vibecheck changeset viewer: a range of commits drawn as a change to an architecture map, with ELK layout, views and leaf drill-down.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -147,21 +147,21 @@
   .seg button.on { background: var(--accent); color: var(--on-accent); }
 
   /* Main grid */
-  .main { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; grid-template-rows: minmax(0, 1fr); gap: 16px; padding-block: 14px; flex: 1; min-height: 0; }
-  @media (max-width: 1100px) { .main { grid-template-columns: 1fr; grid-template-rows: none; flex: none; } .side .legend-panel { max-height: none; } }
+  .main { display: grid; grid-template-columns: 360px minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); gap: 16px; padding-block: 14px; flex: 1; min-height: 0; }
+  @media (max-width: 1200px) { .main { grid-template-columns: 1fr; grid-template-rows: none; flex: none; } .side .legend-panel { max-height: none; } }
   aside { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 12px; min-width: 0; min-height: 0; overflow: auto; }
   /* The right column holds the selection, which scrolls, above the legend, which keeps its height. */
   .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; }
   .side .details-panel { flex: 1; }
   .side .legend-panel { flex: none; max-height: 60%; }
-  @media (max-width: 1100px) { aside { overflow: visible; } }
+  @media (max-width: 1200px) { aside { overflow: visible; } }
   aside h2.panel-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
   /* The stage fills the middle column, so fitting a level to the stage shows all of it on screen. */
   .canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
   .stage-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; position: relative;
     flex: 1; min-height: 360px; }
   #leafview { flex: 1; min-height: 0; overflow: auto; }
-  @media (max-width: 1100px) { .stage-wrap { flex: none; height: 80vh; } #leafview { overflow: visible; } }
+  @media (max-width: 1200px) { .stage-wrap { flex: none; height: 80vh; } #leafview { overflow: visible; } }
   svg#stage { display: block; width: 100%; height: 100%; font-family: var(--mono); }
   svg#stage.zooming .level { pointer-events: none; }
   .status-line { position: absolute; left: 10px; bottom: 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); pointer-events: none; }
@@ -241,6 +241,34 @@
   .decision-row code { font-size: 12px; }
   .decision-row.st-reviewed { opacity: .55; }
   .tally { margin: -4px 0 6px; }
+  /* The Path panel: a switch in the panel's title, a Next action, and one row per step with its kind and signal. */
+  .panel-switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .panel-switch .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 10px; }
+  /* The whole head of the Changes panel, its title with the switch and the path's arrows and count, stays at the top
+     of the panel while a long path scrolls under it, so that nothing above the list ever moves. It bleeds into the
+     panel's padding so that its background covers the full width. */
+  .panel-head { position: sticky; top: -12px; z-index: 1; margin: -12px -12px 10px; padding: 12px 12px 0; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .panel-head h2.panel-title { margin-bottom: 8px; }
+  .path-head { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; font-size: 12.5px; color: var(--muted); }
+  .path-head .step-arrow { padding: 2px 9px; font-size: 14px; line-height: 1.2; }
+  .path-head .step-arrow + span { margin-left: 4px; }
+  .row.step { align-items: flex-start; }
+  .step-kind { flex: none; width: 54px; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .step-kind.edge, .step-kind.cycle { color: var(--added); }
+  .step-kind.cycle { color: var(--warn); }
+  .step-kind.aside, .step-kind.more { color: var(--muted); }
+  .step-text { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.35; }
+  .step-text .step-why { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+  .row.step.read { opacity: .55; }
+  .row.step.read .step-text { text-decoration: line-through; text-decoration-color: var(--line-strong); }
+  .row.step.current { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 3px 0 0 var(--accent); }
+  /* The label keeps one width whatever it says, so that a step becoming read moves nothing around it. */
+  .step-meta { flex: none; min-width: 6.5em; margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; white-space: nowrap; text-align: right; }
+  /* The current step's files, with the checkboxes that finish it. */
+  .step-files { margin: 2px 0 8px 60px; display: flex; flex-direction: column; gap: 3px; }
+  .step-file { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+  .step-file.done .link { color: var(--muted); text-decoration: line-through; }
+  .step-files .btn { align-self: flex-start; margin-top: 4px; font-size: 12px; }
   .node.in-cycle .cycle-mark { fill: var(--warn); }
   .cycle-mark { fill: transparent; }
 
@@ -568,7 +596,7 @@
 
 <div class="main">
   <aside>
-    <h2 class="panel-title">Changes</h2>
+    <div class="panel-head" id="changes-head"><h2 class="panel-title" id="changes-title">Changes</h2></div>
     <div id="changes"></div>
   </aside>
 

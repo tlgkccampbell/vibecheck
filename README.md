@@ -15,8 +15,8 @@ all five of its phases are built: reviewed files and the full diff, opening pull
 reading the discussion, writing, and checks in detail.
 Directing the reviewer's attention, with decisions and their consequences, semantic
 triviality, a reading path, new concepts and a glossary, is designed in
-[docs/attention.md](docs/attention.md); its first two phases, decisions and their
-consequences and semantic triviality, are built.
+[docs/attention.md](docs/attention.md); its first three phases, decisions and their
+consequences, semantic triviality and the reading path, are built.
 
 ## Layout
 
@@ -261,6 +261,21 @@ block in the details panel, outlines its block and the blocks it reaches on the 
 draws an arrow from the one to each of the others with the number of hunks it points at.
 **Mark consequences reviewed** marks the files whose edits that decision alone explains,
 and says how many it left.
+
+The Changes panel opens on the **reading path**: the surprises first, each with the
+signal that put it there, such as a new dependency between blocks, a new cycle, a
+decision with the widest reach or the changed block most referenced from its level;
+then the other changed blocks with their decisions and files; and last what is set
+aside as counts. A step opens where it lives and becomes the current step, which lists
+its files with their reviewed checkboxes and offers **Mark read**. A step is read once
+every file it names is reviewed. The forward arrow opens the next unread step, and
+the back arrow returns to the step before. The bar counts the steps read beside the
+files.
+
+The theme switch in the top bar follows the system, or always uses light or dark. The
+`vibecheck` command keeps the choice in `settings.json` under its cache folder, so a
+later session on another port opens in the same theme; a page opened from a file
+keeps it in the browser.
 
 To write a changeset document without the viewer, run `changeset` from the repository:
 
