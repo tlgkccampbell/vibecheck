@@ -1001,16 +1001,18 @@
       const w = Math.min(Math.max(v.w * k, 200), 20000), h = w / state.aspect;
       setViewBox({ x: p.x - (p.x - v.x) * (w / v.w), y: p.y - (p.y - v.y) * (h / v.h), w, h });
     }, { passive: false });
+    // The pointer is captured only once a drag has begun. Capturing on pointerdown would
+    // send the click and double-click that follow to the stage instead of the block under them.
     s.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0) return;
-      drag = { x: ev.clientX, y: ev.clientY, view: { ...state.view }, moved: false };
-      s.setPointerCapture(ev.pointerId);
+      drag = { x: ev.clientX, y: ev.clientY, view: { ...state.view }, moved: false, pointerId: ev.pointerId };
     });
     s.addEventListener("pointermove", (ev) => {
       if (!drag) return;
       const b = s.getBoundingClientRect();
       const dx = (ev.clientX - drag.x) / b.width * drag.view.w, dy = (ev.clientY - drag.y) / b.height * drag.view.h;
       if (!drag.moved && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 4) return;
+      if (!drag.moved) { try { s.setPointerCapture(drag.pointerId); } catch (e) { /* ignore */ } }
       drag.moved = true;
       setViewBox({ x: drag.view.x - dx, y: drag.view.y - dy, w: drag.view.w, h: drag.view.h });
     });
