@@ -5,6 +5,11 @@
     <AssemblyName>archmap</AssemblyName>
     <RootNamespace>Archmap.Cli</RootNamespace>
     <RollForward>LatestMajor</RollForward>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>archmap</ToolCommandName>
+    <PackageId>archmap</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Draws a pull request as a change to a solution's architecture map.</Description>
   </PropertyGroup>
 
   <ItemGroup>

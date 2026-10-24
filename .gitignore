@@ -5,3 +5,4 @@ Generated/
 *.user
 archmap.facts.json
 TestResults/
+nupkg/
