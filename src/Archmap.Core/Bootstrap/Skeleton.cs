@@ -6,9 +6,9 @@ namespace Archmap.Bootstrap;
 /// <summary>
 /// Builds the deterministic skeleton map of <c>docs/archmap-spec.md</c> section 5.1:
 /// one top-level node per project and one node per namespace segment beyond the
-/// project's root namespace, every level observed, no edges declared. Types in
-/// <c>System</c> namespaces and every project that references a test framework are
-/// excluded before any node is derived.
+/// project's root namespace, which leaves the unsorted leaf empty by construction.
+/// Types in <c>System</c> namespaces and every project that references a test
+/// framework are excluded before any node is derived.
 /// </summary>
 public static class Skeleton
 {
@@ -135,9 +135,8 @@ public static class Skeleton
     internal static readonly string[] FrameworkPatterns = ["System.*", "Microsoft.Win32.*", "Microsoft.VisualBasic*", "netstandard", "mscorlib", "WindowsBase"];
 
     /// <summary>
-    /// Binds every referenced assembly so that the root externals policy can be set to
-    /// declared at once: framework assemblies under one external, and one external per
-    /// other assembly, named after it.
+    /// Binds every referenced assembly so that no port is unbound: framework assemblies
+    /// under one external, and one external per other assembly, named after it.
     /// </summary>
     private static void AddExternals(ArchMap map, AnalysisResult analysis)
     {

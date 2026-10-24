@@ -39,15 +39,4 @@ public class IdentifiersTests
     [InlineData("--Weird--", "weird")]
     [InlineData("###", "x")]
     public void NormalizesSegments(string raw, string expected) => Assert.Equal(expected, Identifiers.NormalizeSegment(raw));
-
-    [Fact]
-    public void MatchesForbidPatterns()
-    {
-        Assert.True(Identifiers.PatternMatches("*", "anything"));
-        Assert.True(Identifiers.PatternMatches("shared", "shared"));
-        Assert.False(Identifiers.PatternMatches("shared", "shared.kernel"));
-        Assert.True(Identifiers.PatternMatches("shared.*", "shared.kernel"));
-        Assert.True(Identifiers.PatternMatches("shared.*", "shared"));
-        Assert.False(Identifiers.PatternMatches("shared.*", "sharedx"));
-    }
 }

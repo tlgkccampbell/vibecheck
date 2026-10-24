@@ -30,16 +30,15 @@ public class ExclusionTests
     public void WithoutAnExclusionTheGeneratedTypeIsUnmapped()
     {
         var facts = Checker.Run(TestData.Map(), WithRegex());
-        var v = Assert.Single(facts.Violations);
-        Assert.Equal("partition", v.Rule);
-        Assert.Contains(Regex, v.Message);
+        Assert.Equal(ArchMap.Unsorted, facts.Types.Single(t => t.Name == Regex).Leaf);
+        Assert.Contains(facts.Warnings, w => w.Contains("unsorted") && w.Contains(Regex));
     }
 
     [Fact]
     public void AnExcludedTypeIsNotPartitionedAndCreatesNoEdges()
     {
         var facts = Checker.Run(Excluding("System.**"), WithRegex());
-        Assert.Empty(facts.Violations);
+        Assert.Empty(facts.Warnings);
         Assert.Equal(new ExcludedCounts(1, 1), facts.Excluded);
         Assert.DoesNotContain(facts.Types, t => t.Name == Regex);
         Assert.DoesNotContain(facts.Files, f => f.Path == RegexFile);
@@ -65,10 +64,8 @@ public class ExclusionTests
         var facts = Checker.Run(Excluding("Example.B::**"), TestData.Analysis());
         Assert.Equal(new ExcludedCounts(1, 1), facts.Excluded);
         Assert.DoesNotContain(facts.Types, t => t.Name == TestData.Service);
-        // The declared edge b → shared is now dead, which is the map's problem to fix, not the exclusion's.
-        var v = Assert.Single(facts.Violations);
-        Assert.Equal("realization", v.Rule);
-        Assert.Contains("b → shared", v.Message);
+        Assert.DoesNotContain(facts.LeafEdges, e => e.From == "b");
+        Assert.Equal(0, facts.Nodes["b"].Types);
     }
 
     [Fact]
@@ -87,6 +84,7 @@ public class ExclusionTests
         var v = Assert.Single(facts.Violations);
         Assert.Equal("well-formedness", v.Rule);
         Assert.StartsWith("exclude:", v.Message);
+        Assert.Empty(facts.Types);
     }
 
     [Fact]
@@ -112,7 +110,7 @@ public class ExclusionTests
         Assert.Equal(["System.**", "Example.Tests::**"], map.Exclude);
         Assert.DoesNotContain("tests", map.Nodes.Keys);
         Assert.DoesNotContain("xunit-v3-assert", map.Externals.Keys);
-        Assert.Empty(Checker.Run(map, analysis).Violations);
+        Assert.Empty(Checker.Run(map, analysis).Warnings);
     }
 
     [Fact]

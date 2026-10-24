@@ -36,9 +36,7 @@ public class SkeletonTests
         Assert.False(map.Nodes["billing.core"].IsLeaf);
         Assert.Equal("Example.Billing", map.Nodes["billing"].Name);
         Assert.Equal("Payments", map.Nodes["billing.core.payments"].Name);
-        Assert.Null(map.Nodes["billing"].Edges);
-        Assert.Equal(ArchMap.Observed, map.Policies.Root.Edges);
-        Assert.Empty(map.Edges);
+        Assert.Empty(map.Views);
     }
 
     [Fact]
@@ -130,13 +128,14 @@ public class SkeletonTests
         Assert.Equal(expected, RoslynAnalyzer.GeneratorNameOf(path, hint));
 
     [Fact]
-    public void SkeletonPassesTheChecker()
+    public void SkeletonLeavesNothingUnsorted()
     {
         var analysis = TestData.Analysis();
         var map = Skeleton.Build(analysis, "Example.sln");
         var facts = Checker.Run(map, analysis);
         Assert.Empty(facts.Violations);
-        Assert.All(facts.Types, t => Assert.NotNull(t.Leaf));
+        Assert.Empty(facts.Warnings);
+        Assert.DoesNotContain(facts.Types, t => t.Leaf == ArchMap.Unsorted);
     }
 
     [Fact]

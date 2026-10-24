@@ -3,135 +3,71 @@ using Archmap.Model;
 
 namespace Archmap.Diffing;
 
-/// <summary>Combines a base and a head facts document into a changeset document, including the minimality findings of section 4.2.</summary>
+/// <summary>Combines a base and a head facts document into a changeset document.</summary>
 public static class ChangesetBuilder
 {
     public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null)
     {
-        var baseGroups = Groups(baseFacts);
-        var headGroups = Groups(headFacts);
         var files = DiffFiles(baseFacts, headFacts);
         return new Changeset
         {
             Base = baseFacts.Commit,
             Head = headFacts.Commit,
-            Structural = DiffStructure(baseFacts, headFacts, baseGroups, headGroups),
+            Structural = DiffStructure(baseFacts, headFacts),
             Content = Rollup(baseFacts.Map, headFacts.Map, files),
             Files = files,
-            Edges = DiffEdges(headFacts.Map, baseGroups, headGroups),
+            Edges = DiffEdges(baseFacts, headFacts),
             Hunks = hunks ?? [],
         };
     }
 
-    /// <summary>The references behind one lifted edge: how many there are, and the first few as examples.</summary>
-    private sealed class Group
-    {
-        public int Count;
-        public List<DependencyFact> Examples { get; } = [];
-    }
-
-    /// <summary>Groups a facts document's lifted dependencies and bound external references by (level, from, to). External facts are aggregated, so their counts are summed rather than tallied.</summary>
-    private static Dictionary<(string Level, string From, string To), Group> Groups(Facts facts)
-    {
-        var groups = new Dictionary<(string, string, string), Group>();
-        void Add((string, string, string) key, DependencyFact d, int count)
-        {
-            if (!groups.TryGetValue(key, out var g)) groups[key] = g = new Group();
-            g.Count += count;
-            if (g.Examples.Count < 5) g.Examples.Add(d);
-        }
-        foreach (var d in facts.Dependencies.Where(d => d.Edge is not null)) Add((d.Level, d.Edge![0], d.Edge[1]), d, 1);
-        foreach (var e in facts.ExternalRefs.Where(e => e.External is not null))
-            Add((Identifiers.Root, e.TopLevel, e.External!), new DependencyFact(e.From, e.Assembly, "references", e.Symbol, e.File, e.Line, Identifiers.Root, [e.TopLevel, e.External!]), e.Count);
-        return groups;
-    }
-
-    private static List<string> Evidence(Group? g) =>
-        (g?.Examples ?? []).Select(d => $"{d.File}:{d.Line} {d.Kind} {d.Symbol}").ToList();
-
-    private static StructuralDiff DiffStructure(Facts baseFacts, Facts headFacts,
-        Dictionary<(string Level, string From, string To), Group> baseGroups,
-        Dictionary<(string Level, string From, string To), Group> headGroups)
+    private static StructuralDiff DiffStructure(Facts baseFacts, Facts headFacts)
     {
         var bm = baseFacts.Map;
         var hm = headFacts.Map;
-        var nodes = new List<NodeStructuralChange>();
-        var edges = new List<EdgeStructuralChange>();
-        var policies = new List<PolicyChange>();
+        var nodes = new List<NodeChange>();
+        var views = new List<ViewChange>();
 
         foreach (var id in hm.Nodes.Keys.Union(bm.Nodes.Keys).OrderBy(k => k, StringComparer.Ordinal))
         {
             var inBase = bm.Nodes.TryGetValue(id, out var b);
             var inHead = hm.Nodes.TryGetValue(id, out var h);
-            if (inHead && !inBase)
-            {
-                var bound = headFacts.Types.Count(t => t.Leaf == id);
-                var isLeaf = h!.IsLeaf;
-                nodes.Add(new NodeStructuralChange(id, "added", "node", null,
-                    isLeaf ? [$"binds {bound} type(s) at head"] : ["container"], isLeaf && bound == 0));
-            }
-            else if (inBase && !inHead)
-            {
-                var stillBound = b!.IsLeaf ? MatchCount(b.Bind!, headFacts.Types) : 0;
-                nodes.Add(new NodeStructuralChange(id, "removed", "node", null,
-                    b.IsLeaf ? [$"its patterns match {stillBound} type(s) at head"] : ["container"], stillBound > 0));
-            }
-            else if (inBase && inHead)
+            if (inHead && !inBase) nodes.Add(new NodeChange(id, "added", "node", h!.IsLeaf ? $"binds {headFacts.Types.Count(t => t.Leaf == id)} type(s)" : "container"));
+            else if (inBase && !inHead) nodes.Add(new NodeChange(id, "removed", "node", b!.IsLeaf ? $"bound {baseFacts.Types.Count(t => t.Leaf == id)} type(s)" : "container"));
+            else
             {
                 var details = new List<string>();
                 if (b!.Name != h!.Name) details.Add($"name {b.Name} → {h.Name}");
                 if (b.Purpose != h.Purpose) details.Add("purpose changed");
                 if (b.Note != h.Note) details.Add("note changed");
-                if (!SeqEq(b.Bind, h.Bind)) details.Add("bindings changed");
-                if ((b.Edges ?? ArchMap.Observed) != (h.Edges ?? ArchMap.Observed))
-                    policies.Add(new PolicyChange(id, b.Edges ?? ArchMap.Observed, h.Edges ?? ArchMap.Observed));
-                if (details.Count > 0) nodes.Add(new NodeStructuralChange(id, "modified", "node", string.Join("; ", details), [], false));
+                if (!SeqEq(b.Bind, h.Bind)) details.Add(b.IsLeaf != h.IsLeaf ? (h.IsLeaf ? "became a leaf" : "became a container") : "bindings changed");
+                if (details.Count > 0) nodes.Add(new NodeChange(id, "modified", "node", string.Join("; ", details)));
             }
         }
         foreach (var id in hm.Externals.Keys.Union(bm.Externals.Keys).OrderBy(k => k, StringComparer.Ordinal))
         {
-            var inBase = bm.Externals.ContainsKey(id);
-            var inHead = hm.Externals.ContainsKey(id);
-            if (inHead && !inBase)
-            {
-                var refs = headFacts.ExternalRefs.Where(e => e.External == id).Sum(e => e.Count);
-                nodes.Add(new NodeStructuralChange(id, "added", "external", null, [$"{refs} reference(s) at head"], refs == 0));
-            }
-            else if (inBase && !inHead)
-            {
-                nodes.Add(new NodeStructuralChange(id, "removed", "external", null, [], false));
-            }
+            var inBase = bm.Externals.TryGetValue(id, out var b);
+            var inHead = hm.Externals.TryGetValue(id, out var h);
+            if (inHead && !inBase) nodes.Add(new NodeChange(id, "added", "external", null));
+            else if (inBase && !inHead) nodes.Add(new NodeChange(id, "removed", "external", null));
+            else if (b!.Name != h!.Name || b.Purpose != h.Purpose || !SeqEq(b.Bind, h.Bind)) nodes.Add(new NodeChange(id, "modified", "external", null));
         }
-        if (bm.Policies.Root.Edges != hm.Policies.Root.Edges) policies.Add(new PolicyChange(Identifiers.Root, bm.Policies.Root.Edges, hm.Policies.Root.Edges));
-
-        var baseEdges = bm.Edges.ToDictionary(e => (e.From, e.To));
-        var headEdges = hm.Edges.ToDictionary(e => (e.From, e.To));
-        foreach (var key in headEdges.Keys.Union(baseEdges.Keys).OrderBy(k => k.From, StringComparer.Ordinal).ThenBy(k => k.To, StringComparer.Ordinal))
+        foreach (var id in hm.Views.Keys.Union(bm.Views.Keys).OrderBy(k => k, StringComparer.Ordinal))
         {
-            var level = Identifiers.ParentOrRoot(key.From);
-            baseGroups.TryGetValue((level, key.From, key.To), out var bd);
-            headGroups.TryGetValue((level, key.From, key.To), out var hd);
-            var baseRefs = bd?.Count ?? 0;
-            var headRefs = hd?.Count ?? 0;
-            var inBase = baseEdges.TryGetValue(key, out var be);
-            var inHead = headEdges.TryGetValue(key, out var he);
-            if (inHead && !inBase)
-            {
-                edges.Add(new EdgeStructuralChange(level, key.From, key.To, "added", baseRefs, headRefs, null, Evidence(hd),
-                    Gratuitous: !he!.Asserted && (headRefs == 0 || baseRefs > 0)));
-            }
-            else if (inBase && !inHead)
-            {
-                edges.Add(new EdgeStructuralChange(level, key.From, key.To, "removed", baseRefs, headRefs, null, Evidence(bd),
-                    Gratuitous: !be!.Asserted && (baseRefs == 0 || headRefs > 0)));
-            }
-            else if (inBase && inHead)
+            var inBase = bm.Views.TryGetValue(id, out var b);
+            var inHead = hm.Views.TryGetValue(id, out var h);
+            if (inHead && !inBase) views.Add(new ViewChange(id, "added", $"at {h!.Level}"));
+            else if (inBase && !inHead) views.Add(new ViewChange(id, "removed", null));
+            else
             {
                 var details = new List<string>();
-                if (be!.Label != he!.Label) details.Add($"label {be.Label ?? "none"} → {he.Label ?? "none"}");
-                if (be.Payload != he.Payload) details.Add($"payload {be.Payload ?? "none"} → {he.Payload ?? "none"}");
-                if (be.Asserted != he.Asserted) details.Add($"asserted {be.Asserted} → {he.Asserted}");
-                if (details.Count > 0) edges.Add(new EdgeStructuralChange(level, key.From, key.To, "modified", baseRefs, headRefs, string.Join("; ", details), [], false));
+                if (b!.Name != h!.Name) details.Add("name changed");
+                if (b.Level != h.Level) details.Add($"level {b.Level} → {h.Level}");
+                var changedGroups = h.Groups.Keys.Union(b.Groups.Keys)
+                    .Where(g => !b.Groups.TryGetValue(g, out var bg) || !h.Groups.TryGetValue(g, out var hg) || bg.Name != hg.Name || bg.Purpose != hg.Purpose || !SeqEq(bg.Leaves, hg.Leaves))
+                    .OrderBy(g => g, StringComparer.Ordinal).ToList();
+                if (changedGroups.Count > 0) details.Add("groups changed: " + string.Join(", ", changedGroups));
+                if (details.Count > 0) views.Add(new ViewChange(id, "modified", string.Join("; ", details)));
             }
         }
 
@@ -141,17 +77,11 @@ public static class ChangesetBuilder
             .Select(t => new TypeMove(t.Name, baseTypes[t.Name].Leaf, t.Leaf, t.By))
             .OrderBy(m => m.Name, StringComparer.Ordinal)
             .ToList();
-        return new StructuralDiff { Nodes = nodes, Edges = edges, Policies = policies, Types = types };
+        return new StructuralDiff { Nodes = nodes, Views = views, Types = types };
     }
 
     private static bool SeqEq(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.SequenceEqual(b, StringComparer.Ordinal));
-
-    private static int MatchCount(IReadOnlyList<string> patterns, IEnumerable<TypeFact> types)
-    {
-        var parsed = patterns.Select(p => TypePattern.TryParse(p, out var tp, out _) ? tp : null).Where(p => p is not null).ToList();
-        return types.Count(t => parsed.Any(p => p!.Matches(Archmap.Analysis.TypeNames.Plain(t.Name), t.Assembly)));
-    }
 
     private static List<FileChange> DiffFiles(Facts baseFacts, Facts headFacts)
     {
@@ -173,16 +103,17 @@ public static class ChangesetBuilder
     {
         static bool Under(IReadOnlyList<string> leaves, string id) => leaves.Any(l => Identifiers.IsUnder(l, id));
         var content = new SortedDictionary<string, NodeContent>(StringComparer.Ordinal);
-        var ids = new[] { Identifiers.Root }.Concat(headMap.Nodes.Keys.Union(baseMap.Nodes.Keys)).Distinct().OrderBy(k => k, StringComparer.Ordinal);
-        foreach (var id in ids)
+        var ids = new[] { Identifiers.Root }.Concat(headMap.Nodes.Keys.Union(baseMap.Nodes.Keys)).ToList();
+        if (files.Any(f => f.LeavesBase.Contains(ArchMap.Unsorted) || f.LeavesHead.Contains(ArchMap.Unsorted))) ids.Add(ArchMap.Unsorted);
+        foreach (var id in ids.Distinct().OrderBy(k => k, StringComparer.Ordinal))
         {
             var total = files.Count(f => Under(f.LeavesHead, id));
             var added = files.Count(f => f.Status == "added" && Under(f.LeavesHead, id));
             var removed = files.Count(f => f.Status == "removed" && Under(f.LeavesBase, id));
             var modified = files.Count(f => f.Status == "modified" && Under(f.LeavesHead, id));
             string status;
-            if (id != Identifiers.Root && !baseMap.Nodes.ContainsKey(id)) status = "added";
-            else if (id != Identifiers.Root && !headMap.Nodes.ContainsKey(id)) status = "removed";
+            if (id != Identifiers.Root && id != ArchMap.Unsorted && !baseMap.Nodes.ContainsKey(id)) status = "added";
+            else if (id != Identifiers.Root && id != ArchMap.Unsorted && !headMap.Nodes.ContainsKey(id)) status = "removed";
             else if (added + removed + modified == 0) status = "unchanged";
             else status = headMap.IsContainer(id) ? "children" : "modified";
             content[id] = new NodeContent(total, added, removed, modified, status);
@@ -190,19 +121,17 @@ public static class ChangesetBuilder
         return content;
     }
 
-    private static List<EdgeChange> DiffEdges(ArchMap headMap,
-        Dictionary<(string Level, string From, string To), Group> baseGroups,
-        Dictionary<(string Level, string From, string To), Group> headGroups)
+    private static List<EdgeChange> DiffEdges(Facts baseFacts, Facts headFacts)
     {
+        var baseEdges = baseFacts.LeafEdges.ToDictionary(e => (e.From, e.To), e => e.Count);
+        var headEdges = headFacts.LeafEdges.ToDictionary(e => (e.From, e.To), e => e.Count);
         var result = new List<EdgeChange>();
-        foreach (var key in baseGroups.Keys.Union(headGroups.Keys).OrderBy(k => k.Level, StringComparer.Ordinal).ThenBy(k => k.From, StringComparer.Ordinal).ThenBy(k => k.To, StringComparer.Ordinal))
+        foreach (var key in baseEdges.Keys.Union(headEdges.Keys).OrderBy(k => k.From, StringComparer.Ordinal).ThenBy(k => k.To, StringComparer.Ordinal))
         {
-            var b = baseGroups.TryGetValue(key, out var bd) ? bd.Count : 0;
-            var h = headGroups.TryGetValue(key, out var hd) ? hd.Count : 0;
+            var b = baseEdges.GetValueOrDefault(key);
+            var h = headEdges.GetValueOrDefault(key);
             var status = b == 0 ? "added" : h == 0 ? "removed" : b != h ? "modified" : "unchanged";
-            var observed = headMap.IsContainer(key.Level) && headMap.PolicyOf(key.Level) == ArchMap.Observed;
-            var undeclared = status == "added" && observed && headMap.FindEdge(key.From, key.To) is null;
-            result.Add(new EdgeChange(key.Level, key.From, key.To, b, h, status, undeclared));
+            result.Add(new EdgeChange(key.From, key.To, b, h, status));
         }
         return result;
     }

@@ -14,7 +14,9 @@ public static class Program
     private const string Usage = """
         usage:
           archmap init  --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
-          archmap check [--map <archmap.json>] [--propose <out.json>] [--facts <out.json>]
+          archmap units [--map <archmap.json>] [--out <units.txt>]
+          archmap check [--map <archmap.json>] [--facts <out.json>] [--strict]
+          archmap why   <from> <to> [--map <archmap.json>] [--facts <facts.json>] [--limit <n>]
           archmap fmt   [--map <archmap.json>] [--check]
           archmap facts [--map <archmap.json>] [--out <out.json>] [--commit <sha>]
           archmap diff  <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
@@ -31,7 +33,9 @@ public static class Program
             return args[0] switch
             {
                 "init" => await InitAsync(options),
+                "units" => await UnitsAsync(options),
                 "check" => await CheckAsync(options),
+                "why" => await WhyAsync(positional, options),
                 "fmt" => Fmt(options),
                 "facts" => await FactsAsync(options),
                 "diff" => Diff(positional, options),
@@ -114,13 +118,26 @@ public static class Program
         var analysis = await AnalyzeAsync(root, solutionPath);
         var map = Skeleton.Build(analysis, Path.GetRelativePath(root, solutionPath));
         File.WriteAllText(mapPath, MapWriter.Write(map));
-        Console.WriteLine($"wrote {mapPath}: {map.Nodes.Count} nodes, every level observed, excluding {string.Join(", ", map.Exclude)}");
+        Console.WriteLine($"wrote {mapPath}: {map.Nodes.Count} nodes, excluding {string.Join(", ", map.Exclude)}");
 
         var facts = Checker.Run(map, analysis, new CheckOptions { Commit = DetectCommit(root) });
         var factsPath = options.GetValueOrDefault("facts", Path.Combine(root, "archmap.facts.json"));
         File.WriteAllText(factsPath, FactsJson.Serialize(facts));
         Console.WriteLine($"wrote {factsPath}");
-        return Report(facts);
+        return Report(facts, strict: false);
+    }
+
+    private static async Task<int> UnitsAsync(Dictionary<string, string> options)
+    {
+        var (map, _, root) = LoadMap(options);
+        var analysis = await AnalyzeAsync(root, map.Solution);
+        var errors = new List<string>();
+        var (included, _) = Exclusion.Parse(map.Exclude, errors).Apply(analysis);
+        if (errors.Count > 0) throw new MapFormatException(errors);
+        var listing = Units.Listing(Units.Build(included), included.Types.Count);
+        if (options.TryGetValue("out", out var outPath)) { File.WriteAllText(outPath, listing); Console.Error.WriteLine($"wrote {outPath}"); }
+        else Console.Out.Write(listing);
+        return 0;
     }
 
     private static async Task<int> CheckAsync(Dictionary<string, string> options)
@@ -129,40 +146,62 @@ public static class Program
         var analysis = await AnalyzeAsync(root, map.Solution);
         var facts = Checker.Run(map, analysis, new CheckOptions { Commit = DetectCommit(root), MapText = text, LayoutText = ReadLayout(root) });
         if (options.TryGetValue("facts", out var factsPath)) File.WriteAllText(factsPath, FactsJson.Serialize(facts));
-        if (options.TryGetValue("propose", out var proposePath))
-        {
-            var proposals = facts.Violations.Where(v => v.Proposal is not null).Select(v => v.Proposal!).Distinct().ToList();
-            File.WriteAllText(proposePath, MapWriter.Write(Proposals.Apply(map, proposals)));
-            Console.WriteLine($"wrote {proposePath} with {proposals.Count} proposed edit(s)");
-        }
-        return Report(facts);
+        return Report(facts, options.ContainsKey("strict"));
     }
 
-    private static int Report(Facts facts)
+    /// <summary>Prints the warnings, the cycles per level and view, and a summary line. Returns the exit code.</summary>
+    private static int Report(Facts facts, bool strict)
     {
         foreach (var w in facts.Warnings) Console.Error.WriteLine("warning: " + w);
-        if (facts.Passed)
+        if (!facts.Passed)
         {
-            var excluded = facts.Excluded.Types > 0 ? $", {facts.Excluded.Types} types excluded" : "";
-            Console.WriteLine($"ok: {facts.Types.Count} types in {facts.Files.Count} files, {facts.Dependencies.Count} dependencies, {facts.Map.Edges.Count} declared edges{excluded}");
-            return 0;
+            foreach (var v in facts.Violations) Console.WriteLine($"[{v.Rule}] {v.Message}");
+            Console.WriteLine($"{facts.Violations.Count} failure(s)");
+            return 1;
         }
-        foreach (var v in facts.Violations)
+        foreach (var (level, m) in facts.Levels)
         {
-            Console.WriteLine($"[{v.Rule}] {v.Message}");
-            if (v.Proposal is { } p) Console.WriteLine($"    proposal: {DescribeProposal(p)}");
+            foreach (var cycle in m.Cycles) Console.WriteLine($"cycle at {level}: {string.Join(" → ", cycle)} → {cycle[0]}");
         }
-        Console.WriteLine($"{facts.Violations.Count} violation(s)");
-        return 1;
+        foreach (var (view, m) in facts.Views)
+        {
+            foreach (var cycle in m.Cycles) Console.WriteLine($"cycle in view {view}: {string.Join(" → ", cycle)} → {cycle[0]}");
+        }
+        var unsorted = facts.Types.Count(t => t.Leaf == ArchMap.Unsorted);
+        var leaves = facts.Map.Nodes.Count(kv => kv.Value.IsLeaf);
+        var excluded = facts.Excluded.Types > 0 ? $", {facts.Excluded.Types} excluded" : "";
+        var unsortedText = unsorted > 0 ? $", {unsorted} unsorted" : "";
+        Console.WriteLine($"ok: {facts.Types.Count} types in {leaves} leaves{unsortedText}{excluded}; {facts.Dependencies.Count} dependencies, {facts.LeafEdges.Count} leaf edges, {facts.Warnings.Count} warning(s)");
+        if (strict && facts.Warnings.Count > 0) { Console.WriteLine("strict: warnings are failures"); return 1; }
+        return 0;
     }
 
-    private static string DescribeProposal(ProposalFact p) => p.Op switch
+    private static async Task<int> WhyAsync(List<string> positional, Dictionary<string, string> options)
     {
-        "add-edge" => $"declare edge {p.From} → {p.To}",
-        "remove-edge" => $"remove edge {p.From} → {p.To}",
-        "add-leaf" => $"add leaf {p.Node} bound to {string.Join(", ", p.Bind ?? [])}",
-        _ => p.Op,
-    };
+        if (positional.Count != 2) throw new ArgumentException("why requires two identifiers");
+        Facts facts;
+        if (options.TryGetValue("facts", out var factsPath))
+        {
+            facts = FactsJson.Deserialize<Facts>(File.ReadAllText(factsPath));
+        }
+        else
+        {
+            var (map, text, root) = LoadMap(options);
+            var analysis = await AnalyzeAsync(root, map.Solution);
+            facts = Checker.Run(map, analysis, new CheckOptions { MapText = text });
+        }
+        var (from, to) = (positional[0], positional[1]);
+        foreach (var id in new[] { from, to })
+        {
+            if (!facts.Map.Exists(id) && id != ArchMap.Unsorted) throw new ArgumentException($"\"{id}\" is not a node or external of the map");
+        }
+        var limit = int.Parse(options.GetValueOrDefault("limit", "20"));
+        var pairs = Explain.Pairs(facts, from, to);
+        var total = pairs.Sum(p => p.Count);
+        Console.WriteLine($"{from} → {to}: {total} reference(s) across {pairs.Count} type pair(s)");
+        foreach (var (a, b, n) in pairs.Take(limit)) Console.WriteLine($"{n,6}  {a} → {b}");
+        return 0;
+    }
 
     private static int Fmt(Dictionary<string, string> options)
     {
@@ -220,8 +259,6 @@ public static class Program
         var json = FactsJson.Serialize(changeset);
         if (options.TryGetValue("out", out var outPath)) { File.WriteAllText(outPath, json); Console.Error.WriteLine($"wrote {outPath}"); }
         else Console.Out.Write(json);
-        var gratuitous = changeset.Structural.Nodes.Count(n => n.Gratuitous) + changeset.Structural.Edges.Count(e => e.Gratuitous);
-        if (gratuitous > 0) Console.Error.WriteLine($"{gratuitous} gratuitous map edit(s)");
         return 0;
     }
 

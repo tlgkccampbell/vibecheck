@@ -91,16 +91,4 @@ public static partial class Identifiers
         }
         return sb.Length == 0 ? "x" : sb.ToString();
     }
-
-    /// <summary>Reports whether a forbid pattern matches an identifier. A pattern is an identifier, <c>*</c>, or an identifier followed by <c>.*</c>.</summary>
-    public static bool PatternMatches(string pattern, string id)
-    {
-        if (pattern == "*") return true;
-        if (pattern.EndsWith(".*", StringComparison.Ordinal))
-        {
-            var prefix = pattern[..^2];
-            return id == prefix || id.StartsWith(prefix + ".", StringComparison.Ordinal);
-        }
-        return pattern == id;
-    }
 }

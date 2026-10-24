@@ -1,9 +1,11 @@
 # archviz
 
 Tooling for reviewing large, generated pull requests at the architecture level. A
-checked-in architecture map binds types to logical components by namespace pattern
-or by an `[Archmap]` attribute, a checker holds the map and the code to each other,
-and a viewer renders changesets as a schematic that reviewers drill into.
+checked-in architecture map binds types to logical components by namespace pattern,
+by exact name, or by an `[Archmap]` attribute. A checker reads every dependency from
+the code and reports it per pair of components, and a viewer renders changesets as a
+schematic that reviewers drill into. The map is proposed by a language model from a
+listing of the code's types and verified against the dependency graph.
 
 The design is in [docs/archmap-spec.md](docs/archmap-spec.md). The interaction mock is
 in [mock/](mock/).
@@ -12,10 +14,10 @@ in [mock/](mock/).
 
 | Path | What it is |
 |---|---|
-| `src/Archmap.Core` | The library: map format, Roslyn analysis, conformance rules, facts, changeset diff, skeleton bootstrap. |
+| `src/Archmap.Core` | The library: map format, Roslyn analysis, checker and metrics, facts, changeset diff, skeleton and unit bootstrap. |
 | `src/Archmap.Cli` | The `archmap` command-line tool. |
 | `tests/Archmap.Tests` | Unit tests on synthetic analyses, plus an integration suite against the sample. |
-| `samples/Orchard` | A small four-project solution with a curated `archmap.json` that passes every rule. |
+| `samples/Orchard` | A small four-project solution with a curated `archmap.json` and one view. |
 | `schema/` | JSON Schemas for `archmap.json` and `archmap.layout.json`. |
 | `mock/` | The throwaway viewer mock with hand-written data. |
 
@@ -43,7 +45,9 @@ publish the CLI and put `archmap` on the path.
 
 ```
 archmap init  --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
-archmap check [--map <archmap.json>] [--propose <out.json>] [--facts <out.json>]
+archmap units [--map <archmap.json>] [--out <units.txt>]
+archmap check [--map <archmap.json>] [--facts <out.json>] [--strict]
+archmap why   <from> <to> [--map <archmap.json>] [--facts <facts.json>] [--limit <n>]
 archmap fmt   [--map <archmap.json>] [--check]
 archmap facts [--map <archmap.json>] [--out <out.json>] [--commit <sha>]
 archmap diff  <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
@@ -56,6 +60,20 @@ To try it on the sample:
 dotnet run --project src/Archmap.Cli -- check --map samples/Orchard/archmap.json
 ```
 
-`check` exits 1 on any violation and prints, for each one, the rule, the evidence,
-and the map edit that would resolve it when one exists. `--propose` writes a copy of
-the map with every such edit applied.
+`check` fails only when the map itself cannot be used. Everything else is a warning:
+a type no leaf binds lands in the automatic `unsorted` leaf, and the summary line
+says how many. `check` also prints the cycles among each level's children and each
+view's groups, which is what the proposing step reads. `why` lists the type pairs
+behind one edge.
+
+## Bootstrapping a map
+
+1. `archmap init --solution <sln>` writes a skeleton map from namespaces, with
+   `System.**` and every test project excluded.
+2. `archmap units --out units.txt` writes the listing a language model reads: every
+   type folded into units with its documentation summary and heaviest references.
+3. The model writes the map: a tree of concepts with a purpose line each, leaves
+   bound by namespace pattern where a namespace follows the concept and by exact
+   type name where it does not.
+4. `archmap check` answers with cycles, unsorted types and, in the facts, cohesion
+   per node. `archmap why a b` explains an edge. Revise and repeat.

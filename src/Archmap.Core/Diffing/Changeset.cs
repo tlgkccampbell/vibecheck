@@ -11,29 +11,29 @@ public sealed record Changeset
     public required StructuralDiff Structural { get; init; }
     public required SortedDictionary<string, NodeContent> Content { get; init; }
     public required List<FileChange> Files { get; init; }
+
+    /// <summary>Every pair of leaves, or leaf and external, with references at base or at head. The viewer aggregates these to the level it draws.</summary>
     public required List<EdgeChange> Edges { get; init; }
+
     public required List<FileHunks> Hunks { get; init; }
 }
 
 public sealed record StructuralDiff
 {
-    public required List<NodeStructuralChange> Nodes { get; init; }
-    public required List<EdgeStructuralChange> Edges { get; init; }
-    public required List<PolicyChange> Policies { get; init; }
+    public required List<NodeChange> Nodes { get; init; }
+    public required List<ViewChange> Views { get; init; }
 
     /// <summary>Types that bind to a different leaf at head than at base. Membership is structure, so these are listed here.</summary>
     public required List<TypeMove> Types { get; init; }
 }
 
-/// <summary>A node or external added, removed or modified in the map, with the evidence that justifies it. A gratuitous change is one the minimality rules do not justify.</summary>
-public sealed record NodeStructuralChange(string Id, string Op, string Kind, string? Detail, List<string> Evidence, bool Gratuitous);
+/// <summary>A node or external added, removed or modified in the map. The kind is <c>node</c> or <c>external</c>, and the detail says what changed on a modification.</summary>
+public sealed record NodeChange(string Id, string Op, string Kind, string? Detail);
 
-/// <summary>A declared edge added, removed or modified, with reference counts at base and head.</summary>
-public sealed record EdgeStructuralChange(string Level, string From, string To, string Op, int BaseRefs, int HeadRefs, string? Detail, List<string> Evidence, bool Gratuitous);
+/// <summary>A view added, removed or modified in the map.</summary>
+public sealed record ViewChange(string Id, string Op, string? Detail);
 
-public sealed record PolicyChange(string Level, string From, string To);
-
-/// <summary>A type whose leaf changed between base and head, and how it is bound at head.</summary>
+/// <summary>A type whose leaf changed between base and head, and how it is bound at head. A type present at one end only has a null leaf at the other.</summary>
 public sealed record TypeMove(string Name, string? LeafBase, string? LeafHead, string? By);
 
 /// <summary>File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>, <c>modified</c>, <c>children</c> or <c>unchanged</c>.</summary>
@@ -42,8 +42,8 @@ public sealed record NodeContent(int Files, int Added, int Removed, int Modified
 /// <summary>A file's change status and the leaves its types bound to at base and at head.</summary>
 public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead);
 
-/// <summary>A lifted edge with its reference counts at base and head. Undeclared marks a new edge at an observed level, which no map change approved.</summary>
-public sealed record EdgeChange(string Level, string From, string To, int Base, int Head, string Status, bool Undeclared);
+/// <summary>A leaf-pair edge with its reference counts at base and head. The status is <c>added</c>, <c>removed</c>, <c>modified</c> or <c>unchanged</c>.</summary>
+public sealed record EdgeChange(string From, string To, int Base, int Head, string Status);
 
 public sealed record FileHunks(string Path, List<Hunk> Hunks);
 

@@ -27,13 +27,13 @@ public sealed record SourceFile(string Path, string Hash, string Project, string
 /// <summary>
 /// A top-level type: its fully qualified name, the assembly that declares it, the
 /// files that declare its parts, the generator that produced any of them, the leaf
-/// its <c>[Archmap]</c> attribute names, and the name of a nested type that wrongly
-/// carries the attribute. When the same fully qualified name is declared in more than
+/// its <c>[Archmap]</c> attribute names, the name of a nested type that wrongly
+/// carries the attribute, and the first sentence of its documentation summary. When the same fully qualified name is declared in more than
 /// one assembly, the name is prefixed with the assembly and <c>::</c> so that each
 /// type keeps its own identity; patterns match the plain name together with the
 /// assembly.
 /// </summary>
-public sealed record TypeInfo(string Name, string Assembly, IReadOnlyList<string> Files, string? Generator = null, string? Attribute = null, string? MisattributedNested = null)
+public sealed record TypeInfo(string Name, string Assembly, IReadOnlyList<string> Files, string? Generator = null, string? Attribute = null, string? MisattributedNested = null, string? Summary = null)
 {
     /// <summary>The name without any assembly prefix, which is what patterns match.</summary>
     public string PlainName => TypeNames.Plain(Name);

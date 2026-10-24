@@ -17,37 +17,45 @@ public class MapFormatTests
     }
 
     [Fact]
-    public void WriterSortsNodesAndEdgesAndOrdersKeys()
+    public void WriterSortsNodesAndGroupsAndOrdersKeys()
     {
         var map = TestData.Map();
-        map.Edges.Clear();
-        map.Edges.Add(new EdgeSpec { From = "b", To = "shared", Payload = "P", Label = "L", Asserted = true });
-        map.Edges.Add(new EdgeSpec { From = "a", To = "shared" });
+        map.Views["v"] = new ViewSpec
+        {
+            Name = "V", Level = "root",
+            Groups = new SortedDictionary<string, GroupSpec>(StringComparer.Ordinal)
+            {
+                ["z"] = new GroupSpec { Name = "Z", Leaves = ["shared"] },
+                ["m"] = new GroupSpec { Name = "M", Purpose = "Most.", Leaves = ["a.x", "a.y", "b"] },
+            },
+        };
         var text = MapWriter.Write(map);
-        var edgesStart = text.IndexOf("\"edges\"", StringComparison.Ordinal);
-        Assert.True(text.IndexOf("\"from\": \"a\"", edgesStart, StringComparison.Ordinal) < text.IndexOf("\"from\": \"b\"", edgesStart, StringComparison.Ordinal));
-        Assert.Contains("{ \"from\": \"b\", \"to\": \"shared\", \"label\": \"L\", \"payload\": \"P\", \"asserted\": true }", text);
         Assert.Contains("    \"a.x\": { \"name\": \"X\", \"bind\": [\"A.X.**\"] }", text);
+        Assert.Contains("    \"v\": { \"name\": \"V\", \"level\": \"root\", \"groups\": {\n      \"m\": { \"name\": \"M\", \"purpose\": \"Most.\", \"leaves\": [\"a.x\", \"a.y\", \"b\"] },\n      \"z\": { \"name\": \"Z\", \"leaves\": [\"shared\"] }\n    } }\n", text);
+        Assert.Equal(text, MapWriter.Write(MapReader.Read(text)));
+        Assert.True(text.IndexOf("\"nodes\"", StringComparison.Ordinal) < text.IndexOf("\"views\"", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("\"views\"", StringComparison.Ordinal) < text.IndexOf("\"externals\"", StringComparison.Ordinal));
     }
 
     [Fact]
     public void ReaderRejectsUnknownPropertiesAndWrongTypes()
     {
         const string text = """
-            { "version": 0, "solution": "x.sln", "nodes": { "a": { "name": "A", "color": "red" } }, "externals": {}, "edges": [ { "from": "a", "to": "b", "asserted": "yes" } ], "policies": {} }
+            { "version": 0, "solution": "x.sln", "nodes": { "a": { "name": "A", "color": "red" } }, "views": { "v": { "name": "V", "level": "root", "groups": { "g": { "name": "G", "leaves": "a" } } } }, "externals": {}, "edges": [] }
             """;
         var ex = Assert.Throws<MapFormatException>(() => MapReader.Read(text));
         Assert.Contains(ex.Errors, e => e.Contains("unknown property \"color\""));
-        Assert.Contains(ex.Errors, e => e.Contains("asserted must be a boolean"));
+        Assert.Contains(ex.Errors, e => e.Contains("views.v.groups.g.leaves must be an array of strings"));
+        Assert.Contains(ex.Errors, e => e.Contains("unknown property \"edges\" at the top level"));
     }
 
     [Fact]
-    public void ReaderRejectsCommentsTrailingCommasAndLeafPolicies()
+    public void ReaderRejectsCommentsTrailingCommasAndEmptyViews()
     {
         Assert.Throws<MapFormatException>(() => MapReader.Read("{ /* c */ \"version\": 0, \"solution\": \"x\" }"));
         Assert.Throws<MapFormatException>(() => MapReader.Read("{ \"version\": 0, \"solution\": \"x\", }"));
-        var ex = Assert.Throws<MapFormatException>(() => MapReader.Read("{ \"version\": 0, \"solution\": \"x\", \"nodes\": { \"a\": { \"name\": \"A\", \"bind\": [\"a/**\"], \"edges\": \"declared\" } } }"));
-        Assert.Contains(ex.Errors, e => e.Contains("cannot carry an edges policy"));
+        var ex = Assert.Throws<MapFormatException>(() => MapReader.Read("{ \"version\": 0, \"solution\": \"x\", \"views\": { \"v\": { \"name\": \"V\", \"level\": \"root\", \"groups\": {} } } }"));
+        Assert.Contains(ex.Errors, e => e.Contains("views.v.groups must not be empty"));
     }
 
     [Fact]

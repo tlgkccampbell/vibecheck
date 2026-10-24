@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://archviz.dev/schema/archmap.schema.json",
   "title": "Architecture map",
-  "description": "The checked-in specification of a system's nodes, bindings, edges and policies. See docs/archmap-spec.md.",
+  "description": "The checked-in description of a system's nodes, bindings, views and exclusions. See docs/archmap-spec.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "solution", "exclude", "nodes", "externals", "edges", "policies"],
+  "required": ["version", "solution", "exclude", "nodes", "views", "externals"],
   "properties": {
     "version": { "const": 0 },
     "solution": { "type": "string", "description": "The solution file, relative to the repository root." },
@@ -15,18 +15,20 @@
       "propertyNames": { "$ref": "#/$defs/identifier" },
       "additionalProperties": { "$ref": "#/$defs/node" }
     },
+    "views": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/segment" },
+      "additionalProperties": { "$ref": "#/$defs/view" }
+    },
     "externals": {
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/segment" },
       "additionalProperties": { "$ref": "#/$defs/external" }
-    },
-    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
-    "policies": { "$ref": "#/$defs/policies" }
+    }
   },
   "$defs": {
     "segment": { "type": "string", "pattern": "^[a-z0-9-]+$" },
     "identifier": { "type": "string", "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)*$" },
-    "policy": { "enum": ["declared", "observed"] },
     "node": {
       "type": "object",
       "additionalProperties": false,
@@ -35,10 +37,33 @@
         "name": { "type": "string" },
         "purpose": { "type": "string" },
         "note": { "type": "string" },
-        "edges": { "$ref": "#/$defs/policy", "description": "The policy among this node's children. Present on containers only." },
         "bind": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Patterns over fully qualified type names, with * (no dots) and ** (any) wildcards and an optional Assembly:: qualifier. Present on leaves only." }
-      },
-      "not": { "required": ["edges", "bind"] }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "level", "groups"],
+      "properties": {
+        "name": { "type": "string" },
+        "purpose": { "type": "string" },
+        "level": { "type": "string", "description": "root or a container identifier. The view's groups partition the leaves under it." },
+        "groups": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/segment" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "leaves"],
+            "properties": {
+              "name": { "type": "string" },
+              "purpose": { "type": "string" },
+              "leaves": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/identifier" } }
+            }
+          }
+        }
+      }
     },
     "external": {
       "type": "object",
@@ -48,42 +73,6 @@
         "name": { "type": "string" },
         "purpose": { "type": "string" },
         "bind": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Assembly name patterns, with * as a wildcard." }
-      }
-    },
-    "edge": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["from", "to"],
-      "properties": {
-        "from": { "$ref": "#/$defs/identifier" },
-        "to": { "$ref": "#/$defs/identifier" },
-        "label": { "type": "string" },
-        "payload": { "type": "string", "description": "The simple name of a type the edge carries." },
-        "asserted": { "type": "boolean" }
-      }
-    },
-    "policies": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "root": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "edges": { "$ref": "#/$defs/policy" },
-            "externals": { "$ref": "#/$defs/policy" }
-          }
-        },
-        "forbid": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["from", "to"],
-            "properties": { "from": { "type": "string" }, "to": { "type": "string" } }
-          }
-        },
-        "acyclic": { "type": "array", "items": { "type": "string" } }
       }
     }
   }

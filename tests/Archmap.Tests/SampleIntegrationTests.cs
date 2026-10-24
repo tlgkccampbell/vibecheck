@@ -32,7 +32,8 @@ public class SampleIntegrationTests(SampleFixture sample)
     {
         var facts = Checker.Run(sample.Map, sample.Analysis, new CheckOptions { MapText = sample.MapText });
         Assert.Empty(facts.Violations);
-        Assert.All(facts.Types, t => Assert.NotNull(t.Leaf));
+        Assert.Empty(facts.Warnings);
+        Assert.DoesNotContain(facts.Types, t => t.Leaf == ArchMap.Unsorted);
         Assert.Equal(new ExcludedCounts(2, 0), facts.Excluded);
         Assert.Equal(29, facts.Types.Count);
         Assert.DoesNotContain(facts.Dependencies, d => d.To.StartsWith("System."));
@@ -50,7 +51,8 @@ public class SampleIntegrationTests(SampleFixture sample)
         var facts = Checker.Run(sample.Map, sample.Analysis);
         Assert.Equal("billing.integrations.stripe", facts.Types.Single(t => t.Name == Context).Leaf);
         // A reference to a member that exists only in the generated half resolves to the type.
-        Assert.Contains(facts.Dependencies, d => d.From == "Orchard.Billing.Integrations.Stripe.StripeClient" && d.To == Context && d.Level == "billing.integrations.stripe");
+        Assert.Contains(facts.Dependencies, d => d.From == "Orchard.Billing.Integrations.Stripe.StripeClient" && d.To == Context);
+        Assert.Contains(facts.LeafEdges, e => e.From == "billing.integrations.stripe" && e.To == "billing.integrations.stripe");
     }
 
     [Fact]
@@ -61,8 +63,8 @@ public class SampleIntegrationTests(SampleFixture sample)
         var facts = Checker.Run(sample.Map, sample.Analysis);
         var fact = facts.Types.Single(t => t.Name == Invoice);
         Assert.Equal(("billing.ledger", "attribute"), (fact.Leaf, fact.By));
-        Assert.Equal(1, facts.Metrics["billing"].Attributed);
-        Assert.Equal(0, facts.Metrics["auth"].Attributed);
+        Assert.Equal(1, facts.Nodes["billing"].Attributed);
+        Assert.Equal(0, facts.Nodes["auth"].Attributed);
         var file = facts.Files.Single(f => f.Path.EndsWith("InvoiceGenerator.cs"));
         Assert.Equal(["billing.core.invoices", "billing.ledger"], file.Leaves);
         Assert.DoesNotContain(facts.Dependencies, d => d.To == "Archmap.ArchmapAttribute");
@@ -88,34 +90,39 @@ public class SampleIntegrationTests(SampleFixture sample)
     }
 
     [Fact]
-    public void RemovingADeclaredEdgeFailsPermissionAndTheProposalRestoresIt()
-    {
-        var map = sample.Map.Clone();
-        map.Edges.RemoveAll(e => e.From == "billing" && e.To == "auth");
-        var facts = Checker.Run(map, sample.Analysis);
-        var v = Assert.Single(facts.Violations);
-        Assert.Equal("permission", v.Rule);
-        Assert.Contains("billing → auth", v.Message);
-        var repaired = Proposals.Apply(map, [v.Proposal!]);
-        Assert.Empty(Checker.Run(repaired, sample.Analysis).Violations);
-    }
-
-    [Fact]
-    public void ADeadEdgeFailsRealization()
-    {
-        var map = sample.Map.Clone();
-        map.Edges.Add(new EdgeSpec { From = "auth", To = "notifications" });
-        var v = Assert.Single(Checker.Run(map, sample.Analysis).Violations);
-        Assert.Equal("realization", v.Rule);
-    }
-
-    [Fact]
-    public void MetricsReportTheDispatchTemplatesCycle()
+    public void RootEdgesAndTheDispatchTemplatesCycleAreReported()
     {
         var facts = Checker.Run(sample.Map, sample.Analysis);
-        var cycle = Assert.Single(facts.Metrics["notifications"].Cycles);
-        Assert.Equal(new[] { "notifications.dispatch", "notifications.templates" }, cycle.OrderBy(c => c).ToArray());
-        Assert.Empty(facts.Metrics["billing"].Cycles);
+        var root = facts.Levels["root"];
+        Assert.Contains(root.Edges, e => e.From == "billing" && e.To == "auth");
+        Assert.Contains(root.Edges, e => e.From == "billing" && e.To == "notifications");
+        Assert.Contains(root.Edges, e => e.From == "billing" && e.To == "json");
+        Assert.DoesNotContain(root.Edges, e => e.From == "auth" && e.To == "notifications");
+        Assert.Empty(root.Cycles);
+        var cycle = Assert.Single(facts.Levels["notifications"].Cycles);
+        Assert.Equal(["notifications.dispatch", "notifications.templates"], cycle.OrderBy(c => c, StringComparer.Ordinal));
+        Assert.Empty(facts.Levels["billing"].Cycles);
+    }
+
+    [Fact]
+    public void TheByConcernViewRegroupsTheLeaves()
+    {
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        var view = facts.Views["by-concern"];
+        Assert.Equal(["money", "plumbing", "requests"], view.Groups.Keys);
+        Assert.Contains(view.Edges, e => e.From == "money" && e.To == "plumbing");
+        Assert.Equal(facts.Types.Count, view.Groups.Values.Sum(g => g.Types));
+        Assert.True(view.Groups["money"].Internal > 0);
+    }
+
+    [Fact]
+    public void UnitsFoldHelpersAndCarrySummaries()
+    {
+        var units = Units.Build(sample.Analysis);
+        var capture = units.Single(u => u.Head == Capture);
+        Assert.StartsWith("Captures", capture.Summary);
+        Assert.Contains(units, u => u.Members.Count > 1);
+        Assert.Contains("CapturePayment", Units.Listing(units, sample.Analysis.Types.Count));
     }
 
     [Fact]
@@ -127,7 +134,7 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Equal("Orchard.Billing", skeleton.Nodes["billing"].Name);
         Assert.Contains("framework", skeleton.Externals.Keys);
         var facts = Checker.Run(skeleton, sample.Analysis);
-        Assert.Empty(facts.Violations);
+        Assert.Empty(facts.Warnings);
         Assert.DoesNotContain(facts.ExternalRefs, e => e.External is null);
     }
 }

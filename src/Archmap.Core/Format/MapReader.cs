@@ -57,9 +57,8 @@ public static class MapReader
             string? solution = null;
             List<string>? exclude = null;
             var nodes = new SortedDictionary<string, NodeSpec>(StringComparer.Ordinal);
+            var views = new SortedDictionary<string, ViewSpec>(StringComparer.Ordinal);
             var externals = new SortedDictionary<string, ExternalSpec>(StringComparer.Ordinal);
-            var edges = new List<EdgeSpec>();
-            var policies = new PolicySpec();
             foreach (var p in root.EnumerateObject())
             {
                 switch (p.Name)
@@ -77,16 +76,11 @@ public static class MapReader
                     case "nodes":
                         ReadObjectMap(p.Value, "nodes", errors, (id, el) => nodes[id] = ReadNode(id, el, errors));
                         break;
+                    case "views":
+                        ReadObjectMap(p.Value, "views", errors, (id, el) => views[id] = ReadView(id, el, errors));
+                        break;
                     case "externals":
                         ReadObjectMap(p.Value, "externals", errors, (id, el) => externals[id] = ReadExternal(id, el, errors));
-                        break;
-                    case "edges":
-                        if (p.Value.ValueKind != JsonValueKind.Array) { errors.Add("edges must be an array"); break; }
-                        var i = 0;
-                        foreach (var el in p.Value.EnumerateArray()) edges.Add(ReadEdge(el, $"edges[{i++}]", errors));
-                        break;
-                    case "policies":
-                        policies = ReadPolicies(p.Value, errors);
                         break;
                     default:
                         errors.Add($"unknown property \"{p.Name}\" at the top level");
@@ -101,9 +95,8 @@ public static class MapReader
                 Solution = solution ?? "",
                 Exclude = exclude ?? [],
                 Nodes = nodes,
+                Views = views,
                 Externals = externals,
-                Edges = edges,
-                Policies = policies,
             };
         }
     }
@@ -120,7 +113,7 @@ public static class MapReader
 
     private static NodeSpec ReadNode(string id, JsonElement el, List<string> errors)
     {
-        string? name = null, purpose = null, note = null, policy = null;
+        string? name = null, purpose = null, note = null;
         List<string>? bind = null;
         if (el.ValueKind != JsonValueKind.Object) { errors.Add($"nodes.{id} must be an object"); return new NodeSpec { Name = id }; }
         foreach (var p in el.EnumerateObject())
@@ -130,18 +123,58 @@ public static class MapReader
                 case "name": name = ReadString(p.Value, $"nodes.{id}.name", errors); break;
                 case "purpose": purpose = ReadString(p.Value, $"nodes.{id}.purpose", errors); break;
                 case "note": note = ReadString(p.Value, $"nodes.{id}.note", errors); break;
-                case "edges":
-                    policy = ReadString(p.Value, $"nodes.{id}.edges", errors);
-                    if (policy is not (ArchMap.Declared or ArchMap.Observed)) errors.Add($"nodes.{id}.edges must be \"declared\" or \"observed\"");
-                    break;
                 case "bind": bind = ReadStringList(p.Value, $"nodes.{id}.bind", errors); break;
                 default: errors.Add($"unknown property \"{p.Name}\" in nodes.{id}"); break;
             }
         }
         if (name is null) errors.Add($"nodes.{id}.name is required");
-        if (bind is not null && policy is not null) errors.Add($"nodes.{id} is a leaf and cannot carry an edges policy");
         if (bind is { Count: 0 }) errors.Add($"nodes.{id}.bind must not be empty");
-        return new NodeSpec { Name = name ?? id, Purpose = purpose, Note = note, Edges = policy, Bind = bind };
+        return new NodeSpec { Name = name ?? id, Purpose = purpose, Note = note, Bind = bind };
+    }
+
+    private static ViewSpec ReadView(string id, JsonElement el, List<string> errors)
+    {
+        string? name = null, purpose = null, level = null;
+        var groups = new SortedDictionary<string, GroupSpec>(StringComparer.Ordinal);
+        if (el.ValueKind != JsonValueKind.Object) { errors.Add($"views.{id} must be an object"); return new ViewSpec { Name = id, Level = Identifiers.Root }; }
+        foreach (var p in el.EnumerateObject())
+        {
+            switch (p.Name)
+            {
+                case "name": name = ReadString(p.Value, $"views.{id}.name", errors); break;
+                case "purpose": purpose = ReadString(p.Value, $"views.{id}.purpose", errors); break;
+                case "level": level = ReadString(p.Value, $"views.{id}.level", errors); break;
+                case "groups":
+                    ReadObjectMap(p.Value, $"views.{id}.groups", errors, (gid, gel) => groups[gid] = ReadGroup(id, gid, gel, errors));
+                    break;
+                default: errors.Add($"unknown property \"{p.Name}\" in views.{id}"); break;
+            }
+        }
+        if (name is null) errors.Add($"views.{id}.name is required");
+        if (level is null) errors.Add($"views.{id}.level is required");
+        if (groups.Count == 0) errors.Add($"views.{id}.groups must not be empty");
+        return new ViewSpec { Name = name ?? id, Purpose = purpose, Level = level ?? Identifiers.Root, Groups = groups };
+    }
+
+    private static GroupSpec ReadGroup(string view, string id, JsonElement el, List<string> errors)
+    {
+        string? name = null, purpose = null;
+        List<string>? leaves = null;
+        var path = $"views.{view}.groups.{id}";
+        if (el.ValueKind != JsonValueKind.Object) { errors.Add($"{path} must be an object"); return new GroupSpec { Name = id, Leaves = [] }; }
+        foreach (var p in el.EnumerateObject())
+        {
+            switch (p.Name)
+            {
+                case "name": name = ReadString(p.Value, path + ".name", errors); break;
+                case "purpose": purpose = ReadString(p.Value, path + ".purpose", errors); break;
+                case "leaves": leaves = ReadStringList(p.Value, path + ".leaves", errors); break;
+                default: errors.Add($"unknown property \"{p.Name}\" in {path}"); break;
+            }
+        }
+        if (name is null) errors.Add($"{path}.name is required");
+        if (leaves is null or { Count: 0 }) errors.Add($"{path}.leaves is required and must not be empty");
+        return new GroupSpec { Name = name ?? id, Purpose = purpose, Leaves = leaves ?? [] };
     }
 
     private static ExternalSpec ReadExternal(string id, JsonElement el, List<string> errors)
@@ -162,89 +195,6 @@ public static class MapReader
         if (name is null) errors.Add($"externals.{id}.name is required");
         if (bind is null or { Count: 0 }) errors.Add($"externals.{id}.bind is required and must not be empty");
         return new ExternalSpec { Name = name ?? id, Purpose = purpose, Bind = bind ?? [] };
-    }
-
-    private static EdgeSpec ReadEdge(JsonElement el, string path, List<string> errors)
-    {
-        string? from = null, to = null, label = null, payload = null;
-        var asserted = false;
-        if (el.ValueKind != JsonValueKind.Object) { errors.Add($"{path} must be an object"); return new EdgeSpec { From = "", To = "" }; }
-        foreach (var p in el.EnumerateObject())
-        {
-            switch (p.Name)
-            {
-                case "from": from = ReadString(p.Value, path + ".from", errors); break;
-                case "to": to = ReadString(p.Value, path + ".to", errors); break;
-                case "label": label = ReadString(p.Value, path + ".label", errors); break;
-                case "payload": payload = ReadString(p.Value, path + ".payload", errors); break;
-                case "asserted":
-                    if (p.Value.ValueKind is JsonValueKind.True or JsonValueKind.False) asserted = p.Value.GetBoolean();
-                    else errors.Add($"{path}.asserted must be a boolean");
-                    break;
-                default: errors.Add($"unknown property \"{p.Name}\" in {path}"); break;
-            }
-        }
-        if (from is null) errors.Add($"{path}.from is required");
-        if (to is null) errors.Add($"{path}.to is required");
-        return new EdgeSpec { From = from ?? "", To = to ?? "", Label = label, Payload = payload, Asserted = asserted };
-    }
-
-    private static PolicySpec ReadPolicies(JsonElement el, List<string> errors)
-    {
-        var root = new RootPolicy();
-        var forbid = new List<ForbidSpec>();
-        var acyclic = new List<string>();
-        if (el.ValueKind != JsonValueKind.Object) { errors.Add("policies must be an object"); return new PolicySpec(); }
-        foreach (var p in el.EnumerateObject())
-        {
-            switch (p.Name)
-            {
-                case "root":
-                    if (p.Value.ValueKind != JsonValueKind.Object) { errors.Add("policies.root must be an object"); break; }
-                    string edges = ArchMap.Observed, externals = ArchMap.Observed;
-                    foreach (var q in p.Value.EnumerateObject())
-                    {
-                        switch (q.Name)
-                        {
-                            case "edges": edges = ReadString(q.Value, "policies.root.edges", errors) ?? edges; break;
-                            case "externals": externals = ReadString(q.Value, "policies.root.externals", errors) ?? externals; break;
-                            default: errors.Add($"unknown property \"{q.Name}\" in policies.root"); break;
-                        }
-                    }
-                    if (edges is not (ArchMap.Declared or ArchMap.Observed)) errors.Add("policies.root.edges must be \"declared\" or \"observed\"");
-                    if (externals is not (ArchMap.Declared or ArchMap.Observed)) errors.Add("policies.root.externals must be \"declared\" or \"observed\"");
-                    root = new RootPolicy { Edges = edges, Externals = externals };
-                    break;
-                case "forbid":
-                    if (p.Value.ValueKind != JsonValueKind.Array) { errors.Add("policies.forbid must be an array"); break; }
-                    var i = 0;
-                    foreach (var f in p.Value.EnumerateArray())
-                    {
-                        var path = $"policies.forbid[{i++}]";
-                        string? from = null, to = null;
-                        if (f.ValueKind != JsonValueKind.Object) { errors.Add($"{path} must be an object"); continue; }
-                        foreach (var q in f.EnumerateObject())
-                        {
-                            switch (q.Name)
-                            {
-                                case "from": from = ReadString(q.Value, path + ".from", errors); break;
-                                case "to": to = ReadString(q.Value, path + ".to", errors); break;
-                                default: errors.Add($"unknown property \"{q.Name}\" in {path}"); break;
-                            }
-                        }
-                        if (from is null || to is null) errors.Add($"{path} needs from and to");
-                        forbid.Add(new ForbidSpec { From = from ?? "", To = to ?? "" });
-                    }
-                    break;
-                case "acyclic":
-                    acyclic = ReadStringList(p.Value, "policies.acyclic", errors) ?? [];
-                    break;
-                default:
-                    errors.Add($"unknown property \"{p.Name}\" in policies");
-                    break;
-            }
-        }
-        return new PolicySpec { Root = root, Forbid = forbid, Acyclic = acyclic };
     }
 
     private static string? ReadString(JsonElement el, string path, List<string> errors)

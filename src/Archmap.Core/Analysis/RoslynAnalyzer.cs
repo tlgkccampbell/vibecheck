@@ -125,7 +125,7 @@ public static class RoslynAnalyzer
                 var generatorName = type.DeclaringSyntaxReferences.Select(r => resolver.GeneratorOf(r.SyntaxTree.FilePath)).FirstOrDefault(g => g is not null);
                 var key = (assembly, name);
                 if (types.ContainsKey(key)) continue;
-                types[key] = new TypeInfo(name, assembly, declFiles!, generatorName, AttributeLeaf(type), MisattributedNested(type));
+                types[key] = new TypeInfo(name, assembly, declFiles!, generatorName, AttributeLeaf(type), MisattributedNested(type), DocSummary.FirstSentence(type.GetDocumentationCommentXml(cancellationToken: ct)));
             }
         }
 
@@ -177,7 +177,7 @@ public static class RoslynAnalyzer
         return null;
     }
 
-    /// <summary>Returns the name of the first nested type that carries an <c>[Archmap]</c> attribute, which rule 1 rejects, or <see langword="null"/>.</summary>
+    /// <summary>Returns the name of the first nested type that carries an <c>[Archmap]</c> attribute, which the checker ignores with a warning, or <see langword="null"/>.</summary>
     private static string? MisattributedNested(INamedTypeSymbol type)
     {
         foreach (var nested in type.GetTypeMembers())

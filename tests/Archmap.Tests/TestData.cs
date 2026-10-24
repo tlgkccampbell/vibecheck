@@ -4,8 +4,8 @@ using Archmap.Model;
 namespace Archmap.Tests;
 
 /// <summary>
-/// Builds a small synthetic map and analysis that pass every rule, so that each test
-/// can mutate one thing and assert the one violation it expects.
+/// Builds a small synthetic map and analysis whose check produces no warnings, so
+/// that each test can mutate one thing and assert the one effect it expects.
 /// </summary>
 internal static class TestData
 {
@@ -22,29 +22,24 @@ internal static class TestData
     public const string Result = "Shared.Result";
     public const string Error = "Shared.Error";
 
-    /// <summary>A map with a declared root, a declared container <c>a</c> with two leaves, leaf <c>b</c>, leaf <c>shared</c> and external <c>ext</c>.</summary>
+    /// <summary>A map with a container <c>a</c> holding two leaves, leaf <c>b</c>, leaf <c>shared</c> and external <c>ext</c>.</summary>
     public static ArchMap Map()
     {
-        var map = new ArchMap
-        {
-            Version = 0,
-            Solution = "Example.sln",
-            Policies = new PolicySpec { Root = new RootPolicy { Edges = ArchMap.Declared, Externals = ArchMap.Declared } },
-        };
-        map.Nodes["a"] = new NodeSpec { Name = "A", Edges = ArchMap.Declared };
+        var map = new ArchMap { Version = 0, Solution = "Example.sln" };
+        map.Nodes["a"] = new NodeSpec { Name = "A" };
         map.Nodes["a.x"] = new NodeSpec { Name = "X", Bind = ["A.X.**"] };
         map.Nodes["a.y"] = new NodeSpec { Name = "Y", Bind = ["A.Y.**"] };
         map.Nodes["b"] = new NodeSpec { Name = "B", Bind = ["B.**"] };
         map.Nodes["shared"] = new NodeSpec { Name = "Shared", Bind = ["Shared.**"] };
         map.Externals["ext"] = new ExternalSpec { Name = "Ext", Bind = ["Ext.*"] };
-        map.Edges.Add(new EdgeSpec { From = "a", To = "shared" });
-        map.Edges.Add(new EdgeSpec { From = "b", To = "shared" });
-        map.Edges.Add(new EdgeSpec { From = "a.x", To = "a.y" });
-        map.Edges.Add(new EdgeSpec { From = "a", To = "ext" });
         return map;
     }
 
-    /// <summary>An analysis whose dependencies realize every edge of <see cref="Map"/> and nothing else.</summary>
+    /// <summary>
+    /// An analysis with four dependencies: Thing calls Other (a.x to a.y), Thing uses
+    /// Helper (inside a.x), Thing uses Result (a.x to shared) and Service constructs
+    /// Error (b to shared), plus one external reference from Thing to Ext.Sdk.
+    /// </summary>
     public static AnalysisResult Analysis(
         IEnumerable<RawDependency>? extraDependencies = null,
         IEnumerable<TypeInfo>? extraTypes = null,
@@ -59,7 +54,7 @@ internal static class TestData
         if (extraFiles is not null) files.AddRange(extraFiles);
         var types = new List<TypeInfo>
         {
-            new(Thing, "Example.A", [X1]),
+            new(Thing, "Example.A", [X1], Summary: "Does the thing."),
             new(Helper, "Example.A", [X2]),
             new(Other, "Example.A", [Y1]),
             new(Service, "Example.B", [B1]),

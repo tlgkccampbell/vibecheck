@@ -3,12 +3,12 @@
   "solution": "Orchard.slnx",
   "exclude": ["System.**"],
   "nodes": {
-    "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "edges": "declared" },
+    "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions." },
     "auth.sessions": { "name": "Sessions", "purpose": "Session lookup and scope checks.", "bind": ["Orchard.Auth.Sessions.**"] },
     "auth.tokens": { "name": "Tokens", "purpose": "Bearer token issuance.", "bind": ["Orchard.Auth.Tokens.**"] },
-    "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger.", "edges": "declared" },
+    "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger." },
     "billing.api": { "name": "API", "purpose": "Billing endpoints.", "bind": ["Orchard.Billing.Api.**"] },
-    "billing.core": { "name": "Core", "purpose": "Payment orchestration and invoicing.", "edges": "declared" },
+    "billing.core": { "name": "Core", "purpose": "Payment orchestration and invoicing." },
     "billing.core.invoices": { "name": "Invoices", "purpose": "Invoice numbering and ledger postings.", "bind": ["Orchard.Billing.Core.Invoices.**"] },
     "billing.core.payments": { "name": "Payments", "purpose": "Capture of card payments.", "bind": ["Orchard.Billing.Core.Payments.**"] },
     "billing.core.self": { "name": "Payment service", "purpose": "The orchestrating service, declared directly in Core.", "bind": ["Orchard.Billing.Core.*"] },
@@ -18,34 +18,19 @@
     "notifications": { "name": "Notifications", "purpose": "Outbound messages raised by events." },
     "notifications.dispatch": { "name": "Dispatch", "purpose": "Routes events to the bus.", "bind": ["Orchard.Notifications.Dispatch.**"] },
     "notifications.templates": { "name": "Templates", "purpose": "Message templates per event.", "bind": ["Orchard.Notifications.Templates.**"] },
-    "shared": { "name": "Shared", "purpose": "Primitives with no business meaning.", "edges": "declared" },
+    "shared": { "name": "Shared", "purpose": "Primitives with no business meaning." },
     "shared.kernel": { "name": "Kernel", "purpose": "Result type, identifiers and the map attribute.", "bind": ["Archmap.ArchmapAttribute", "Orchard.Shared.Kernel.**"] },
     "shared.messaging": { "name": "Messaging", "purpose": "In-process event bus.", "bind": ["Orchard.Shared.Messaging.**"] }
+  },
+  "views": {
+    "by-concern": { "name": "By concern", "purpose": "The same leaves grouped by what they are for rather than by who owns them.", "level": "root", "groups": {
+      "money": { "name": "Money", "purpose": "Everything that moves or records money.", "leaves": ["billing.core.invoices", "billing.core.payments", "billing.core.self", "billing.integrations.stripe", "billing.ledger"] },
+      "plumbing": { "name": "Plumbing", "purpose": "Primitives, messaging and outbound notifications.", "leaves": ["notifications.dispatch", "notifications.templates", "shared.kernel", "shared.messaging"] },
+      "requests": { "name": "Requests", "purpose": "Where requests arrive and identities are checked.", "leaves": ["auth.sessions", "auth.tokens", "billing.api"] }
+    } }
   },
   "externals": {
     "bcl": { "name": "Base class library", "purpose": "Framework assemblies other than the core library.", "bind": ["System.*"] },
     "json": { "name": "System.Text.Json", "bind": ["System.Text.Json"] }
-  },
-  "edges": [
-    { "from": "auth", "to": "shared" },
-    { "from": "auth.tokens", "to": "auth.sessions" },
-    { "from": "billing", "to": "auth", "label": "Authorizes payment operations" },
-    { "from": "billing", "to": "bcl" },
-    { "from": "billing", "to": "json", "label": "Serializes charge requests" },
-    { "from": "billing", "to": "notifications", "payload": "PaymentEvent" },
-    { "from": "billing", "to": "shared" },
-    { "from": "billing.api", "to": "billing.core" },
-    { "from": "billing.core", "to": "billing.integrations", "label": "Charges via adapter" },
-    { "from": "billing.core", "to": "billing.ledger" },
-    { "from": "billing.core.self", "to": "billing.core.invoices" },
-    { "from": "billing.core.self", "to": "billing.core.payments" },
-    { "from": "notifications", "to": "shared" },
-    { "from": "shared", "to": "bcl" },
-    { "from": "shared.messaging", "to": "shared.kernel" }
-  ],
-  "policies": {
-    "root": { "edges": "declared", "externals": "declared" },
-    "forbid": [ { "from": "shared", "to": "auth" }, { "from": "shared", "to": "billing" }, { "from": "shared", "to": "notifications" } ],
-    "acyclic": ["billing", "root"]
   }
 }
