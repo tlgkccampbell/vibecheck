@@ -50,6 +50,39 @@ public class MapFormatTests
     }
 
     [Fact]
+    public void CategoryRoundTripsAfterPurpose()
+    {
+        var map = TestData.Map();
+        map.Nodes["a"] = new NodeSpec { Name = "A", Purpose = "Does A.", Category = "analysis" };
+        var text = MapWriter.Write(map);
+        Assert.Contains("    \"a\": { \"name\": \"A\", \"purpose\": \"Does A.\", \"category\": \"analysis\" }", text);
+        var reread = MapReader.Read(text);
+        Assert.Equal("analysis", reread.Nodes["a"].Category);
+        Assert.Equal(text, MapWriter.Write(reread));
+    }
+
+    [Fact]
+    public void ReaderRejectsUnknownCategories()
+    {
+        const string text = """
+            { "version": 0, "solution": "x.sln", "nodes": { "a": { "name": "A", "category": "widgets" } }, "views": {}, "externals": {} }
+            """;
+        var ex = Assert.Throws<MapFormatException>(() => MapReader.Read(text));
+        Assert.Contains(ex.Errors, e => e.Contains("nodes.a.category \"widgets\" is not a category"));
+    }
+
+    [Fact]
+    public void CategoryIsInheritedFromTheNearestAncestor()
+    {
+        var map = TestData.Map();
+        map.Nodes["a"] = new NodeSpec { Name = "A", Category = "domain" };
+        map.Nodes["a.y"] = new NodeSpec { Name = "Y", Category = "tooling", Bind = ["A.Y.**"] };
+        Assert.Equal("domain", map.CategoryOf("a.x"));
+        Assert.Equal("tooling", map.CategoryOf("a.y"));
+        Assert.Null(map.CategoryOf("b"));
+    }
+
+    [Fact]
     public void ReaderRejectsCommentsTrailingCommasAndEmptyViews()
     {
         Assert.Throws<MapFormatException>(() => MapReader.Read("{ /* c */ \"version\": 0, \"solution\": \"x\" }"));

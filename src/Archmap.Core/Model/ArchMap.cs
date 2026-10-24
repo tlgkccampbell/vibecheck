@@ -51,6 +51,19 @@ public sealed class ArchMap
     public IEnumerable<string> LeavesUnder(string level) =>
         Nodes.Where(kv => kv.Value.IsLeaf && Identifiers.IsUnder(kv.Key, level)).Select(kv => kv.Key);
 
+    /// <summary>
+    /// Returns the category of a node: its own, or else that of its nearest ancestor that has one, or
+    /// <see langword="null"/> when no node on its path has a category.
+    /// </summary>
+    public string? CategoryOf(string id)
+    {
+        for (var x = id; x != Identifiers.Root; x = Identifiers.ParentOrRoot(x))
+        {
+            if (Nodes.TryGetValue(x, out var n) && n.Category is not null) return n.Category;
+        }
+        return null;
+    }
+
     /// <summary>Returns a deep copy of the map.</summary>
     public ArchMap Clone()
     {
@@ -67,6 +80,13 @@ public sealed record NodeSpec
 {
     public required string Name { get; init; }
     public string? Purpose { get; init; }
+
+    /// <summary>
+    /// Gets the broad category of the node's role, one of <see cref="Categories.Names"/>, or <see langword="null"/>
+    /// when the node takes the category of its nearest ancestor that has one.
+    /// </summary>
+    public string? Category { get; init; }
+
     public string? Note { get; init; }
 
     /// <summary>Type patterns, as section 2.2 of the specification defines them. Present on leaves only.</summary>

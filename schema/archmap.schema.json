@@ -36,6 +36,7 @@
       "properties": {
         "name": { "type": "string" },
         "purpose": { "type": "string" },
+        "category": { "enum": ["entry", "feature", "domain", "analysis", "transform", "integration", "foundation", "tooling"], "description": "The broad category of the node's role. A node without one takes its nearest ancestor's." },
         "note": { "type": "string" },
         "bind": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Patterns over fully qualified type names, with * (no dots) and ** (any) wildcards and an optional Assembly:: qualifier. Present on leaves only." }
       }

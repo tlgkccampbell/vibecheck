@@ -65,12 +65,12 @@ records added and removed, never as text.
   "solution": "src/Example.sln",
   "exclude": ["System.**", "Example.Tests::**"],
   "nodes": {
-    "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "bind": ["Example.Auth.**"] },
-    "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger." },
-    "billing.api": { "name": "API", "bind": ["Example.Billing.Api.**"] },
+    "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "category": "domain", "bind": ["Example.Auth.**"] },
+    "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger.", "category": "domain" },
+    "billing.api": { "name": "API", "category": "entry", "bind": ["Example.Billing.Api.**"] },
     "billing.core": { "name": "Core", "bind": ["Example.Billing.Core.**"] },
     "billing.ledger": { "name": "Ledger", "bind": ["Example.Billing.Ledger.**", "Example.Billing.Core.Postings.*"] },
-    "shared": { "name": "Shared", "purpose": "Primitives with no business meaning." },
+    "shared": { "name": "Shared", "purpose": "Primitives with no business meaning.", "category": "foundation" },
     "shared.kernel": { "name": "Kernel", "bind": ["Example.Shared::Example.Shared.**"] },
     "shared.money": { "name": "Money", "bind": ["Example.Shared.Money"] }
   },
@@ -95,12 +95,30 @@ segment removed. A node with one segment is top-level. The hierarchy is therefor
 visible in a single line of a diff, and adding, moving or removing a node is a
 one-record change.
 
-A node has a display name, an optional one-line purpose, an optional note, and
-either `bind` or nothing. A node with `bind` is a leaf. A node without `bind` is a
+A node has a display name, an optional one-line purpose, an optional category, an
+optional note, and either `bind` or nothing. A node with `bind` is a leaf. A node without `bind` is a
 container and must have at least one child.
 
 Only leaves bind code. A container's extent is the union of its children's extents,
 so containment holds by construction and needs no rule.
+
+A category says broadly what role a node plays, so that a viewer can tell nodes
+apart at a glance by a color and an icon. A node without a category takes the
+category of its nearest ancestor that has one, so a container's category usually
+covers its children and a leaf sets one only where it differs. The list is fixed,
+so that every map uses the same names and a viewer can draw each one the same way
+in every map:
+
+| Category | Covers |
+|---|---|
+| `entry` | Where control enters the system: command lines, hosts, servers, and the endpoints of protocols. |
+| `feature` | User-facing features built on the core, such as commands, editor features and reports. |
+| `domain` | The core model: the concepts, representations and data structures the rest of the system works on. |
+| `analysis` | Working out facts about the model: inference, checking and rules. |
+| `transform` | Processing that turns one representation into another: pipelines, compilation, conversion, generated output. |
+| `integration` | The outside world: storage, file systems, configuration files, networks, external services and protocols' wire types. |
+| `foundation` | Shared infrastructure with no domain meaning: utilities, diagnostics, primitives. |
+| `tooling` | Build-time and developer tooling, such as source generators and test support. |
 
 The map's tree is the map's own. Node identifiers are not namespaces, a leaf may
 gather types from several namespaces and several projects, and a container may
@@ -411,7 +429,8 @@ practice that is a language model, and the names and purposes it writes are the
 ones the viewer shows. The proposal is a map in the format of section 2: a tree of
 containers and leaves, each leaf binding its units by namespace pattern where a
 namespace follows the concept and by exact type name where it does not, with a
-purpose line on every node.
+purpose line on every node and a category, from the list in section 2.1, on every
+top-level node and on any node whose role differs from its parent's.
 
 `archmap check` then answers with the metrics of section 4.1. The graph cannot say
 whether a grouping is conceptually right, and it does not try. It says three things

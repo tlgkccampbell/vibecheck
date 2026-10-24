@@ -113,7 +113,7 @@ public static class MapReader
 
     private static NodeSpec ReadNode(string id, JsonElement el, List<string> errors)
     {
-        string? name = null, purpose = null, note = null;
+        string? name = null, purpose = null, category = null, note = null;
         List<string>? bind = null;
         if (el.ValueKind != JsonValueKind.Object) { errors.Add($"nodes.{id} must be an object"); return new NodeSpec { Name = id }; }
         foreach (var p in el.EnumerateObject())
@@ -122,6 +122,11 @@ public static class MapReader
             {
                 case "name": name = ReadString(p.Value, $"nodes.{id}.name", errors); break;
                 case "purpose": purpose = ReadString(p.Value, $"nodes.{id}.purpose", errors); break;
+                case "category":
+                    category = ReadString(p.Value, $"nodes.{id}.category", errors);
+                    if (category is not null && !Categories.IsKnown(category))
+                        errors.Add($"nodes.{id}.category \"{category}\" is not a category; use one of {string.Join(", ", Categories.Names)}");
+                    break;
                 case "note": note = ReadString(p.Value, $"nodes.{id}.note", errors); break;
                 case "bind": bind = ReadStringList(p.Value, $"nodes.{id}.bind", errors); break;
                 default: errors.Add($"unknown property \"{p.Name}\" in nodes.{id}"); break;
@@ -129,7 +134,7 @@ public static class MapReader
         }
         if (name is null) errors.Add($"nodes.{id}.name is required");
         if (bind is { Count: 0 }) errors.Add($"nodes.{id}.bind must not be empty");
-        return new NodeSpec { Name = name ?? id, Purpose = purpose, Note = note, Bind = bind };
+        return new NodeSpec { Name = name ?? id, Purpose = purpose, Category = category, Note = note, Bind = bind };
     }
 
     private static ViewSpec ReadView(string id, JsonElement el, List<string> errors)

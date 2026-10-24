@@ -33,6 +33,7 @@ public static class MapWriter
             Str(kv.Key) + ": " + Record(
                 ("name", Str(kv.Value.Name)),
                 ("purpose", OptStr(kv.Value.Purpose)),
+                ("category", OptStr(kv.Value.Category)),
                 ("note", OptStr(kv.Value.Note)),
                 ("bind", kv.Value.Bind is null ? null : StrList(kv.Value.Bind)))));
         sb.Append("},\n");
