@@ -5,6 +5,7 @@ using Archmap.Checking;
 using Archmap.Diffing;
 using Archmap.Format;
 using Archmap.Model;
+using Archmap.Reviewing;
 
 namespace Archmap.Cli;
 
@@ -13,6 +14,9 @@ public static class Program
 {
     private const string Usage = """
         usage:
+          archmap           [review options]
+          archmap review    [<base> [<head>] | <range>] [--map <archmap.json>] [--root <dir>] [--solution <sln>]
+                            [--no-build] [--no-cache] [--no-open] [--port <n>] [--viewer <dir>]
           archmap init      --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
           archmap units     [--map <archmap.json>] [--root <dir>] [--out <units.txt>]
           archmap check     [--map <archmap.json>] [--root <dir>] [--facts <out.json>] [--strict]
@@ -20,7 +24,11 @@ public static class Program
           archmap fmt       [--map <archmap.json>] [--check]
           archmap facts     [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
           archmap diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
-          archmap changeset <base> [<head>] [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--no-build]
+          archmap changeset <base> [<head>] [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
+
+        archmap with no command, or archmap review, opens the viewer in the browser on a range of the repository
+        that the current directory is in. Without a range it opens on a picker. The map is --map when given, then the
+        archmap.json nearest the current directory at the head revision, and otherwise the namespace skeleton.
 
         The map defaults to ./archmap.json, and the layout file sits beside it. The repository root,
         which the map's solution path and every reported path are relative to, defaults to the map's
@@ -32,10 +40,12 @@ public static class Program
     {
         try
         {
-            if (args.Length == 0) { Console.Error.WriteLine(Usage); return 2; }
+            // With no command, or with options alone, the tool opens a review.
+            if (args.Length == 0 || args[0].StartsWith("--", StringComparison.Ordinal) && args[0] != "--help") args = ["review", .. args];
             var (positional, options) = ParseArgs(args.Skip(1));
             return args[0] switch
             {
+                "review" => await ReviewAsync(positional, options),
                 "init" => await InitAsync(options),
                 "units" => await UnitsAsync(options),
                 "check" => await CheckAsync(options),
@@ -297,7 +307,8 @@ public static class Program
             var progress = new Progress(m => Console.Error.WriteLine("  " + m));
             var sw = Stopwatch.StartNew();
             var request = new ChangesetRequest(root, map, text, ReadLayout(mapDir), baseCommit, headCommit, Build: !options.ContainsKey("no-build"));
-            var result = await RevisionChangeset.BuildAsync(request, RoslynAnalyzer.AnalyzeAsync, progress, cancel.Token);
+            var cache = options.ContainsKey("no-cache") ? null : ReviewCache.ForRepository(root);
+            var result = await RevisionChangeset.BuildAsync(request, RoslynAnalyzer.AnalyzeAsync, progress, cancel.Token, cache);
             foreach (var (name, facts) in new[] { ("base", result.Base), ("head", result.Head) })
             {
                 var unsorted = facts.Types.Count(t => t.Leaf == ArchMap.Unsorted);
@@ -316,6 +327,60 @@ public static class Program
         finally
         {
             Console.CancelKeyPress -= onCancel;
+        }
+    }
+
+    /// <summary>
+    /// Serves the review workflow and opens it in the browser: on the range given, or on the picker when there is none.
+    /// Runs until Ctrl+C, and then cancels the reviews still running and removes their worktrees.
+    /// </summary>
+    private static async Task<int> ReviewAsync(List<string> positional, Dictionary<string, string> options)
+    {
+        if (positional.Count > 2) throw new ArgumentException("review takes a base and an optional head, or one range");
+        var dir = Directory.GetCurrentDirectory();
+        if (Git.TryRun(dir, "rev-parse", "--show-toplevel") is null) throw new ArgumentException("review must run inside a git repository");
+        RoslynAnalyzer.EnsureMSBuild();
+        var serverOptions = new ReviewServerOptions
+        {
+            Directory = dir,
+            Analyze = RoslynAnalyzer.AnalyzeAsync,
+            Cache = options.ContainsKey("no-cache") ? null : ReviewCache.ForRepository(dir),
+            MapPath = options.GetValueOrDefault("map"),
+            Root = options.GetValueOrDefault("root"),
+            Solution = options.GetValueOrDefault("solution"),
+            Build = !options.ContainsKey("no-build"),
+            ViewerDirectory = options.TryGetValue("viewer", out var viewer) ? Path.GetFullPath(viewer) : null,
+            Port = int.Parse(options.GetValueOrDefault("port", "0")),
+            Log = Console.Error.WriteLine,
+        };
+        await using var server = new ReviewServer(serverOptions);
+        var url = await server.StartAsync();
+        if (positional.Count > 0)
+        {
+            var range = positional.Count == 2 ? $"{positional[0]}..{positional[1]}" : positional[0];
+            var page = server.Begin(range);
+            url = server.Link(page);
+        }
+        Console.WriteLine($"archmap is serving {url}");
+        Console.WriteLine("press Ctrl+C to stop");
+        if (!options.ContainsKey("no-open")) OpenBrowser(url);
+        await server.WaitForShutdownAsync();
+        Console.Error.WriteLine("stopping");
+        return 0;
+    }
+
+    /// <summary>Opens a URL in the default browser, and says so when it cannot.</summary>
+    private static void OpenBrowser(string url)
+    {
+        try
+        {
+            var psi = OperatingSystem.IsWindows() ? new ProcessStartInfo(url) { UseShellExecute = true }
+                : new ProcessStartInfo(OperatingSystem.IsMacOS() ? "open" : "xdg-open", url) { UseShellExecute = false };
+            Process.Start(psi)?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Console.Error.WriteLine("could not open a browser; open the link above");
         }
     }
 

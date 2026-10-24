@@ -566,6 +566,7 @@ the facts say, as part of the normal test run.
 
 | Command | Purpose |
 |---|---|
+| `archmap review [<range>]` | Serves the review workflow of [review-workflow.md](review-workflow.md) on the loopback interface and opens it in the browser, on the range given or on a picker. `archmap` with no command does the same. |
 | `archmap init --solution <sln>` | Emits the deterministic skeleton as `archmap.json` beside the solution, or at the path `--map` names, and the facts document as `archmap.facts.json` beside the map. Refuses to overwrite an existing map. See section 5.1. |
 | `archmap units` | Writes the unit listing of section 5.2 for the solution the map names, with the map's exclusions applied. |
 | `archmap check` | Produces the facts for the working tree and prints the warnings and the metrics. Exit code 1 on a failure, or on a warning with `--strict`. `--facts <path>` also writes the facts document. |
@@ -573,7 +574,7 @@ the facts say, as part of the normal test run.
 | `archmap fmt` | Rewrites both files in canonical form. `--check` reports without writing. |
 | `archmap facts` | Emits the facts document for the working tree, recording the HEAD commit, suffixed `+dirty` when the tree has changes. |
 | `archmap diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, attaches hunks from `git diff` between the two commits, with trivial edits marked. |
-| `archmap changeset <base> [<head>]` | Produces the changeset document between two revisions in one step. Each revision is checked out into a temporary git worktree, built and analyzed, the two in parallel, and the current map is applied to both. The worktrees are removed afterward. One argument may be a range: `a..b`, or `a...b` to compare from the merge base as a pull request does. The head defaults to `HEAD`. `--no-build` skips the builds, which leaves out generated types. |
+| `archmap changeset <base> [<head>]` | Produces the changeset document between two revisions in one step. Each revision is checked out into a temporary git worktree, built and analyzed, the two in parallel, and the current map is applied to both. The worktrees are removed afterward. One argument may be a range: `a..b`, or `a...b` to compare from the merge base as a pull request does. The head defaults to `HEAD`. `--no-build` skips the builds, which leaves out generated types. Analyses are cached per commit as `review` caches them; `--no-cache` turns that off. |
 
 Every command takes `--map <path>`; the default is `./archmap.json`, and the layout
 file sits beside the map. The repository root, which the map's solution path and
@@ -583,12 +584,14 @@ map's directory.
 ### 7.1 Turnaround
 
 Opening a solution with Roslyn costs a full compilation, which is tens of seconds on
-a large solution. The intended shape is for `check` and `facts` to cache the facts
-document keyed by commit so that `diff` on a reviewed range costs one compilation per
-unseen commit, and so that `why` and `units` never compile at all. v0 does not
-cache; `facts --out` and `why --facts` are the manual equivalent. `changeset` runs
-both ends in parallel, so it costs about one build and one compilation of the
-larger end, but each worktree starts without build output and builds from scratch.
+a large solution. `review` and `changeset` therefore cache the analysis of each
+commit, which does not depend on the map, outside the repository and keyed by the
+commit, the solution and the build of the tool, as
+[review-workflow.md](review-workflow.md) section 5 describes. A range costs one
+compilation per commit not seen before, and a change of map costs none. Both ends of
+a range are analyzed in parallel, but each worktree starts without build output and
+builds from scratch. `check`, `facts`, `why` and `units` do not use the cache yet;
+`facts --out` and `why --facts` are the manual equivalent.
 
 ## 8. Out of scope for v0
 

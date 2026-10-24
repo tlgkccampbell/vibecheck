@@ -1,6 +1,7 @@
 using Archmap.Analysis;
 using Archmap.Checking;
 using Archmap.Model;
+using Archmap.Reviewing;
 
 namespace Archmap.Diffing;
 
@@ -49,49 +50,64 @@ public static class RevisionChangeset
 
     /// <summary>
     /// Checks out both commits of a request into temporary worktrees, builds and analyzes them in parallel, and
-    /// combines their facts with the hunks between them. The worktrees are removed afterward, also on failure.
+    /// combines their facts with the hunks between them. The worktrees are removed afterward, also on failure. With a
+    /// cache, an end analyzed before is read from it instead.
     /// </summary>
-    public static async Task<ChangesetResult> BuildAsync(ChangesetRequest request, SolutionAnalyzer analyze, IProgress<string>? progress = null, CancellationToken ct = default)
+    public static async Task<ChangesetResult> BuildAsync(ChangesetRequest request, SolutionAnalyzer analyze, IProgress<string>? progress = null, CancellationToken ct = default, ReviewCache? cache = null)
     {
         var root = Path.GetFullPath(request.Root);
         var top = Path.GetFullPath(Git.Run(root, "rev-parse", "--show-toplevel"));
-        var relative = Path.GetRelativePath(top, root);
+        var target = new AnalysisTarget(Path.GetRelativePath(top, root), request.Map.Solution, request.Build);
+        var sides = new[] { ("base", request.BaseCommit), ("head", request.HeadCommit) };
+        var analyses = await Task.WhenAll(sides.Select(s => AnalyzeAsync(top, target, s.Item2, analyze, cache, Prefix(progress, s.Item1), ct)));
+        var facts = sides.Select((s, i) => Check(request.Map, request.MapText, request.LayoutText, analyses[i], s.Item2)).ToArray();
+        var changeset = ChangesetBuilder.Build(facts[0], facts[1], root, request.BaseCommit, request.HeadCommit);
+        return new ChangesetResult(changeset, facts[0], facts[1]);
+    }
+
+    /// <summary>
+    /// Returns the analysis of one commit. A cached analysis is returned when there is one. Otherwise the commit is
+    /// checked out into a temporary worktree, built when the target asks for it, and analyzed, and the worktree is
+    /// removed afterward, also on failure.
+    /// </summary>
+    public static Task<AnalysisResult> AnalyzeAsync(string top, AnalysisTarget target, string commit, SolutionAnalyzer analyze, ReviewCache? cache, IProgress<string>? progress, CancellationToken ct)
+    {
+        if (cache is null) return CheckOutAndAnalyzeAsync(top, target, commit, analyze, progress, ct);
+        return cache.AnalysisAsync(target, commit, () => CheckOutAndAnalyzeAsync(top, target, commit, analyze, progress, ct), progress);
+    }
+
+    private static async Task<AnalysisResult> CheckOutAndAnalyzeAsync(string top, AnalysisTarget target, string commit, SolutionAnalyzer analyze, IProgress<string>? progress, CancellationToken ct)
+    {
         var scratch = Path.Combine(Path.GetTempPath(), "archmap-" + Guid.NewGuid().ToString("N")[..12]);
-        var added = new List<string>();
+        var added = false;
         try
         {
-            var sides = new[] { ("base", request.BaseCommit), ("head", request.HeadCommit) };
-            foreach (var (name, commit) in sides)
+            progress?.Report("checking out " + commit[..Math.Min(8, commit.Length)]);
+            Git.Run(top, "worktree", "add", "--detach", "--quiet", scratch, commit);
+            added = true;
+            var root = Path.GetFullPath(Path.Combine(scratch, target.Root));
+            var solution = Path.Combine(root, target.Solution);
+            if (!File.Exists(solution)) throw new IOException($"{target.Solution} does not exist at {commit[..Math.Min(8, commit.Length)]}");
+            if (target.Build)
             {
-                var dir = Path.Combine(scratch, name);
-                Git.Run(top, "worktree", "add", "--detach", "--quiet", dir, commit);
-                added.Add(dir);
+                progress?.Report("building");
+                await SolutionBuild.RunAsync(solution, ct);
             }
-            var facts = await Task.WhenAll(sides.Select(s =>
-                FactsAtAsync(request, Path.GetFullPath(Path.Combine(scratch, s.Item1, relative)), s.Item2, analyze, Prefix(progress, s.Item1), ct)));
-            var changeset = ChangesetBuilder.Build(facts[0], facts[1], root, request.BaseCommit, request.HeadCommit);
-            return new ChangesetResult(changeset, facts[0], facts[1]);
+            var analysis = await analyze(root, solution, progress, ct);
+            foreach (var w in analysis.Warnings) progress?.Report("warning: " + w);
+            return analysis;
         }
         finally
         {
-            foreach (var dir in added) Git.TryRun(top, "worktree", "remove", "--force", dir);
+            if (added) Git.TryRun(top, "worktree", "remove", "--force", scratch);
             DeleteQuietly(scratch);
         }
     }
 
-    /// <summary>Builds and analyzes the solution in one checked-out revision, and returns the facts the map gives it.</summary>
-    private static async Task<Facts> FactsAtAsync(ChangesetRequest request, string root, string commit, SolutionAnalyzer analyze, IProgress<string>? progress, CancellationToken ct)
+    /// <summary>Applies a map to the analysis of one commit and returns the facts, throwing when the map cannot be used there.</summary>
+    public static Facts Check(ArchMap map, string? mapText, string? layoutText, AnalysisResult analysis, string commit)
     {
-        var solution = Path.Combine(root, request.Map.Solution);
-        if (!File.Exists(solution)) throw new IOException($"{request.Map.Solution} does not exist at {commit[..Math.Min(8, commit.Length)]}");
-        if (request.Build)
-        {
-            progress?.Report("building");
-            await SolutionBuild.RunAsync(solution, ct);
-        }
-        var analysis = await analyze(root, solution, progress, ct);
-        foreach (var w in analysis.Warnings) progress?.Report("warning: " + w);
-        var facts = Checker.Run(request.Map, analysis, new CheckOptions { Commit = commit, MapText = request.MapText, LayoutText = request.LayoutText });
+        var facts = Checker.Run(map, analysis, new CheckOptions { Commit = commit, MapText = mapText, LayoutText = layoutText });
         if (!facts.Passed) throw new InvalidOperationException("the map cannot be used at " + commit + ":\n  " + string.Join("\n  ", facts.Violations.Select(v => v.Message)));
         return facts;
     }

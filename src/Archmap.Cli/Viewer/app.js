@@ -1,4 +1,4 @@
-// Viewer mock over a real changeset. Every level is drawn from the leaf-pair edges in
+// Viewer over one changeset. Every level is drawn from the leaf-pair edges in
 // the changeset, aggregated to the children of the level. ELK places the blocks, and the
 // blocks and the curved edges then settle together. Edges that leave the level end at
 // pins, which stand among the blocks as hexagonal tags. A view regroups the leaves under
@@ -1603,6 +1603,13 @@
   async function boot() {
     $("#pr").replaceChildren(el("span", {}, `${META.solution || MAP.solution} · `), el("code", {}, META.range || `${(CS.base || "").slice(0, 7)}..${(CS.head || "").slice(0, 7)}`), el("span", {}, META.title ? ` · ${META.title}` : ""));
     $("#pr").title = META.title || "";
+    // Served by the archmap command, the page links back to the range picker and says where the map came from.
+    if (META.home) $("#pr").prepend(el("a", { href: META.home, title: "Choose another range" }, "Ranges"), " · ");
+    if (META.map) {
+      // The tag follows the range rather than the title, so that a long title cannot push it out of view.
+      $("#pr code").after(el("span", {}, META.mapKind === "skeleton" ? " · skeleton map" : " · map"));
+      $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
+    }
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
     $("#trivial").addEventListener("change", async (ev) => { rememberView(); state.opts.trivial = ev.target.checked; const m = await mount(); if (m) setViewBox(arrive(m)); });
     $("#flow").addEventListener("change", (ev) => document.body.classList.toggle("flow", ev.target.checked));

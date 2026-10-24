@@ -13,6 +13,14 @@ public static class Git
         return output.Trim();
     }
 
+    /// <summary>Runs git in a directory and returns its output exactly as written, throwing when git cannot start or fails.</summary>
+    public static string RunExact(string dir, params string[] args)
+    {
+        var (code, output, error) = Start(dir, args);
+        if (code != 0) throw new InvalidOperationException($"git {args.FirstOrDefault()} failed: {error.Trim()}");
+        return output;
+    }
+
     /// <summary>Runs git in a directory and returns its trimmed output, or <see langword="null"/> when git cannot start or fails.</summary>
     public static string? TryRun(string dir, params string[] args)
     {
@@ -29,7 +37,12 @@ public static class Git
 
     private static (int Code, string Output, string Error) Start(string dir, string[] args)
     {
-        var psi = new ProcessStartInfo("git") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        // Git writes file contents and paths as UTF-8, whatever the console's code page is.
+        var psi = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+            StandardOutputEncoding = System.Text.Encoding.UTF8, StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
         psi.ArgumentList.Add("-C");
         psi.ArgumentList.Add(dir);
         foreach (var a in args) psi.ArgumentList.Add(a);

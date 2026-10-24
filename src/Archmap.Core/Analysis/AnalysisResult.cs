@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Archmap.Analysis;
 
 /// <summary>
@@ -36,9 +38,11 @@ public sealed record SourceFile(string Path, string Hash, string Project, string
 public sealed record TypeInfo(string Name, string Assembly, IReadOnlyList<string> Files, string? Generator = null, string? Attribute = null, string? MisattributedNested = null, string? Summary = null)
 {
     /// <summary>The name without any assembly prefix, which is what patterns match.</summary>
+    [JsonIgnore]
     public string PlainName => TypeNames.Plain(Name);
 
     /// <summary>The namespace part of the plain name, or an empty string for the global namespace.</summary>
+    [JsonIgnore]
     public string Namespace
     {
         get

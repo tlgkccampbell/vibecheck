@@ -52,8 +52,10 @@ repositories at once, and any form of enforcement.
 The `archmap` tool hosts an ASP.NET Core server on the loopback interface. The
 server runs the pipeline of section 4 as background jobs, keeps their results in
 the cache of section 5, and serves the viewer and a small JSON API. The viewer is
-the page now in `mock/`, moved into the tool and changed to fetch its data from the
-API instead of reading `window.CHANGESET`.
+the page that was in `mock/`, moved into the tool. It still reads
+`window.CHANGESET`, which the server sets from a `changeset.js` it serves beside
+each review's page, so the same page also opens from a file and publishes as an
+artifact. Phase 4 adds an event stream to the viewer for narratives.
 
 ```
 browser ── viewer (static files, embedded in the tool)
@@ -74,13 +76,14 @@ The API has these endpoints:
 | `POST /api/reviews` | Starts or reopens a review of a base and a head. Returns the review's identifier. |
 | `GET /api/reviews/{id}/events` | Streams the review's progress and results as server-sent events. |
 | `GET /api/reviews/{id}/changeset` | Returns the current changeset document. |
-| `POST /api/reviews/{id}/map` | Switches the review to another map, or saves the generated map into the repository. |
-| `POST /api/reviews/{id}/narratives` | Regenerates the narratives, or one of them. |
+| `POST /api/reviews/{id}/map` | Switches the review to another map, or saves the generated map into the repository. Phase 3. |
+| `POST /api/reviews/{id}/narratives` | Regenerates the narratives, or one of them. Phase 4. |
 
-The event stream carries `stage` events (a stage started, reported progress or
-finished), a `changeset` event when a changeset document is ready, a `map` event
-when a better map is available, and a `narrative` event for each narrative that
-passes its check. The viewer never polls.
+The event stream opens with a `review` event that names the range, and carries
+`stage` events (a stage reported progress), a `ready` event when the changeset is
+ready, or a `failed` event with the reason. Later phases add a `map` event when a
+better map is available, and a `narrative` event for each narrative that passes its
+check. The pages never poll.
 
 The tool exits when the reviewer closes the terminal or presses Ctrl+C. Jobs that
 are still running are cancelled, and their worktrees are removed.
@@ -121,6 +124,9 @@ The map comes from the first of these that exists:
 3. `archmap.json` at the base revision.
 4. The generated map for this repository, from the cache.
 5. The skeleton of spec section 5.1, derived from the head analysis.
+
+A map from the repository that cannot be read, such as one in an older format, is
+reported as a warning, and the skeleton is drawn instead.
 
 A map from the repository or from `--map` is used as it is. Unbound types land in
 `unsorted`, and the viewer shows them there, as spec section 5.5 describes. When
@@ -307,11 +313,11 @@ These land in [archmap-spec.md](archmap-spec.md) with the phase that makes them 
 - Section 1 gains the cache and the generated map as places a map can come from.
 - Section 6 gains the `narratives` member of the changeset document.
 - Section 7 gains `archmap review` and the bare `archmap` command. The other
-  commands stay as building blocks for scripts.
+  commands stay as building blocks for scripts. (Done in phase 1.)
 - Section 7.1 describes the analysis cache, which replaces the manual
-  `facts --out` workaround.
+  `facts --out` workaround. (Done in phase 1.)
 - Section 8 no longer lists narrative summaries as out of scope.
-- The viewer moves from `mock/` into the tool, and `mock/` is retired.
+- The viewer moves from `mock/` into the tool. `mock/` keeps a sample `changeset.js` for opening the viewer without the server. (Done in phase 1.)
 
 ## 11. Open questions
 

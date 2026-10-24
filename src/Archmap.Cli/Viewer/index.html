@@ -1,11 +1,11 @@
-<title>Archmap Viewer Mock</title>
+<title>Archmap Viewer</title>
 <script>
   // Applies a stored theme choice before the page draws, so a page set to dark does not flash light first.
   try { const t = localStorage.getItem("archmap-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) { /* storage unavailable */ }
 </script>
-<meta name="description" content="Mock of the archmap changeset viewer on a real nt65 commit, with ELK layout, views and leaf drill-down.">
+<meta name="description" content="The archmap changeset viewer: a range of commits drawn as a change to an architecture map, with ELK layout, views and leaf drill-down.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<!-- Published as an artifact, this file is wrapped in the document skeleton; it also opens as a plain local file. -->
+<!-- The archmap server and the artifact host both wrap this file in the document skeleton; it also opens as a plain local file. -->
 <style>
   /* Layout: a top bar, then three columns (changes | schematic | details) that stack at phone width.
      The schematic is a block diagram: blocks placed by ELK and settled with their curved edges, pins as hexagonal tags. */
@@ -73,6 +73,7 @@
   .brand { font-family: var(--mono); font-weight: 600; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
   .pr { color: var(--muted); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
   .pr code { font-family: var(--mono); font-size: 12px; }
+  .pr a { color: var(--accent); }
   .nav-buttons { display: inline-flex; gap: 8px; flex: none; }
   .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .crumb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-family: var(--mono); font-size: 13px; }

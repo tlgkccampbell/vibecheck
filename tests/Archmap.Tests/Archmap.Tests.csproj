@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Archmap.Core\Archmap.Core.csproj" />
+    <ProjectReference Include="..\..\src\Archmap.Cli\Archmap.Cli.csproj" />
   </ItemGroup>
 
 </Project>
