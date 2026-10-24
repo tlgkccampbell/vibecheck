@@ -112,6 +112,9 @@ public sealed class ReviewServer : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.WebHost.UseKestrel(k => k.Listen(IPAddress.Loopback, options.Port));
         app = builder.Build();
+        // Kestrel waits for open requests before it stops, and an event stream stays open until the server ends it.
+        // Ending the streams and the running work as soon as stopping begins keeps Ctrl+C from waiting out the shutdown timeout.
+        app.Lifetime.ApplicationStopping.Register(stopping.Cancel);
         app.Use(GuardAsync);
         MapEndpoints(app);
         await app.StartAsync();
@@ -169,6 +172,9 @@ public sealed class ReviewServer : IAsyncDisposable
         }
         return $"/reviews/{id}/";
     }
+
+    /// <summary>Stops the host as Ctrl+C does.</summary>
+    public void Stop() => app?.Lifetime.StopApplication();
 
     /// <summary>Waits until the host stops, which Ctrl+C causes.</summary>
     public Task WaitForShutdownAsync() => app?.WaitForShutdownAsync() ?? Task.CompletedTask;

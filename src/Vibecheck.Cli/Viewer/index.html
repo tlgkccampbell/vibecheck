@@ -259,7 +259,8 @@
   @media (prefers-reduced-motion: reduce) { .flow-arrows { display: none !important; } }
 
   /* Focus: hovering a block, pin or edge, or selecting one, keeps its neighborhood and fades the rest. Hover wins over selection. */
-  .edge, .edge-label, .node, .pin { transition: opacity .15s; }
+  /* The fade is instant. Chrome draws the whole drawing on another layer while any opacity in it animates, so the text of
+     the block under the pointer shifts by a fraction of a pixel until the animation ends. */
   svg#stage.focused:not(.hovering) .edge:not(.in-focus), svg#stage.focused:not(.hovering) .edge-label:not(.in-focus) { opacity: .1; }
   svg#stage.hovering .edge:not(.hot), svg#stage.hovering .edge-label:not(.hot) { opacity: .06; }
   svg#stage.hovering .node:not(.hot), svg#stage.hovering .pin:not(.hot) { opacity: .35; }
