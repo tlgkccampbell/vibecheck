@@ -277,20 +277,9 @@ public static class ReadingPath
     private static bool ConsequenceOnly(FileHunks? file, Dictionary<string, Decision> decisions) =>
         file is not null && file.Hunks.Any(h => h.Follows is not null) && file.Hunks.Select((h, i) => h.Follows is not null || h.Trivial == true).All(x => x);
 
-    /// <summary>Returns the name a declaration is shown by: a type's own name, or a member's type and name, without the namespace.</summary>
-    private static string Short(DecisionDeclaration x)
-    {
-        var symbol = x.Previous is not null ? $"{Tail(x.Previous, x.Kind)} → {Tail(x.Symbol, x.Kind)}" : Tail(x.Symbol, x.Kind);
-        return symbol;
-    }
-
-    private static string Tail(string symbol, string kind)
-    {
-        var name = DeclarationDiff.SimpleName(symbol);
-        if (kind == "type") return name;
-        var container = symbol.Length > name.Length + 1 ? symbol[..^(name.Length + 1)] : "";
-        return container.Length > 0 ? DeclarationDiff.SimpleName(container) + "." + name : name;
-    }
+    /// <summary>Returns the name a declaration is shown by, as <see cref="DeclarationDiff.ShortName"/> gives it, with its previous name first when it was renamed or moved.</summary>
+    private static string Short(DecisionDeclaration x) =>
+        x.Previous is not null ? $"{DeclarationDiff.ShortName(x.Previous, x.Kind)} → {DeclarationDiff.ShortName(x.Symbol, x.Kind)}" : DeclarationDiff.ShortName(x.Symbol, x.Kind);
 
     private static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
 

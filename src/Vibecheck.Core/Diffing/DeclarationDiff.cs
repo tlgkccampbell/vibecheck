@@ -114,6 +114,15 @@ public static class DeclarationDiff
     private static bool SameMembers(Dictionary<string, Entry> a, Dictionary<string, Entry> b) =>
         a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out var other) && other.Kind == kv.Value.Kind && other.Shape == kv.Value.Shape && other.Body == kv.Value.Body);
 
+    /// <summary>Returns the name a declaration is shown by: a type's own name, or a member's containing type and name, without the namespace.</summary>
+    public static string ShortName(string symbol, string kind)
+    {
+        var name = SimpleName(symbol);
+        if (kind == "type") return name;
+        var container = symbol.Length > name.Length + 1 ? symbol[..^(name.Length + 1)] : "";
+        return container.Length > 0 ? SimpleName(container) + "." + name : name;
+    }
+
     /// <summary>Returns the last dotted segment of a name, ignoring dots inside type arguments.</summary>
     internal static string SimpleName(string name)
     {

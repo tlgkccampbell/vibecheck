@@ -15,8 +15,8 @@ all five of its phases are built: reviewed files and the full diff, opening pull
 reading the discussion, writing, and checks in detail.
 Directing the reviewer's attention, with decisions and their consequences, semantic
 triviality, a reading path, new concepts and a glossary, is designed in
-[docs/attention.md](docs/attention.md); its first three phases, decisions and their
-consequences, semantic triviality and the reading path, are built.
+[docs/attention.md](docs/attention.md); its first four phases, decisions and their
+consequences, semantic triviality, the reading path and the glossary, are built.
 
 ## Layout
 
@@ -271,6 +271,17 @@ its files with their reviewed checkboxes and offers **Mark read**. A step is rea
 every file it names is reviewed. The forward arrow opens the next unread step, and
 the back arrow returns to the step before. The bar counts the steps read beside the
 files.
+
+The **Glossary**, a third face of the same panel, lists the names the change introduces:
+added types and members, renamed declarations as "`Old` is now `New`", parts added to
+the map, and assemblies referenced for the first time. The terms are grouped by block
+and the most used come first, and each says where it is declared, how often it is used
+and where first outside its own type, and which decision introduced it, each opening in
+the leaf view. A term shows its documentation summary, and one without says so, which
+in code a model wrote is worth a look; when Claude is available it writes a one-sentence
+definition in its place, checked to cite the declaring file and marked as Claude's. A
+block's details panel lists its own terms. In every diff, an introduced name carries a
+dotted underline, hovering it shows its entry, and clicking it opens the Glossary.
 
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a

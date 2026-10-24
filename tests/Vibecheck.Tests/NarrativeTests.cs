@@ -192,4 +192,56 @@ public class NarrativeTests
         Assert.Empty(tally.Failures);
         Assert.Equal(["edge:a→b", "node:a", "summary"], accepted.Select(n => n.Key).Order(StringComparer.Ordinal));
     }
+
+    /// <summary>
+    /// Returns the context of a changeset that adds an undocumented <c>Clock.Later</c>, which Caller uses, and a
+    /// documented <c>Clock.Soon</c>, which the glossary already defines.
+    /// </summary>
+    private static NarrativeContext TermContext()
+    {
+        const string clock = "namespace A;\n\npublic class Clock\n{\n    public int Now(int zone) => zone;\n}\n";
+        const string caller = "namespace B;\n\npublic class Caller\n{\n    public int First(A.Clock clock) => clock.Now(1);\n}\n";
+        var before = new Dictionary<string, string> { ["src/Clock.cs"] = clock, ["src/Caller.cs"] = caller };
+        var after = new Dictionary<string, string>
+        {
+            ["src/Clock.cs"] = clock.Replace("=> zone;", "=> zone;\n\n    public int Later() => Now(0) + 1;\n\n    /// <summary>Soon.</summary>\n    public int Soon() => 1;"),
+            ["src/Caller.cs"] = caller.Replace("clock.Now(1);", "clock.Now(1) + clock.Later();"),
+        };
+        return new NarrativeContext(Snippets.Changeset(before, after), Snippets.Analyze(before), Snippets.Analyze(after), "(no commit messages)\n");
+    }
+
+    [Fact]
+    public void PlansTheDefinitionsOfUndocumentedTermsByBlockAfterTheLevelsAndViews()
+    {
+        var plan = NarrativePlanner.Plan(TermContext().Changeset);
+
+        var terms = Assert.Single(plan, b => b.Kind == "term");
+        Assert.Same(terms, plan[^1]);
+        Assert.Equal(("term:a/1", "a"), (terms.Id, terms.Location));
+        // Later has no summary and is defined; Soon has one and is not; Caller.First is rewritten, not introduced.
+        Assert.Equal(["term:A.Clock.Later"], terms.Keys);
+    }
+
+    [Fact]
+    public async Task DefinesATermFromItsDeclarationAndItsSitesAndDiscardsADefinitionThatCitesAnotherFile()
+    {
+        var context = TermContext();
+        var batch = NarrativePlanner.Plan(context.Changeset)[^1];
+        var claude = new FakeClaude(
+            """{ "terms": [ { "key": "term:A.Clock.Later", "text": "Made up.", "file": "src/Caller.cs" } ] }""",
+            """{ "terms": [ { "key": "term:A.Clock.Later", "text": "Returns the time one tick on.", "file": "src/Clock.cs" } ] }""");
+
+        var narratives = await NarrativeWriter.WriteAsync(batch, context, claude, null, _ => { });
+
+        var definition = Assert.Single(narratives);
+        Assert.Equal(("term:A.Clock.Later", "Returns the time one tick on."), (definition.Key, definition.Text));
+        Assert.Equal(["src/Clock.cs"], definition.Cites);
+        var prompt = claude.Requests[0].Prompt;
+        Assert.Contains("### `term:A.Clock.Later`", prompt, StringComparison.Ordinal);
+        Assert.Contains("`A.Clock.Later`, public method, declared at src/Clock.cs:7 in A.", prompt, StringComparison.Ordinal);
+        Assert.Contains("    public int Later() => Now(0) + 1;", prompt, StringComparison.Ordinal);
+        Assert.Contains("- src/Caller.cs:5, from `B.Caller`: `public int First(A.Clock clock) => clock.Now(1) + clock.Later();`", prompt, StringComparison.Ordinal);
+        Assert.Equal(Prompts.Read("terms.schema.json"), claude.Requests[0].Schema);
+        Assert.Contains("the definition cites src/Caller.cs, which is not the file that declares it", claude.Requests[1].Prompt, StringComparison.Ordinal);
+    }
 }

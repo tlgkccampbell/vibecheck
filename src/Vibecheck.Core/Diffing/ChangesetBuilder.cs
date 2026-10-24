@@ -49,7 +49,7 @@ public static class ChangesetBuilder
             Hunks = clustered,
             Decisions = decisions,
         };
-        return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views) };
+        return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views), Glossary = Glossary.Build(changeset, baseFacts, headFacts, declarations) };
     }
 
     private static List<TypeChange> DiffTypes(Facts baseFacts, Facts headFacts)

@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["terms"],
+  "properties": {
+    "terms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "text", "file"],
+        "properties": {
+          "key": { "type": "string" },
+          "text": { "type": "string" },
+          "file": { "type": "string" }
+        }
+      }
+    }
+  }
+}

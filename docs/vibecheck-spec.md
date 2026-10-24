@@ -620,6 +620,13 @@ as the differences:
   section 6 plans it: the surprises first, each with the signal that put it there,
   then the other changed leaves with the decisions and files under them, and last
   what is set aside. Each step names what it opens and the changed files it covers.
+- **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
+  section 8 lists them: added types and members, renamed declarations, nodes, views
+  and externals added to the map, and assemblies referenced at head and not at base.
+  Each term carries its kind, its block, the file and line of its declaration, its
+  documentation summary when it has one, the number of sites that use it at head, the
+  first use outside its declaring type, and the decision that introduced it. The list
+  is grouped by block and ordered by use.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a
