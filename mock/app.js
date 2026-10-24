@@ -654,6 +654,8 @@
   const state = {
     trail: [{ level: ROOT }],
     selected: null,
+    // The selections the details panel came from, most recent last, so that its Back button can return to them.
+    back: [],
     opts: { threshold: "1", externals: false, dim: true, trivial: true },
     current: null, // { level, layout }
     view: { x: 0, y: 0, w: 1600, h: 1000 },
@@ -1102,6 +1104,20 @@
     if (!cur) return;
     const level = cur.level;
     const sel = state.selected;
+    // Returns the name the panel gives a selection: a block, a pin, an edge, or nothing, which is the level itself.
+    const labelOf = (key) => {
+      if (key === null) return locName(l);
+      const child = level.children.find((c) => c.key === key);
+      if (child) return nameOf(child.id);
+      const pin = level.pins.find((p) => p.key === key);
+      if (pin) return pin.name;
+      const edge = level.edges.find((e) => e.key === key);
+      return edge ? `${labelOf(edge.from)} → ${labelOf(edge.to)}` : key;
+    };
+    if (state.back.length) {
+      const prev = state.back[state.back.length - 1];
+      box.append(el("button", { class: "back-link", onclick: () => select(state.back.pop(), "back") }, "← " + labelOf(prev)));
+    }
     if (!sel) {
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
@@ -1114,7 +1130,7 @@
       level.cycles.forEach((cyc, i) => {
         box.append(el("h3", {}, `Cycle ${i + 1}`));
         const ul = el("ul", { class: "list" });
-        for (const k of cyc) ul.append(el("li", {}, el("button", { class: "row", onclick: () => select(k) }, el("span", { class: "row-name" }, nameOf(k)))));
+        for (const k of cyc) ul.append(el("li", {}, el("button", { class: "row", onclick: () => select(k, "follow") }, el("span", { class: "row-name" }, nameOf(k)))));
         box.append(ul);
       });
       box.append(el("p", { class: "hint" }, "Click a block to select it. Double-click or press Enter to open it. Ctrl+wheel zooms, drag pans, F fits, Esc goes up a level."));
@@ -1142,7 +1158,7 @@
       if (changed.length) {
         box.append(el("h3", {}, `Edges: ${changedText(touching)}`));
         const ul = el("ul", { class: "list" });
-        for (const e of changed) ul.append(el("li", {}, el("button", { class: "row st-" + e.status, onclick: () => select(e.key) }, el("span", { class: "dot" + (isMinor(e) ? " minor" : "") }),
+        for (const e of changed) ul.append(el("li", {}, el("button", { class: "row st-" + e.status, onclick: () => select(e.key, "follow") }, el("span", { class: "dot" + (isMinor(e) ? " minor" : "") }),
           el("span", { class: "row-edge" }, e.from === child.key ? `→ ${nameOf(stripPin(e.to))}` : `← ${nameOf(stripPin(e.from))}`),
           el("span", { class: "row-meta" }, `${e.base}→${e.head}`))));
         box.append(ul);
@@ -1157,7 +1173,7 @@
       const through = level.edges.filter((e) => e.from === pin.key || e.to === pin.key);
       box.append(el("h3", {}, `${through.length} edge${through.length === 1 ? "" : "s"} through this pin`));
       const ul = el("ul", { class: "list" });
-      for (const e of through.sort((a, b) => (a.status === "unchanged") - (b.status === "unchanged") || b.head - a.head)) ul.append(el("li", {}, el("button", { class: "row" + statusClass(e.status), onclick: () => select(e.key) }, el("span", { class: "dot", style: e.status === "unchanged" ? "visibility:hidden" : "" }),
+      for (const e of through.sort((a, b) => (a.status === "unchanged") - (b.status === "unchanged") || b.head - a.head)) ul.append(el("li", {}, el("button", { class: "row" + statusClass(e.status), onclick: () => select(e.key, "follow") }, el("span", { class: "dot", style: e.status === "unchanged" ? "visibility:hidden" : "" }),
         el("span", { class: "row-edge" }, nameOf(e.from === pin.key ? e.to : e.from)), el("span", { class: "row-meta" }, e.base === e.head ? String(e.head) : `${e.base}→${e.head}`))));
       box.append(ul);
       if (pin.kind !== "external") box.append(el("button", { class: "btn", onclick: () => showInContext(pin.id) }, "Show " + pin.name + " in context"));
@@ -1234,6 +1250,7 @@
 
   let mountToken = 0;
   async function mount() {
+    state.back = [];
     const token = ++mountToken;
     const l = loc();
     const s = stage(), leafView = $("#leafview"), wrap = $(".stage-wrap");
@@ -1460,8 +1477,12 @@
     if (!dragged) select(key);
   }
 
-  // Updates the selection in place, so that a second click lands on the same element and double-click works.
-  function select(key) {
+  // Updates the selection in place, so that a second click lands on the same element and double-click works. A
+  // selection made by following a row in the details panel remembers the one before it, a return pops it, and any
+  // other selection starts afresh.
+  function select(key, how) {
+    if (how === "follow") { if (key !== state.selected) state.back.push(state.selected); }
+    else if (how !== "back") state.back = [];
     state.selected = key;
     const s = stage();
     for (const n of s.querySelectorAll(".selected")) {
