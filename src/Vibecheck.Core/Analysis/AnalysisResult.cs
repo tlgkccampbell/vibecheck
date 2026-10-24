@@ -21,7 +21,42 @@ public sealed record AnalysisResult
     public required IReadOnlyList<UnresolvableReference> Unresolvable { get; init; }
     public required IReadOnlyList<ProjectInfo> Projects { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>Gets every type declared in source and every member those types declare, one entry for each syntax that declares it.</summary>
+    public IReadOnlyList<Declaration> Declarations { get; init; } = [];
+
+    /// <summary>
+    /// Gets the references to declarations in the solution that <see cref="Dependencies"/> does not record: those from a
+    /// type to its own members, and those that name a constructor. Readers take the union of the two lists.
+    /// </summary>
+    public IReadOnlyList<Site> Sites { get; init; } = [];
 }
+
+/// <summary>
+/// A type or member declared in source, as one syntax declares it. See <c>docs/attention.md</c> section 3.
+/// </summary>
+/// <param name="Symbol">The name <see cref="RawDependency.Symbol"/> uses: the containing type and the member's name, without parameters, so that overloads share it.</param>
+/// <param name="Type">The top-level type that holds the declaration, named as <see cref="TypeInfo.Name"/> names it.</param>
+/// <param name="Container">The symbol of the type that directly contains the declaration, or <see langword="null"/> for a top-level type.</param>
+/// <param name="Kind">One of <c>type</c>, <c>method</c>, <c>constructor</c>, <c>property</c>, <c>field</c>, <c>event</c>, <c>indexer</c> or <c>operator</c>.</param>
+/// <param name="Accessibility">The declared accessibility as C# writes it, such as <c>public</c> or <c>protected internal</c>.</param>
+/// <param name="Exposed">Whether code outside the assembly can see the declaration, because it and every type that contains it are public or protected.</param>
+/// <param name="File">The file that holds the syntax.</param>
+/// <param name="FirstLine">The first line of the syntax, one-based, including its attributes but not its documentation comment.</param>
+/// <param name="LastLine">The last line of the syntax, one-based.</param>
+/// <param name="BodyLine">The line where the body begins, or <see langword="null"/> for a declaration without one. A type's body begins at its opening brace.</param>
+/// <param name="Shape">A hash of the declaration's tokens outside its body and its name. Two declarations that differ only by name have the same shape.</param>
+/// <param name="Body">A hash of the body's tokens, or <see langword="null"/> for a declaration without a body.</param>
+/// <param name="Summary">The first sentence of the documentation summary, or <see langword="null"/>.</param>
+public sealed record Declaration(string Symbol, string Type, string? Container, string Kind, string Accessibility, bool Exposed, string File, int FirstLine, int LastLine, int? BodyLine, string Shape, string? Body, string? Summary = null)
+{
+    /// <summary>Gets the member's name without its containing type, or the whole symbol for a top-level type.</summary>
+    [JsonIgnore]
+    public string Name => Container is null ? Symbol : Symbol[(Container.Length + 1)..];
+}
+
+/// <summary>A reference to a declaration in the solution: the declaration's symbol, the type that makes the reference, the top-level type that declares the symbol, and where the reference is.</summary>
+public sealed record Site(string Symbol, string FromType, string ToType, string File, int Line);
 
 /// <summary>A compiled source document, with a short content hash so that a later diff can tell modified from untouched. A generated document names its generator.</summary>
 public sealed record SourceFile(string Path, string Hash, string Project, string? Generator = null);

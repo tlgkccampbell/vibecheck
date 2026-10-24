@@ -319,6 +319,39 @@ record dependencies per reference, and record the count per pair of leaves. Ever
 drawing of an edge at any level, in the tree or in a view, is an aggregation of
 leaf pairs, and the viewer performs it.
 
+### 3.1 Declarations and sites
+
+The analysis also records what is declared and where each declaration is used, so
+that a changeset can tell the hunks that change a declaration from the hunks that
+follow from one, as [attention.md](attention.md) section 4 describes. A
+**declaration** is a type declared in source, nested or not, or a member that one
+declares, as one syntax declares it:
+
+```
+(symbol, type, container, kind, accessibility, exposed, file, first line, last line, body line, shape, body, summary)
+```
+
+The symbol is the name a dependency's symbol uses, the containing type and the
+member's name without parameters, so that overloads share it. The type is the
+top-level type that holds the declaration, and the container is the type that holds
+it directly. The kind is `type`, `method`, `constructor`, `property`, `field`,
+`event`, `indexer` or `operator`, and a declaration is exposed when it and every type
+around it are public or protected. The shape is a hash of the declaration's tokens
+outside its body and its name, and the body is a hash of the body's tokens, so that
+two declarations that differ only by name have the same shape. A type's shape leaves
+out its members, which are declarations of their own. The summary is the first
+sentence of the documentation comment.
+
+A **site** is a reference to a declaration that the dependencies do not record: a
+reference from a type to its own members, and a reference that names a constructor,
+from an object creation or a constructor initializer:
+
+```
+(symbol, from-type, to-type, file, line)
+```
+
+Every use of a declaration is a site or a dependency, and readers take the union.
+
 ## 4. Checking
 
 `vibecheck check` reads the map, analyzes the solution, and produces the facts
@@ -515,8 +548,10 @@ absent, and `excluded` counts them. Dependencies are listed per reference, since
 each one is evidence the viewer can show, and once more aggregated per pair of
 leaves, since that is what every drawing starts from. External references are
 aggregated per type and assembly, with the first symbol, file and line and a count.
-The document is written without indentation. On a solution of a thousand types with
-seventy thousand dependencies it is roughly twenty megabytes.
+The facts also carry the declarations and sites of section 3.1 for the types the map
+holds. The document is written without indentation. On a solution of a thousand
+types with seventy thousand dependencies it is roughly twenty megabytes, before the
+declarations and sites.
 
 `vibecheck diff <base> <head>` combines two facts documents into a changeset document.
 The changeset is the only input the viewer has, so it carries the map at head as well
@@ -562,6 +597,17 @@ as the differences:
   muted style rather than as modified. Moving code to other lines
   can still reach the program through caller-information attributes and stack
   traces, and the marks accept that.
+- **Decisions**: the hunks that change a declaration, and for each the hunks that
+  follow from it, as [attention.md](attention.md) section 4 describes. Matching the
+  declarations of section 3.1 by symbol tells which were added, removed, reshaped,
+  rewritten, renamed or moved. A hunk whose changed lines touch one that was added,
+  removed, reshaped, renamed or moved is a decision, with its declarations, their
+  site counts at each end, and whether any is public. A hunk whose every changed line
+  is blank, a comment, or a site of a declaration a decision changed, at that line's
+  own end, is a consequence: its `follows` lists the decisions, the one with the most
+  sites in it first, and each decision lists its consequences with the number of
+  lines each explains. A decision's `marks` are the files whose every hunk is trivial
+  or explained by that decision alone.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a
@@ -611,8 +657,9 @@ builds from scratch. `check`, `facts`, `why` and `units` do not use the cache ye
   They answered a question a diff viewer does not ask, and they were most of the
   specification. A governance layer can be built on the facts later without
   touching the map format.
-- Member-level leaves. The viewer's code level descends to members within a type,
-  but members are not map nodes.
+- Member-level leaves. The analysis records members as declarations, as section 3.1
+  says, and the viewer's code level descends to members within a type, but members
+  are not map nodes.
 - Path bindings as a secondary way to split a namespace. Type-name patterns and
   attributes cover the cases seen so far.
 - Multiple solutions or repositories.

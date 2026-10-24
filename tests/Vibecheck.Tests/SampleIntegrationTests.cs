@@ -82,6 +82,22 @@ public class SampleIntegrationTests(SampleFixture sample)
     }
 
     [Fact]
+    public void DeclarationsAndSitesCoverTheSample()
+    {
+        const string session = "Orchard.Auth.Sessions.Session";
+        var has = sample.Analysis.Declarations.Single(d => d.Symbol == session + ".Has");
+        Assert.Equal(("method", session, "public", true, "src/Orchard.Auth/Sessions/Session.cs"), (has.Kind, has.Type, has.Accessibility, has.Exposed, has.File));
+        Assert.Contains(sample.Analysis.Declarations, d => d.Symbol == "Orchard.Auth.Sessions.Scope.ReadOrders" && d.Kind == "field");
+        // A partial type has one declaration for each of its parts.
+        Assert.Equal(2, sample.Analysis.Declarations.Count(d => d.Symbol == "Orchard.Billing.Core.PaymentService" && d.Kind == "type"));
+        Assert.Contains(sample.Analysis.Sites, s => s.Symbol == session + ".Scopes" && s.FromType == session && s.ToType == session);
+        Assert.Contains(sample.Analysis.Sites, s => s.Symbol == Invoice + "." + Invoice.Split('.')[^1] && s.ToType == Invoice);
+        var known = sample.Analysis.Types.Select(t => t.Name).ToHashSet();
+        Assert.All(sample.Analysis.Declarations, d => Assert.Contains(d.Type, known));
+        Assert.All(sample.Analysis.Sites, s => { Assert.Contains(s.FromType, known); Assert.Contains(s.ToType, known); });
+    }
+
+    [Fact]
     public void ResolvesExternalsToTheMostSpecificPattern()
     {
         var facts = Checker.Run(sample.Map, sample.Analysis);

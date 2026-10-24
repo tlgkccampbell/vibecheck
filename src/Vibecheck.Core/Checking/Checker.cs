@@ -89,6 +89,8 @@ public static class Checker
             Views = ViewMetrics(map, analysis, leafEdges, leafOf, boundBy),
             Violations = violations,
             Warnings = warnings,
+            Declarations = analysis.Declarations.Where(d => known.Contains(d.Type)).ToList(),
+            Sites = analysis.Sites.Where(s => known.Contains(s.FromType) && known.Contains(s.ToType)).ToList(),
         };
     }
 

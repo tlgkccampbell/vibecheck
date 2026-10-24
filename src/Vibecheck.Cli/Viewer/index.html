@@ -222,6 +222,8 @@
   .node.st-removed .title, .node.st-removed .meta { fill: var(--removed); }
   .node.unsorted .box { stroke: var(--warn); fill: var(--warn-bg); stroke-dasharray: 3 3; }
   .node.in-cycle .box { stroke-dasharray: 2 3; }
+  /* A block that holds consequences of the selected decision shows as its reach, whatever its status. */
+  svg#stage .node.reach .box { stroke: var(--accent); stroke-width: 3.5; stroke-dasharray: none; }
   .node.in-cycle .cycle-mark { fill: var(--warn); }
   .cycle-mark { fill: transparent; }
 
@@ -289,7 +291,7 @@
   .pin.changed .pin-label { fill: var(--fg); }
 
   /* Dim unchanged */
-  body.dim .node:not(.st-added):not(.st-removed):not(.st-modified):not(.st-children):not(.st-reviewed):not(.selected):not(.in-focus) { opacity: .5; }
+  body.dim .node:not(.st-added):not(.st-removed):not(.st-modified):not(.st-children):not(.st-reviewed):not(.selected):not(.in-focus):not(.reach) { opacity: .5; }
   body.dim .edge:not(.st-added):not(.st-removed):not(.st-modified):not(.selected):not(.in-focus) { opacity: .16; }
   body.dim .edge.st-minor:not(.selected):not(.in-focus) { opacity: .3; }
   body.dim .pin:not(.changed):not(.selected) { opacity: .4; }
@@ -366,6 +368,16 @@
   /* A hunk with no code change loses its red and green, so the eye passes over it. */
   table.diff.trivial { filter: grayscale(1); opacity: .7; }
   .chip-moved { border-color: var(--warn); color: var(--warn); }
+  .chip-decision { border-color: var(--accent); color: var(--accent); }
+  .chip-consequence { border-color: var(--line-strong); color: var(--muted); border-style: dashed; }
+  .decision-head, .consequence-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 10px; font-family: var(--mono); font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); background: var(--bg); }
+  .decision-head { border-left: 3px solid var(--accent); color: var(--fg); }
+  .decision-head.selected { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+  .decision-head .btn { font-family: inherit; }
+  .public-mark { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 1px 6px; border-radius: 2px; background: var(--warn-bg); color: var(--warn); }
+  .decision-panel { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px solid var(--accent); }
+  .decision-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .reach-hunk { padding-left: 26px; }
   .diff-scroll { overflow-x: auto; }
   table.diff { border-collapse: collapse; width: 100%; table-layout: fixed; font-family: var(--code); font-size: 11pt; line-height: 1.4; }
   table.diff caption { font-family: var(--mono); font-size: 12px; text-align: left; padding: 3px 10px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); border-top: 1px solid var(--line); }

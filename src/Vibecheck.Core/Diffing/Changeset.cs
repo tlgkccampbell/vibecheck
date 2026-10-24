@@ -38,6 +38,9 @@ public sealed record Changeset
 
     /// <summary>The hunks of every changed file, including those that no type binds, keyed by the file's path.</summary>
     public required List<FileHunks> Hunks { get; init; }
+
+    /// <summary>Gets the hunks that change a declaration, each with the hunks that follow from it, as <see cref="Clustering"/> finds them.</summary>
+    public List<Decision> Decisions { get; init; } = [];
 }
 
 public sealed record StructuralDiff
@@ -114,6 +117,12 @@ public sealed record FileHunks(string Path, List<Hunk> Hunks, bool? Trivial = nu
 /// </summary>
 public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Trivial = null)
 {
+    /// <summary>
+    /// Gets the identifiers of the decisions this hunk is a consequence of, the one with the most sites in the hunk
+    /// first, or <see langword="null"/> when the hunk is not a consequence. See <see cref="Clustering"/>.
+    /// </summary>
+    public List<string>? Follows { get; init; }
+
     /// <summary>Reads the base and head line ranges of the hunk's header, such as <c>@@ -12,7 +12,9 @@</c>, as zero-based first lines and counts.</summary>
     public bool TryRanges(out (int Start, int Count) old, out (int Start, int Count) now)
     {
@@ -129,3 +138,29 @@ public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Tri
     [GeneratedRegex(@"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")]
     private static partial Regex HeaderPattern();
 }
+
+/// <summary>
+/// A hunk that holds a declaration added, removed, reshaped, renamed or moved, with the hunks that follow from it. The
+/// identifier is the file and the hunk's index joined by <c>#</c>. A decision is public when any of its declarations can
+/// be seen outside its assembly, where callers may exist that the changeset cannot show. See
+/// <c>docs/attention.md</c> section 4.
+/// </summary>
+public sealed record Decision(string Id, string File, int Hunk, bool Public, List<DecisionDeclaration> Declarations, List<Consequence> Consequences)
+{
+    /// <summary>
+    /// Gets the files whose every hunk is trivial or a consequence of this decision alone, which the decision's mark
+    /// action marks reviewed. A file with any other edit, including a line that only another decision explains, is
+    /// left out.
+    /// </summary>
+    public List<string> Marks { get; init; } = [];
+}
+
+/// <summary>
+/// A declaration that a decision changes: its symbol at head, or at base when it was removed, how it changed as
+/// <see cref="DeclarationChange"/> says, its kind and accessibility, the number of sites that reference it at each end,
+/// and its symbol at base when it was renamed or moved.
+/// </summary>
+public sealed record DecisionDeclaration(string Symbol, string Change, string Kind, string Accessibility, int SitesBase, int SitesHead, string? Previous = null);
+
+/// <summary>A hunk that follows from a decision, by its file and its index, with the number of its changed lines that reference the decision's declarations.</summary>
+public sealed record Consequence(string File, int Hunk, int Lines);

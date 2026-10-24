@@ -26,6 +26,7 @@ public static class ChangesetBuilder
     public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null, IReadOnlyList<GitChange>? changes = null)
     {
         var files = DiffFiles(baseFacts, headFacts, changes ?? []);
+        var (decisions, clustered) = Clustering.Apply(baseFacts, headFacts, files, hunks ?? []);
         return new Changeset
         {
             Base = baseFacts.Commit,
@@ -39,7 +40,8 @@ public static class ChangesetBuilder
             Metrics = DiffMetrics(baseFacts, headFacts),
             Levels = headFacts.Levels,
             Views = headFacts.Views,
-            Hunks = hunks ?? [],
+            Hunks = clustered,
+            Decisions = decisions,
         };
     }
 
