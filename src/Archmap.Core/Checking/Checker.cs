@@ -329,8 +329,7 @@ public static class Checker
         }
         var types = leafOf.Count(kv => inside(kv.Value));
         var attributed = boundBy.Count(kv => kv.Value == "attribute" && inside(leafOf[kv.Key]));
-        var total = internalCount + crossing;
-        return new NodeMetrics(types, internalCount, crossing, total == 0 ? 0 : Math.Round((double)internalCount / total, 3), attributed);
+        return new NodeMetrics(types, internalCount, crossing, attributed);
     }
 
     /// <summary>Lifts the leaf-pair edges to every level and finds the cycles among each level's children.</summary>

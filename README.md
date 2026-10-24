@@ -75,8 +75,8 @@ behind one edge.
 3. The model writes the map: a tree of concepts with a purpose line each, leaves
    bound by namespace pattern where a namespace follows the concept and by exact
    type name where it does not.
-4. `archmap check` answers with cycles, unsorted types and, in the facts, cohesion
-   per node. `archmap why a b` explains an edge. Revise and repeat.
+4. `archmap check` answers with cycles, unsorted types and, in the facts, the
+   references inside and across each node. `archmap why a b` explains an edge. Revise and repeat.
 
 ## Viewer mock
 

@@ -256,7 +256,7 @@ show its leaves as it would show a container's children.
 
 A view changes nothing about bindings or facts. Every edge the facts record is
 between two leaves, so the viewer aggregates the same edges under the tree or under
-any view of a level, and the same cohesion and cycle metrics are computed for a
+any view of a level, and the same reference counts and cycles are computed for a
 view's groups as for a container's children. Views are therefore cheap to propose,
 cheap to evaluate, and cheap to discard.
 
@@ -339,9 +339,8 @@ complete before a change merges.
 
 The checker computes, for every container and for the root, the edges among its
 children with their reference counts and the cycles among them, and for every node
-the number of types it holds, the number of references that stay inside it, the
-number that cross its boundary, and the ratio of the first to their sum, which this
-document calls cohesion. The same is computed for every view's groups.
+the number of types it holds, the number of references that stay inside it, and the
+number that cross its boundary. The same is computed for every view's groups.
 
 These numbers are not rules. They are the graph's answer to a proposed grouping,
 and section 5 says how they are used.
@@ -439,8 +438,9 @@ that a wrong grouping reliably shows:
 - A cycle among a level's children, where a type was placed by its name in a
   component that the code puts on the other side of a boundary. In the first trial
   of this process, every top-level cycle was such a misplacement.
-- A leaf whose cohesion is near zero, which is either a facade that everything
-  calls, and is fine, or a split finer than the code supports.
+- A leaf with almost no references inside it and many across its boundary, which
+  is either a facade that everything calls, and is fine, or a split finer than the
+  code supports.
 - A boundary that severs a heavy edge, visible as the largest counts among a
   level's edges.
 
@@ -455,7 +455,7 @@ than concepts, and a clustering has no notion of names.
 ### 5.4 Views
 
 The same loop proposes views. A view is a regrouping of the leaves under one level,
-and `check` reports the cohesion of each group and the cycles among groups exactly
+and `check` reports the reference counts of each group and the cycles among groups exactly
 as it does for the tree, so that a proposed concern-based grouping of the top level
 is judged by the same numbers as the tree is.
 
@@ -494,9 +494,9 @@ viewer consumes two of these and never reads the code or the map directly.
   "leafEdges": [ { "from": "billing.core", "to": "auth", "count": 17 } ],
   "externalRefs": [ { "from": "Example.Billing.Core.Charge", "assembly": "Stripe", "symbol": "Stripe.ChargeService.Create", "file": "…", "line": 30, "count": 4, "external": "stripe" } ],
   "unresolvable": [ { "from": "…", "symbol": "…", "reason": "…", "file": "…", "line": 1 } ],
-  "nodes": { "billing": { "types": 40, "internal": 212, "crossing": 9, "cohesion": 0.96, "attributed": 1 } },
+  "nodes": { "billing": { "types": 40, "internal": 212, "crossing": 9, "attributed": 1 } },
   "levels": { "root": { "edges": [ { "from": "billing", "to": "auth", "count": 17 } ], "cycles": [] } },
-  "views": { "by-concern": { "groups": { "payments": { "types": 31, "internal": 180, "crossing": 20, "cohesion": 0.9, "attributed": 0 } }, "edges": [ { "from": "edges", "to": "payments", "count": 12 } ], "cycles": [] } },
+  "views": { "by-concern": { "groups": { "payments": { "types": 31, "internal": 180, "crossing": 20, "attributed": 0 } }, "edges": [ { "from": "edges", "to": "payments", "count": 12 } ], "cycles": [] } },
   "violations": [ { "rule": "well-formedness", "message": "…" } ],
   "warnings": [ "3 types are unsorted" ]
 }

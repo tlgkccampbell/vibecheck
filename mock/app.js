@@ -944,7 +944,6 @@
     metrics.append(el("span", {}, "files ", el("b", {}, String(content.files)), content.added + content.removed + content.modified ? ` · +${content.added} −${content.removed} ~${content.modified}` : ""));
     metrics.append(stat("internal refs", mb ? mb.internal : null, mh ? mh.internal : null));
     metrics.append(stat("crossing refs", mb ? mb.crossing : null, mh ? mh.crossing : null));
-    metrics.append(stat("cohesion", mb ? mb.cohesion : null, mh ? mh.cohesion : null, (x) => x.toFixed(2)));
     wrap.append(metrics);
 
     // Changed types with their files and hunks.
@@ -1124,7 +1123,6 @@
       const m = metricsOf(id);
       if (m.head) box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
       else if (id === ROOT) box.append(kv("Types", deltaText(CS.types.filter((t) => t.leafBase).length, CS.types.filter((t) => t.leafHead).length)));
-      if (m.head && !l.view) box.append(kv("Cohesion", deltaText(m.base ? m.base.cohesion : null, m.head.cohesion, (x) => x.toFixed(2))));
       box.append(kv("Edges drawn", `${level.edges.length} · ${changedText(level.edges)}`));
       box.append(kv("Cycles", String(level.cycles.length)));
       level.cycles.forEach((cyc, i) => {
@@ -1146,7 +1144,6 @@
         box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
         box.append(kv("Internal refs", deltaText(m.base ? m.base.internal : null, m.head.internal)));
         box.append(kv("Crossing refs", deltaText(m.base ? m.base.crossing : null, m.head.crossing)));
-        box.append(kv("Cohesion", deltaText(m.base ? m.base.cohesion : null, m.head.cohesion, (x) => x.toFixed(2))));
       }
       box.append(kv("Files", `${content.files}` + (content.added + content.removed + content.modified ? ` · +${content.added} −${content.removed} ~${content.modified}` : "")));
       if (level.inCycle.has(child.key)) {

@@ -67,10 +67,9 @@ public sealed record UnresolvableFact(string From, string Symbol, string Reason,
 
 /// <summary>
 /// Counts for a node or a group: the types it holds, the references that stay inside
-/// it, the references that cross its boundary, the ratio of the first to their sum,
-/// and the types bound by attribute.
+/// it, the references that cross its boundary, and the types bound by attribute.
 /// </summary>
-public sealed record NodeMetrics(int Types, int Internal, int Crossing, double Cohesion, int Attributed);
+public sealed record NodeMetrics(int Types, int Internal, int Crossing, int Attributed);
 
 /// <summary>The edges among a level's children with their counts, and the cycles among them.</summary>
 public sealed record LevelMetrics(List<EdgeCount> Edges, List<List<string>> Cycles);

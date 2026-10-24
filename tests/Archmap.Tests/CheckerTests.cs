@@ -206,9 +206,9 @@ public class CheckerTests
     {
         var facts = Run();
         // Inside a: Thing→Other and Thing→Helper. Crossing a: Thing→Result and Thing→Ext.Sdk.
-        Assert.Equal(new NodeMetrics(3, 2, 2, 0.5, 0), facts.Nodes["a"]);
-        Assert.Equal(new NodeMetrics(2, 1, 3, 0.25, 0), facts.Nodes["a.x"]);
-        Assert.Equal(new NodeMetrics(2, 0, 2, 0, 0), facts.Nodes["shared"]);
+        Assert.Equal(new NodeMetrics(3, 2, 2, 0), facts.Nodes["a"]);
+        Assert.Equal(new NodeMetrics(2, 1, 3, 0), facts.Nodes["a.x"]);
+        Assert.Equal(new NodeMetrics(2, 0, 2, 0), facts.Nodes["shared"]);
         Assert.False(facts.Nodes.ContainsKey(ArchMap.Unsorted));
     }
 
@@ -242,7 +242,7 @@ public class CheckerTests
         Assert.Single(view.Edges);
         Assert.Empty(view.Cycles);
         // Front holds Thing, Helper and Service: Thing→Helper stays inside; Thing→Other, Thing→Result, Service→Error and Thing→Ext cross.
-        Assert.Equal(new NodeMetrics(3, 1, 4, 0.2, 0), view.Groups["front"]);
+        Assert.Equal(new NodeMetrics(3, 1, 4, 0), view.Groups["front"]);
     }
 
     [Fact]
