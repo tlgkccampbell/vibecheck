@@ -80,30 +80,19 @@ public static class RevisionChangeset
 
     private static async Task<AnalysisResult> CheckOutAndAnalyzeAsync(string top, AnalysisTarget target, string commit, SolutionAnalyzer analyze, IProgress<string>? progress, CancellationToken ct)
     {
-        var scratch = Path.Combine(Path.GetTempPath(), "archmap-" + Guid.NewGuid().ToString("N")[..12]);
-        var added = false;
-        try
+        progress?.Report("checking out " + commit[..Math.Min(8, commit.Length)]);
+        using var worktree = Worktree.Add(top, commit);
+        var root = Path.GetFullPath(Path.Combine(worktree.Path, target.Root));
+        var solution = Path.Combine(root, target.Solution);
+        if (!File.Exists(solution)) throw new IOException($"{target.Solution} does not exist at {commit[..Math.Min(8, commit.Length)]}");
+        if (target.Build)
         {
-            progress?.Report("checking out " + commit[..Math.Min(8, commit.Length)]);
-            Git.Run(top, "worktree", "add", "--detach", "--quiet", scratch, commit);
-            added = true;
-            var root = Path.GetFullPath(Path.Combine(scratch, target.Root));
-            var solution = Path.Combine(root, target.Solution);
-            if (!File.Exists(solution)) throw new IOException($"{target.Solution} does not exist at {commit[..Math.Min(8, commit.Length)]}");
-            if (target.Build)
-            {
-                progress?.Report("building");
-                await SolutionBuild.RunAsync(solution, ct);
-            }
-            var analysis = await analyze(root, solution, progress, ct);
-            foreach (var w in analysis.Warnings) progress?.Report("warning: " + w);
-            return analysis;
+            progress?.Report("building");
+            await SolutionBuild.RunAsync(solution, ct);
         }
-        finally
-        {
-            if (added) Git.TryRun(top, "worktree", "remove", "--force", scratch);
-            DeleteQuietly(scratch);
-        }
+        var analysis = await analyze(root, solution, progress, ct);
+        foreach (var w in analysis.Warnings) progress?.Report("warning: " + w);
+        return analysis;
     }
 
     /// <summary>Applies a map to the analysis of one commit and returns the facts, throwing when the map cannot be used there.</summary>
@@ -121,20 +110,5 @@ public static class RevisionChangeset
     private sealed class PrefixedProgress(IProgress<string> inner, string prefix) : IProgress<string>
     {
         public void Report(string value) => inner.Report(prefix + value);
-    }
-
-    /// <summary>Deletes a directory that git may have left behind, clearing the read-only flag git puts on its object files.</summary>
-    private static void DeleteQuietly(string dir)
-    {
-        if (!Directory.Exists(dir)) return;
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) File.SetAttributes(file, FileAttributes.Normal);
-            Directory.Delete(dir, recursive: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A file still held open, such as by a build server, leaves the directory for the system to clean.
-        }
     }
 }
