@@ -10,6 +10,9 @@ listing of the code's types and verified against the dependency graph.
 The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step review
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
+Directing the reviewer's attention, with decisions and their consequences, semantic
+triviality, a reading path, new concepts and a glossary, is designed in
+[docs/attention.md](docs/attention.md); none of it is built yet.
 
 ## Layout
 
