@@ -7,8 +7,10 @@ the code and reports it per pair of components, and a viewer renders changesets 
 schematic that reviewers drill into. The map is proposed by a language model from a
 listing of the code's types and verified against the dependency graph.
 
-The design is in [docs/archmap-spec.md](docs/archmap-spec.md). The interaction mock is
-in [mock/](mock/).
+The design is in [docs/archmap-spec.md](docs/archmap-spec.md). The planned one-step
+review workflow, with generated maps and narratives, is in
+[docs/review-workflow.md](docs/review-workflow.md). The interaction mock is in
+[mock/](mock/).
 
 ## Layout
 
