@@ -8,25 +8,23 @@ namespace Archmap.Diffing;
 /// </summary>
 public static class GitHunks
 {
-    /// <summary>Returns the hunks of the given files between two revisions, with trivial edits marked.</summary>
+    /// <summary>
+    /// Returns the hunks of the given files between two revisions, with trivial edits marked. The paths given and
+    /// returned are relative to <paramref name="repo"/>, which may be any directory inside the repository.
+    /// </summary>
     public static List<FileHunks> Collect(string repo, string baseRev, string headRev, IEnumerable<string> paths)
     {
         var list = paths.ToList();
         if (list.Count == 0) return [];
-        var args = new List<string> { "-C", repo, "diff", "--no-color", "--no-renames", "--unified=3", baseRev, headRev, "--" };
+        // Paths in and out are relative to the directory given, which may lie below the repository's top.
+        var args = new List<string> { "diff", "--no-color", "--no-renames", "--relative", "--unified=3", baseRev, headRev, "--" };
         args.AddRange(list);
-        var psi = new ProcessStartInfo("git") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("git could not be started");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        if (process.ExitCode != 0) throw new InvalidOperationException("git diff failed: " + error.Trim());
+        var output = Git.Run(repo, [.. args]);
         var files = Parse(output);
         var marked = files.Where(f => TrivialEdits.Applies(f.Path)).ToList();
-        var texts = ReadBlobs(repo, marked.SelectMany(f => new[] { baseRev + ":" + f.Path, headRev + ":" + f.Path }).ToList());
+        var texts = ReadBlobs(repo, marked.SelectMany(f => new[] { baseRev + ":./" + f.Path, headRev + ":./" + f.Path }).ToList());
         return files.Select(f =>
-            texts.TryGetValue(baseRev + ":" + f.Path, out var before) && texts.TryGetValue(headRev + ":" + f.Path, out var after)
+            texts.TryGetValue(baseRev + ":./" + f.Path, out var before) && texts.TryGetValue(headRev + ":./" + f.Path, out var after)
                 ? TrivialEdits.Mark(f, before, after) : f).ToList();
     }
 

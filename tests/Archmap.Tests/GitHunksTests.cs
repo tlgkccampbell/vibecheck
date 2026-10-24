@@ -42,4 +42,17 @@ public class GitHunksTests
         Assert.Equal(2, files[1].Hunks.Single().Lines.Count);
         Assert.Equal(["-", "gone"], files[2].Hunks.Single().Lines.Single());
     }
+
+    [Fact]
+    public void PathsAreRelativeToTheDirectoryGivenWhenItIsBelowTheRepositoryTop()
+    {
+        using var repo = new TempRepo();
+        repo.Write("sub/A.cs", "class A { }\n");
+        var before = repo.Commit("one");
+        repo.Write("sub/A.cs", "// A comment.\nclass A { }\n");
+        var after = repo.Commit("two");
+        var file = GitHunks.Collect(Path.Combine(repo.Path, "sub"), before, after, ["A.cs"]).Single();
+        Assert.Equal("A.cs", file.Path);
+        Assert.True(file.Trivial);
+    }
 }
