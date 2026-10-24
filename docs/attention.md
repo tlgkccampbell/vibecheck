@@ -156,10 +156,26 @@ and the decision's declaration as a link, and open on a click like a reviewed fi
 diff. A file whose hunks are all consequences sorts after files with decisions and
 before reviewed files, and its chip says `consequence`.
 
-Selecting a decision, from its header or from the path, lists its consequences in the
-details panel grouped by block, each opening its hunk, and marks those blocks on the
-map while the decision stays selected. A decision in `shared.kernel` with
-consequences in six blocks is a change whose reach the map was built to show.
+The Changes panel lists every decision in the changeset, so that the reviewer sees the
+decisions as a whole before meeting any of them in a diff. The list is headed by an
+account of the changed hunks: how many are decisions, how many follow from them, how
+many are trivial, and how many are edits on their own, which is the volume the
+reviewer must read as it is. The rows are ordered by reach, the most blocks first,
+then the most files, then public before private, and each names its kind of change
+and its declaration and counts its consequences and the blocks they land in. Hovering
+a row brings out the block the decision is in and the blocks it reaches on the map, as
+hovering a block brings out its neighborhood. Each block on the map carries a badge
+with the number of decisions its files hold, so the map says where the causes are
+before anything is selected.
+
+Selecting a decision, from a row, from its header or from the path, lists its
+consequences in the details panel grouped by block, each opening its hunk, and marks
+its block as the source and the blocks that hold its consequences as the reach while
+the decision stays selected, with an arrow from the source to each reached block that
+counts the hunks it points at. Selecting from a row also moves the map to the level
+that draws the source and the reach as separate blocks, unless the level on screen
+already does. A decision in `shared.kernel` with consequences in six blocks is a
+change whose reach the map was built to show.
 
 A decision's header offers **Mark consequences reviewed**. It marks every file whose
 changed hunks are all consequences of this decision, or trivial, and reports how many

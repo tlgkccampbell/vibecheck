@@ -248,9 +248,15 @@ outside the solution may exist, and counts its consequences. A hunk whose every 
 line is blank, a comment, or a use of a declaration a decision changed is a
 **consequence**: it is collapsed to one line that names its decision, and a file of
 nothing but consequences says `consequence` on its chip and sorts after the files with
-decisions. Selecting a decision lists its consequences by block in the details panel and
-outlines those blocks on the map. **Mark consequences reviewed** marks the files whose
-edits that decision alone explains, and says how many it left.
+decisions. The Changes panel lists every decision in the changeset, widest reach first,
+under an account of how many hunks are decisions, follow from them, are trivial, or are
+edits on their own, and each block on the map carries a badge with the number of decisions
+its files hold. Hovering a decision in the list brings out the blocks it is in and
+reaches, and selecting one, from the list or from its header, lists its consequences by
+block in the details panel, outlines its block and the blocks it reaches on the map, and
+draws an arrow from the one to each of the others with the number of hunks it points at.
+**Mark consequences reviewed** marks the files whose edits that decision alone explains,
+and says how many it left.
 
 To write a changeset document without the viewer, run `changeset` from the repository:
 
