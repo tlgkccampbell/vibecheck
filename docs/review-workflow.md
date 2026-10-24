@@ -139,32 +139,45 @@ the skeleton serves only until the generated map is ready.
 Map generation runs the bootstrapping loop of spec section 5.3 without a person in
 it:
 
-1. Build the unit listing from the head analysis, with the skeleton's exclusions.
-2. Ask Claude to propose a map from the listing (section 7). The response is a map
-   document, validated by the map reader.
-3. Check the proposal against the head analysis. Collect the cycles at each level,
-   the unsorted types, and the type pairs behind each cycle edge, as `archmap why`
-   reports them.
+1. Build the unit listing from both ends' analyses together, with the skeleton's
+   exclusions, so that types that exist only at base are bound as well.
+2. Ask Claude to propose a map from the listing (section 7). The answer lists nodes
+   and views in a fixed shape; the tool adds the skeleton's solution, exclusions and
+   externals, and the map reader validates the result.
+3. Check the proposal against the analysis. Collect the format errors of a proposal
+   that cannot be used, and otherwise the unsorted types, the types two leaves claim
+   equally, the cycles at each level with the type pairs behind each edge as
+   `archmap why` reports them, the cycles among a view's groups, and leaves of more
+   than sixty types.
 4. If anything was found, send the findings back with the proposal and ask for a
-   revision. Stop after three rounds or when nothing is found.
-5. Place the types that exist only at base (section 4.5), so that removed types do
-   not fall into `unsorted`.
+   revision. Stop when nothing is found, after three rounds, or when a usable
+   revision does not reduce the number of findings. The last case usually means a
+   cycle in the code itself, which no grouping removes.
+5. Keep the usable proposal with the fewest findings, preferring the later of two
+   that tie.
 
-The result is stored as the repository's generated map and reused by every later
-review of that repository, which keeps the picture stable from one review to the
-next. The viewer's notice offers to switch to it, since switching changes the layout
-under the reader. A "Save map to repository" action writes it, with its layout file,
-to the repository root, where it becomes source 2 of section 4.3 from then on.
+The prompts are in `src/Archmap.Core/Assist/Prompts`. The result is stored as the
+solution's generated map, version 1, and reused by every later review of that
+solution, which keeps the picture stable from one review to the next. Each version
+is kept. The viewer's notice offers to switch to it, since switching changes the
+layout under the reader; the switch reruns the review, which costs no compilation.
+A "Save to repository" action writes the map as `archmap.json` beside the solution,
+where reviews of the uncommitted work find it at once and reviews of later commits
+find it once it is committed. The action never overwrites an existing file.
 
 ### 4.5 Place new types
 
 A review whose generated map leaves types unsorted at either end asks Claude to
-place them. The request lists the unsorted units, the map's leaves with their
-purposes, and each unit's heaviest references by leaf. Claude answers with a leaf
-for each unit, or a new leaf under an existing container with a name and purpose.
-The answer is checked as in section 4.4 and merged into the generated map as exact
-type bindings, which is a new version of that map. A map the repository owns is
-never changed this way.
+place them. The request lists the unsorted types by full name, the map's leaves with
+their purposes and a few of their types, the map's views and groups, and, as
+context, the units the unsorted types belong to with their heaviest references. A
+type is placed by name rather than by unit, because a helper folds into the unit of
+the type that uses it, and that unit is usually placed already. Claude answers with
+a leaf for each type, adding a leaf under a container where none fits. A new leaf
+joins one group of every view whose level holds it: the group Claude names, or else
+the group holding most of its siblings. The result is checked and stored as exact
+type bindings in a new version of the generated map, which the viewer offers like
+the first. A map the repository owns is never changed this way.
 
 ### 4.6 Uncommitted work
 
@@ -275,14 +288,39 @@ The tool calls the Claude Code command line in print mode. Each request runs
   document of a known shape.
 - `--no-session-persistence`, so that reviews do not fill the reviewer's session
   history.
-- `--allowedTools` limited to Read, Grep and Glob, with every tool that writes or
-  runs commands disallowed.
-- `--model`, when the reviewer has configured one for the task. The defaults are
-  the Claude Code default for map proposals and a faster model for narratives.
+- `--restricted` and `--strict-mcp-config`, so that the call loads none of the
+  reviewer's settings, hooks or MCP servers and its file tools stay inside its
+  working directory. It still runs on the signed-in account.
+- `--tools` naming only what the request needs, with the same list in
+  `--allowedTools` so that nothing asks for permission: no tools for map proposals
+  and placements, which carry everything in the prompt, and Read, Grep and Glob for
+  narratives.
+- `--model`, always, so that the tool's choice and not the reviewer's Claude Code
+  settings decides the model. The defaults below are pinned to exact identifiers,
+  and `archmap review --model <model>` replaces them for every request.
+
+The defaults were chosen by measurement. Each model generated the map of this
+repository (81 types) from the same range, and then placed the ten types of a new
+namespace into its own map:
+
+| Model | Generation | Rounds | Findings left | Placement |
+|---|---|---|---|---|
+| `claude-opus-5-5` | 83 s, $0.30 | 2 | 0 | 8 s, $0.047 |
+| `claude-sonnet-5-5` | 78 s, $0.22 | 2 | 0 | 4 s, $0.030 |
+| `claude-haiku-5-5` | 434 s, $0.06 | 3 | 2 | 17 s, $0.003 |
+
+Opus wrote the clearest map, with concepts that cut across namespaces where the
+code does; Sonnet's followed namespaces more closely, and Haiku's merged unrelated
+parts. Opus and Sonnet placed the new types identically. A map is generated once per
+solution and every later review draws with it, so map generation uses
+`claude-opus-5-5`; placement uses `claude-sonnet-5-5`. Narratives will be measured
+the same way in phase 4.
 
 The calls go through one interface, `IClaude`, with the real implementation and a
 canned one that tests use. Prompts and schemas are files in the tool, versioned
-together, and the prompt version is part of every cache key that depends on it.
+together. A generated map is kept until it is regenerated, whatever the prompt
+version, since its stability is the point; narratives will key their cache by the
+prompt version.
 
 If `claude` is not on the path or not signed in, the review proceeds without the
 steps that need it. The skeleton serves as the map, the viewer shows counts, and a
@@ -307,7 +345,7 @@ Each phase ends with the tool usable, and with tests that state its new behavior
 2. **Uncommitted work.** The synthetic head of section 4.6 and its picker entry.
    (Done.)
 3. **Generated maps.** `IClaude`, map generation, placement of new types, the switch
-   notice and the save action.
+   notice and the save action. (Done.)
 4. **Narratives.** Inputs, batching, checking, streaming, and the tooltip, panel and
    summary in the viewer.
 5. **Claude Code integration.** An `/archmap` skill that opens a review of the
@@ -333,8 +371,6 @@ These land in [archmap-spec.md](archmap-spec.md) with the phase that makes them 
 
 - Whether the switch from skeleton to generated map should keep the reader's place,
   by opening the concept-map level that holds the leaf they were looking at.
-- Whether `--bare` mode suits these calls. It would keep the reviewer's own hooks and
-  instructions out of them, but it may not use the signed-in account.
 - How large a range stays useful. A range of a hundred commits has a long commit
   message list and many changed edges, and the batch limits may need to scale with it.
 - Whether pull requests whose commits are not present locally should be fetched, which

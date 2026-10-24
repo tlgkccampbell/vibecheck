@@ -4,8 +4,10 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Archmap.Assist;
 using Archmap.Checking;
 using Archmap.Diffing;
+using Archmap.Model;
 using Archmap.Reviewing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -51,6 +53,15 @@ public sealed record ReviewServerOptions
     /// <summary>Gets a value indicating whether the gh command is asked for open pull requests.</summary>
     public bool PullRequests { get; init; } = true;
 
+    /// <summary>Gets the Claude client that generates maps and places types, or <see langword="null"/> to draw the skeleton alone.</summary>
+    public IClaude? Claude { get; init; }
+
+    /// <summary>Gets the model each kind of request to <see cref="Claude"/> uses.</summary>
+    public ClaudeModels Models { get; init; } = ClaudeModels.Default;
+
+    /// <summary>Gets what a review drawn with the skeleton tells the reviewer when <see cref="Claude"/> is missing, or <see langword="null"/> to say nothing.</summary>
+    public string? ClaudeNotice { get; init; }
+
     /// <summary>Gets a sink for the lines the server prints about each review, or <see langword="null"/>.</summary>
     public Action<string>? Log { get; init; }
 }
@@ -66,6 +77,7 @@ public sealed class ReviewServer : IAsyncDisposable
     private readonly ReviewServerOptions options;
     private readonly string token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
     private readonly ConcurrentDictionary<string, Review> reviews = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, MapJob> mapJobs = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource stopping = new();
     private WebApplication? app;
     private int port;
@@ -125,7 +137,9 @@ public sealed class ReviewServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await stopping.CancelAsync();
-        var running = reviews.Values.Select(r => r.Task).Where(t => t is not null).Cast<Task>().ToArray();
+        Task?[] tasks;
+        lock (mapJobs) tasks = [.. reviews.Values.Select(r => r.Task), .. mapJobs.Values.Select(j => j.Task)];
+        var running = tasks.Where(t => t is not null).Cast<Task>().ToArray();
         await Task.WhenAny(Task.WhenAll(running), Task.Delay(TimeSpan.FromSeconds(15)));
         if (app is not null)
         {
@@ -137,6 +151,18 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private Review Start(Review review)
     {
+        options.Log?.Invoke($"reviewing {review.Label} ({review.Base[..8]}..{review.Head[..8]})");
+        review.Add(new { type = "review", label = review.Label, @base = review.Base, head = review.Head });
+        review.Task = Task.Run(() => RunAsync(review, rerun: false));
+        return review;
+    }
+
+    /// <summary>
+    /// Runs the pipeline for a review and records its result. A first run that fails marks the review failed. A rerun,
+    /// which switches a finished review to a newer map, keeps the result it had when it fails.
+    /// </summary>
+    private async Task RunAsync(Review review, bool rerun)
+    {
         var progress = new Progress(p =>
         {
             options.Log?.Invoke($"  {review.Id} {p.Stage}: {p.Message}");
@@ -146,26 +172,115 @@ public sealed class ReviewServer : IAsyncDisposable
         {
             MapPath = options.MapPath, Root = options.Root, Solution = options.Solution, Build = options.Build,
         };
-        options.Log?.Invoke($"reviewing {review.Label} ({review.Base[..8]}..{review.Head[..8]})");
-        review.Add(new { type = "review", label = review.Label, @base = review.Base, head = review.Head });
-        review.Task = Task.Run(async () =>
+        try
         {
-            try
+            review.Result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
+            foreach (var w in review.Result.Info.Warnings) options.Log?.Invoke($"  {review.Id} warning: {w}");
+            options.Log?.Invoke($"  {review.Id} ready");
+            review.Add(new { type = "ready", url = $"/reviews/{review.Id}/" });
+            ImproveMap(review, review.Result);
+        }
+        catch (Exception ex)
+        {
+            var message = ex is OperationCanceledException ? "cancelled" : ex.Message;
+            options.Log?.Invoke($"  {review.Id} failed: {message}");
+            if (rerun)
             {
-                review.Result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
-                foreach (var w in review.Result.Info.Warnings) options.Log?.Invoke($"  {review.Id} warning: {w}");
-                options.Log?.Invoke($"  {review.Id} ready");
-                review.Add(new { type = "ready", url = $"/reviews/{review.Id}/" });
+                review.Add(new { type = "map", state = "failed", message = "switching to the concept map failed: " + message });
             }
-            catch (Exception ex)
+            else
             {
                 review.Failed = true;
-                var message = ex is OperationCanceledException ? "cancelled" : ex.Message;
-                options.Log?.Invoke($"  {review.Id} failed: {message}");
                 review.Add(new { type = "failed", message });
             }
-        });
-        return review;
+        }
+        finally
+        {
+            review.Rerunning = false;
+        }
+    }
+
+    /// <summary>
+    /// Starts the map work a finished review calls for: generating a concept map when it was drawn with the skeleton,
+    /// and placing the unsorted types when it was drawn with a generated map that leaves some. Reviews of the same
+    /// solution share one job, and each is told when the job finishes. See <c>docs/review-workflow.md</c> sections 4.4
+    /// and 4.5.
+    /// </summary>
+    private void ImproveMap(Review review, ReviewResult result)
+    {
+        var kind = result.Info.MapKind;
+        var unsorted = result.Changeset.Types.Any(t => t.LeafHead == ArchMap.Unsorted || t.LeafBase == ArchMap.Unsorted);
+        if (kind != "skeleton" && !(kind == "generated" && unsorted)) return;
+        if (options.Claude is null || options.Cache is null)
+        {
+            if (kind == "skeleton" && options.ClaudeNotice is not null) review.Add(new { type = "map", state = "unavailable", message = options.ClaudeNotice });
+            return;
+        }
+        var key = result.Target.Root + "|" + result.Target.Solution + "|" + kind + "|" + result.Info.MapVersion;
+        MapJob job;
+        lock (mapJobs)
+        {
+            if (!mapJobs.TryGetValue(key, out job!))
+            {
+                job = new MapJob(kind == "skeleton" ? "generating" : "placing");
+                mapJobs[key] = job;
+                job.Task = Task.Run(() => RunMapJobAsync(key, job, result));
+            }
+            job.Subscribe(review);
+        }
+    }
+
+    private async Task RunMapJobAsync(string key, MapJob job, ReviewResult result)
+    {
+        var analysis = ReviewPipeline.Union(result.HeadAnalysis, result.BaseAnalysis);
+        var progress = new ImmediateProgress(m => { options.Log?.Invoke($"  map: {m}"); job.Report(new { type = "map", state = job.State, message = m }); });
+        try
+        {
+            string text, message;
+            if (job.State == "generating")
+            {
+                var generated = await MapGenerator.GenerateAsync(result.Changeset.Map, analysis, options.Claude!, progress, stopping.Token, options.Models.Map);
+                text = generated.Text;
+                message = generated.Findings.Count == 0 ? "A concept map is ready."
+                    : $"A concept map is ready. The checker still reports {generated.Findings.Count} finding(s) about it.";
+            }
+            else
+            {
+                var placement = await TypePlacer.PlaceAsync(result.Changeset.Map, analysis, options.Claude!, progress, stopping.Token, options.Models.Placement);
+                if (placement is null || placement.Placed == 0) { job.Report(new { type = "map", state = "done" }); return; }
+                text = Format.MapWriter.Write(placement.Map);
+                message = $"An updated concept map places {placement.Placed} new type(s).";
+            }
+            var version = options.Cache!.WriteGeneratedMap(result.Target, text);
+            options.Log?.Invoke($"  map: version {version} written");
+            job.Report(new { type = "map", state = "ready", version, message });
+        }
+        catch (Exception ex)
+        {
+            var message = ex is OperationCanceledException ? "cancelled" : ex.Message;
+            options.Log?.Invoke($"  map: failed: {message}");
+            // A failed job is forgotten, so that the next review of the solution tries again.
+            lock (mapJobs) mapJobs.Remove(key);
+            job.Report(new { type = "map", state = "failed", message = (job.State == "generating" ? "Claude could not generate a concept map: " : "Claude could not place the new types: ") + message });
+        }
+    }
+
+    /// <summary>
+    /// Writes a review's generated map into the repository as <c>archmap.json</c> beside the solution, where reviews of
+    /// the uncommitted work find it at once and reviews of later commits find it once it is committed. An existing file
+    /// is never overwritten.
+    /// </summary>
+    private IResult SaveMap(Review review)
+    {
+        var result = review.Result;
+        if (result is null || result.Info.MapKind != "generated") return Results.BadRequest(new { message = "Only a generated map can be saved." });
+        var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
+        var relative = result.Target.Root == "." ? MapLocator.FileName : result.Target.Root + "/" + MapLocator.FileName;
+        var path = Path.Combine(top, relative);
+        if (File.Exists(path)) return Results.Conflict(new { message = $"{relative} already exists. Delete it, or compare it with the generated map, before saving." });
+        File.WriteAllText(path, Format.MapWriter.Write(result.Changeset.Map));
+        options.Log?.Invoke($"  {review.Id} saved the generated map to {relative}");
+        return Results.Json(new { message = $"Saved {relative}. Commit it to make it the repository's map." }, FactsJson.Options);
     }
 
     /// <summary>
@@ -271,6 +386,27 @@ public sealed class ReviewServer : IAsyncDisposable
             }
         });
 
+        web.MapPost("/api/reviews/{id}/map", async (string id, HttpContext ctx) =>
+        {
+            if (!reviews.TryGetValue(id, out var review) || review.Result is null) return Results.NotFound();
+            var body = await JsonSerializer.DeserializeAsync<MapBody>(ctx.Request.Body, FactsJson.Options);
+            switch (body?.Action)
+            {
+                case "switch":
+                    lock (review)
+                    {
+                        if (review.Rerunning) return Results.Accepted();
+                        review.Rerunning = true;
+                    }
+                    review.Task = Task.Run(() => RunAsync(review, rerun: true));
+                    return Results.Accepted();
+                case "save":
+                    return SaveMap(review);
+                default:
+                    return Results.BadRequest(new { message = "the action must be switch or save" });
+            }
+        });
+
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
             reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
 
@@ -289,7 +425,11 @@ public sealed class ReviewServer : IAsyncDisposable
         {
             if (!reviews.TryGetValue(id, out var r) || r.Result is null) return Results.NotFound();
             var info = r.Result.Info;
-            var meta = new { solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind, warnings = info.Warnings, home = "/" };
+            var meta = new
+            {
+                solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
+                mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count,
+            };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(r.Result.Changeset)}";
             return Results.Text(script, "text/javascript; charset=utf-8");
         });
@@ -307,6 +447,48 @@ public sealed class ReviewServer : IAsyncDisposable
     }
 
     private sealed record BeginBody(string? Range, string? Label);
+
+    private sealed record MapBody(string? Action);
+
+    /// <summary>Reports progress on the calling thread as it arrives.</summary>
+    private sealed class ImmediateProgress(Action<string> report) : IProgress<string>
+    {
+        public void Report(string value) => report(value);
+    }
+
+    /// <summary>
+    /// Represents one map generation or placement for a solution, and the reviews waiting on it. A review that
+    /// subscribes late is sent the job's latest event, so that it shows the job's state at once.
+    /// </summary>
+    private sealed class MapJob(string state)
+    {
+        private readonly List<Review> subscribers = [];
+        private object? latest;
+
+        /// <summary>Gets the job's kind as the viewer names its state: <c>generating</c> or <c>placing</c>.</summary>
+        public string State { get; } = state;
+
+        public Task? Task { get; set; }
+
+        public void Subscribe(Review review)
+        {
+            lock (subscribers)
+            {
+                if (subscribers.Contains(review)) return;
+                subscribers.Add(review);
+                review.Add(latest ?? new { type = "map", state = State, message = State == "generating" ? "Claude is generating a concept map." : "Claude is placing the new types." });
+            }
+        }
+
+        public void Report(object e)
+        {
+            lock (subscribers)
+            {
+                latest = e;
+                foreach (var r in subscribers) r.Add(e);
+            }
+        }
+    }
 
     /// <summary>Reports progress on the calling thread as it arrives.</summary>
     private sealed class Progress(Action<ReviewProgress> report) : IProgress<ReviewProgress>
@@ -331,16 +513,21 @@ public sealed class ReviewServer : IAsyncDisposable
         public Task? Task { get; set; }
         public ReviewResult? Result { get; set; }
         public bool Failed { get; set; }
+        public bool Rerunning { get; set; }
+
+        /// <summary>Gets the number of events recorded so far.</summary>
+        public int Count { get { lock (events) return events.Count; } }
         public string State => Failed ? "failed" : Result is not null ? "ready" : "running";
 
-        /// <summary>Records an event and wakes every stream waiting for one.</summary>
+        /// <summary>Records an event with its sequence number, and wakes every stream waiting for one.</summary>
         public void Add(object e)
         {
-            var json = JsonSerializer.Serialize(e, FactsJson.Options);
+            var node = JsonSerializer.SerializeToNode(e, FactsJson.Options)!.AsObject();
             TaskCompletionSource old;
             lock (events)
             {
-                events.Add(json);
+                node["seq"] = events.Count;
+                events.Add(node.ToJsonString(FactsJson.Options));
                 old = signal;
                 signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             }

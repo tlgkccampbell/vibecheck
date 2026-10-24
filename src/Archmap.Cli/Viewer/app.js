@@ -1598,6 +1598,59 @@
     apply(read());
   }
 
+  // ---------- Map notices ----------
+
+  // Follows the review's event stream when the archmap server serves the page. A concept map that Claude is making, or
+  // has made, shows as a notice under the top bar. Switching to it reruns the review on the server, and the page
+  // reloads when the rerun is ready. Events up to META.events were sent before the page loaded, so a "ready" among
+  // them is the one that opened this page; map events are always read, since a job may have started before it.
+  function followReview() {
+    const box = $("#notice");
+    const api = `/api/reviews/${encodeURIComponent(META.review)}`;
+    let switching = false, shown = null, dismissed = null;
+    const spinner = () => el("span", { class: "spin", "aria-hidden": "true" });
+    function show(kind, key, ...kids) {
+      shown = key;
+      if (key === dismissed) return;
+      box.className = "notice " + kind;
+      box.replaceChildren(...kids, el("button", { class: "close", title: "Dismiss", "aria-label": "Dismiss", onclick: () => { dismissed = shown; box.hidden = true; } }, "×"));
+      box.hidden = false;
+    }
+    async function post(action) {
+      const r = await fetch(`${api}/map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+      return { ok: r.ok, body: await r.json().catch(() => ({})) };
+    }
+    function switchMap() {
+      switching = true;
+      show("busy", "switch", spinner(), el("span", {}, "Switching to the concept map…"));
+      post("switch");
+    }
+    async function save() {
+      const r = await post("save");
+      show(r.ok ? "info" : "error", "save", el("span", {}, r.body.message || "The map could not be saved."));
+    }
+    // Shows what the page has when no job has news: the generated map's version and the save action, or nothing.
+    function settle() {
+      if (META.mapKind !== "generated") { shown = null; box.hidden = true; return; }
+      show("info", "generated", el("span", {}, `Drawn with the concept map Claude generated for this repository (version ${META.mapVersion}).`),
+        el("button", { class: "btn", onclick: save }, "Save to repository"));
+    }
+    settle();
+    const source = new EventSource(`${api}/events`);
+    source.onmessage = (m) => {
+      const e = JSON.parse(m.data);
+      const fresh = e.seq >= META.events;
+      if (e.type === "ready" && fresh) { source.close(); location.reload(); }
+      else if (e.type === "stage" && fresh && switching) show("busy", "switch", spinner(), el("span", {}, `Switching to the concept map: ${e.message}`));
+      else if (e.type === "map" && !switching) {
+        if (e.state === "generating" || e.state === "placing") show("busy", "job", spinner(), el("span", {}, e.message));
+        else if (e.state === "ready" && e.version > (META.mapVersion || 0)) show("ready", "ready" + e.version, el("span", {}, e.message), el("button", { class: "btn", onclick: switchMap }, "Switch to it"));
+        else if (e.state === "ready" || e.state === "done") settle();
+        else if (e.state === "failed" || e.state === "unavailable") show("error", e.state, el("span", {}, e.message));
+      } else if (e.type === "map" && e.state === "failed") { switching = false; show("error", "failed", el("span", {}, e.message)); }
+    };
+  }
+
   // ---------- Boot ----------
 
   async function boot() {
@@ -1610,6 +1663,7 @@
       $("#pr code").after(el("span", {}, META.mapKind === "skeleton" ? " · skeleton map" : " · map"));
       $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
     }
+    if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
     $("#trivial").addEventListener("change", async (ev) => { rememberView(); state.opts.trivial = ev.target.checked; const m = await mount(); if (m) setViewBox(arrive(m)); });
     $("#flow").addEventListener("change", (ev) => document.body.classList.toggle("flow", ev.target.checked));

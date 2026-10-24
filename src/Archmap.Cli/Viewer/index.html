@@ -74,6 +74,17 @@
   .pr { color: var(--muted); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
   .pr code { font-family: var(--mono); font-size: 12px; }
   .pr a { color: var(--accent); }
+
+  /* The notice under the top bar, which the archmap server's map events fill. */
+  .notice { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 13px; }
+  .notice > span:not(.spin) { flex: 1; min-width: 0; }
+  .notice.busy { border-color: var(--accent); }
+  .notice.ready { border-color: var(--added); background: var(--added-bg); }
+  .notice.error { border-color: var(--removed); background: var(--removed-bg); }
+  .notice .close { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 4px; }
+  .notice .spin { width: 12px; height: 12px; flex: none; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: notice-spin 0.9s linear infinite; }
+  @keyframes notice-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .notice .spin { animation: none; } }
   .nav-buttons { display: inline-flex; gap: 8px; flex: none; }
   .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .crumb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
@@ -356,6 +367,7 @@
     <span class="toggle">Theme <span class="seg" id="theme" title="Follow the system, or always use light or dark"><button data-theme-choice="auto">auto</button><button data-theme-choice="light">light</button><button data-theme-choice="dark">dark</button></span></span>
   </div>
 </div>
+<div class="notice" id="notice" role="status" hidden></div>
 
 <div class="main">
   <aside>

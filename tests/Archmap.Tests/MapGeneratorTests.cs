@@ -1,0 +1,210 @@
+using System.Text.Json;
+using Archmap.Assist;
+using Archmap.Bootstrap;
+using Archmap.Format;
+using Archmap.Model;
+using Archmap.Reviewing;
+using Xunit;
+
+namespace Archmap.Tests;
+
+/// <summary>Stands in for Claude: answers each request with the next canned answer, and records the requests.</summary>
+internal sealed class FakeClaude(params string[] answers) : IClaude
+{
+    private readonly Queue<string> answers = new(answers);
+
+    public List<ClaudeRequest> Requests { get; } = [];
+
+    public Task<JsonElement> AskAsync(ClaudeRequest request, CancellationToken ct = default)
+    {
+        lock (Requests) Requests.Add(request);
+        if (answers.Count == 0) throw new ClaudeException("no answer left");
+        return Task.FromResult(JsonDocument.Parse(answers.Dequeue()).RootElement.Clone());
+    }
+}
+
+public class MapGeneratorTests
+{
+    /// <summary>A proposal for the synthetic analysis that binds every type, with one view.</summary>
+    internal const string Complete = """
+        { "nodes": [
+            { "id": "app", "name": "App", "purpose": "The application.", "category": "domain" },
+            { "id": "app.x", "name": "Things", "purpose": "Does the thing.", "bind": ["A.X.**"] },
+            { "id": "app.y", "name": "Others", "purpose": "Other work.", "bind": ["A.Y.**"] },
+            { "id": "service", "name": "Service", "purpose": "The service.", "category": "integration", "bind": ["B.**"] },
+            { "id": "shared", "name": "Shared", "purpose": "Results and errors.", "category": "foundation", "bind": ["Shared.**"] } ],
+          "views": [ { "id": "by-concern", "name": "By concern", "purpose": "What each part is for.", "level": "root", "groups": [
+            { "id": "work", "name": "Work", "leaves": ["app.x", "app.y", "service"] },
+            { "id": "base", "name": "Base", "leaves": ["shared"] } ] } ] }
+        """;
+
+    /// <summary>A proposal that leaves the shared types unbound.</summary>
+    private const string MissingShared = """
+        { "nodes": [
+            { "id": "app", "name": "App", "purpose": "The application.", "category": "domain" },
+            { "id": "app.x", "name": "Things", "purpose": "Does the thing.", "bind": ["A.X.**"] },
+            { "id": "app.y", "name": "Others", "purpose": "Other work.", "bind": ["A.Y.**"] },
+            { "id": "service", "name": "Service", "purpose": "The service.", "bind": ["B.**"] } ],
+          "views": [] }
+        """;
+
+    /// <summary>A proposal whose identifier breaks the format.</summary>
+    private const string BadIdentifier = """{ "nodes": [ { "id": "App.X", "name": "X", "purpose": "X.", "bind": ["**"] } ], "views": [] }""";
+
+    private static ArchMap Skeleton() => Bootstrap.Skeleton.Build(TestData.Analysis(), "Example.sln");
+
+    [Fact]
+    public async Task RevisesAProposalUntilTheCheckerFindsNothing()
+    {
+        var claude = new FakeClaude(MissingShared, Complete);
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude);
+
+        Assert.Equal(2, claude.Requests.Count);
+        Assert.Contains("Shared.Result", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("unsorted", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("\"id\": \"service\"", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Equal((2, 0), (generated.Round, generated.Findings.Count));
+        Assert.Equal(["Shared.**"], generated.Map.Nodes["shared"].Bind);
+        Assert.Equal(Skeleton().Exclude, generated.Map.Exclude);
+        Assert.Equal(Skeleton().Externals.Keys, generated.Map.Externals.Keys);
+        Assert.Equal(generated.Text, MapWriter.Write(MapReader.Read(generated.Text)));
+        Assert.Empty(claude.Requests[0].Tools);
+    }
+
+    [Fact]
+    public async Task AsksEveryRoundAndEveryPlacementOfTheModelGiven()
+    {
+        var claude = new FakeClaude(MissingShared, Complete, """{ "newLeaves": [], "placements": [] }""");
+
+        await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, model: "opus");
+        var missing = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(MissingShared).RootElement, TestData.Analysis()).Map!;
+        await TypePlacer.PlaceAsync(missing, TestData.Analysis(), claude, model: "haiku");
+
+        Assert.Equal(["opus", "opus", "haiku"], claude.Requests.Select(r => r.Model));
+        Assert.Equal(("claude-opus-5-5", "claude-sonnet-5-5"), (ClaudeModels.Default.Map, ClaudeModels.Default.Placement));
+        Assert.Equal(new ClaudeModels("sonnet", "sonnet"), ClaudeModels.All("sonnet"));
+    }
+
+    [Fact]
+    public async Task SendsAnUnusableProposalBackWithItsErrors()
+    {
+        var claude = new FakeClaude(BadIdentifier, Complete);
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude);
+
+        Assert.Contains("App.X", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Equal(2, generated.Round);
+    }
+
+    [Fact]
+    public async Task KeepsTheUsableProposalWithTheFewestFindingsWhenTheRoundsRunOut()
+    {
+        var claude = new FakeClaude(MissingShared, BadIdentifier, BadIdentifier);
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude);
+
+        Assert.Equal(MapGenerator.MaxRounds, claude.Requests.Count);
+        Assert.Equal(1, generated.Round);
+        Assert.Single(generated.Findings);
+    }
+
+    [Fact]
+    public async Task StopsWhenARevisionFixesNothing()
+    {
+        var claude = new FakeClaude(MissingShared, MissingShared, Complete);
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude);
+
+        Assert.Equal(2, claude.Requests.Count);
+        Assert.Equal((2, 1), (generated.Round, generated.Findings.Count));
+    }
+
+    [Fact]
+    public async Task FailsWhenNoProposalIsUsable()
+    {
+        var claude = new FakeClaude(BadIdentifier, BadIdentifier, BadIdentifier);
+        await Assert.ThrowsAsync<ClaudeException>(() => MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude));
+    }
+
+    [Fact]
+    public async Task PlacesUnsortedTypesInExistingAndNewLeavesByExactName()
+    {
+        var map = MapReader.Read(MapWriter.Write(MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(MissingShared).RootElement, TestData.Analysis()).Map!));
+        var claude = new FakeClaude("""
+            { "newLeaves": [ { "id": "shared", "name": "Shared", "purpose": "Results and errors." }, { "id": "unused", "name": "Unused", "purpose": "Nothing." } ],
+              "placements": [ { "type": "Shared.Result", "leaf": "shared" }, { "type": "Shared.Error", "leaf": "app.x" }, { "type": "No.Such", "leaf": "shared" } ] }
+            """);
+
+        var placement = await TypePlacer.PlaceAsync(map, TestData.Analysis(), claude);
+
+        Assert.NotNull(placement);
+        Assert.Equal((2, 0), (placement.Placed, placement.Unsorted));
+        Assert.Equal(["Shared.Result"], placement.Map.Nodes["shared"].Bind);
+        Assert.Equal(["A.X.**", "Shared.Error"], placement.Map.Nodes["app.x"].Bind);
+        Assert.False(placement.Map.Nodes.ContainsKey("unused"));
+        Assert.Contains("`app.x`, Things: Does the thing.", claude.Requests[0].Prompt, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""[ { "view": "by-concern", "group": "work" } ]""", "work")]
+    [InlineData("[]", "edge")]
+    public async Task AddsANewLeafToAGroupOfEveryViewThatCoversIt(string groups, string expected)
+    {
+        const string proposal = """
+            { "nodes": [
+                { "id": "app", "name": "App", "purpose": "The application.", "category": "domain" },
+                { "id": "app.x", "name": "Things", "purpose": "Does the thing.", "bind": ["A.X.**"] },
+                { "id": "app.y", "name": "Others", "purpose": "Other work.", "bind": ["A.Y.**"] },
+                { "id": "service", "name": "Service", "purpose": "The service.", "bind": ["B.**"] } ],
+              "views": [ { "id": "by-concern", "name": "By concern", "purpose": "What each part is for.", "level": "root", "groups": [
+                { "id": "work", "name": "Work", "leaves": ["app.x", "app.y"] },
+                { "id": "edge", "name": "Edge", "leaves": ["service"] } ] } ] }
+            """;
+        var map = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(proposal).RootElement, TestData.Analysis()).Map!;
+        var claude = new FakeClaude($$"""
+            { "newLeaves": [ { "id": "shared", "name": "Shared", "purpose": "Results and errors.", "groups": {{groups}} } ],
+              "placements": [ { "type": "Shared.Result", "leaf": "shared" }, { "type": "Shared.Error", "leaf": "shared" } ] }
+            """);
+
+        var placement = await TypePlacer.PlaceAsync(map, TestData.Analysis(), claude);
+
+        Assert.Equal(2, placement!.Placed);
+        Assert.Equal("shared", placement.Map.Views["by-concern"].Groups[expected].Leaves[^1]);
+        Assert.Contains("`edge`, Edge: service", claude.Requests[0].Prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PlacesNothingWhenNoTypeIsUnsorted()
+    {
+        var map = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(Complete).RootElement, TestData.Analysis()).Map!;
+        var claude = new FakeClaude();
+        Assert.Null(await TypePlacer.PlaceAsync(map, TestData.Analysis(), claude));
+        Assert.Empty(claude.Requests);
+    }
+
+    [Fact]
+    public async Task DrawsAReviewWithTheGeneratedMapOnceThereIsOne()
+    {
+        using var repo = new TempRepo();
+        using var temp = new TempDirectory();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        var cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo"));
+        var request = new ReviewRequest(repo.Path, before, after) { Build = false };
+
+        var first = await ReviewPipeline.RunAsync(request, ReviewPipelineTests.Fake([]), cache);
+        Assert.Equal("skeleton", first.Info.MapKind);
+
+        var generated = await MapGenerator.GenerateAsync(first.Changeset.Map, first.HeadAnalysis, new FakeClaude(Complete));
+        Assert.Equal(1, cache.WriteGeneratedMap(first.Target, generated.Text));
+        var second = await ReviewPipeline.RunAsync(request, ReviewPipelineTests.Fake([]), cache);
+
+        Assert.Equal(("generated", 1), (second.Info.MapKind, second.Info.MapVersion));
+        Assert.Equal("added", second.Changeset.Edges.Single(e => e.From == "app.x" && e.To == "service").Status);
+        Assert.Equal(2, cache.WriteGeneratedMap(first.Target, generated.Text));
+        Assert.Equal(2, (await ReviewPipeline.RunAsync(request, ReviewPipelineTests.Fake([]), cache)).Info.MapVersion);
+    }
+}

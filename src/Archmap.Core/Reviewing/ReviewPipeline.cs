@@ -33,11 +33,15 @@ public sealed record ReviewProgress(string Stage, string Message);
 /// working tree named as such, the subject of the head commit when the range is one commit, where the map came from,
 /// and anything the reviewer should know.
 /// </summary>
-/// <param name="MapKind">One of <c>repository</c>, <c>file</c> and <c>skeleton</c>.</param>
-public sealed record ReviewInfo(string Solution, string Range, string? Title, string MapKind, string MapSource, IReadOnlyList<string> Warnings);
+/// <param name="MapKind">One of <c>repository</c>, <c>file</c>, <c>generated</c> and <c>skeleton</c>.</param>
+/// <param name="MapVersion">The version of a generated map, and null for any other kind.</param>
+public sealed record ReviewInfo(string Solution, string Range, string? Title, string MapKind, string MapSource, IReadOnlyList<string> Warnings, int? MapVersion = null);
 
-/// <summary>Holds the changeset a review draws and its description.</summary>
-public sealed record ReviewResult(Changeset Changeset, ReviewInfo Info);
+/// <summary>
+/// Holds the changeset a review draws and its description, with what produced it: the target analyzed and the
+/// analyses of both ends, which a later step such as map generation works from.
+/// </summary>
+public sealed record ReviewResult(Changeset Changeset, ReviewInfo Info, AnalysisTarget Target, AnalysisResult BaseAnalysis, AnalysisResult HeadAnalysis);
 
 /// <summary>
 /// Runs a review from two commits to a changeset. It chooses the map, analyzes both ends through the cache, applies the
@@ -60,7 +64,7 @@ public static class ReviewPipeline
         void Report(string stage, string message) => progress?.Report(new ReviewProgress(stage, message));
 
         Report("map", "looking for a map");
-        var chosen = ChooseMap(request, top, start, baseCommit, headCommit, warnings);
+        var chosen = ChooseMap(request, top, start, baseCommit, headCommit, warnings, cache);
         Report("map", chosen.Source);
         var target = new AnalysisTarget(chosen.Root, chosen.Solution, request.Build);
 
@@ -79,12 +83,12 @@ public static class ReviewPipeline
 
         var headName = WorkingTree.IsSnapshot(top, headCommit) ? "working tree" : headCommit[..7];
         var info = new ReviewInfo(Path.GetFileNameWithoutExtension(chosen.Solution), $"{baseCommit[..7]}..{headName}",
-            Title(top, baseCommit, headCommit), chosen.Kind, chosen.Source, warnings);
+            Title(top, baseCommit, headCommit), chosen.Kind, chosen.Source, warnings, chosen.Version);
         var cached = cache?.ReadChangeset(baseCommit, headCommit, target, mapText!, layoutText);
         if (cached is not null)
         {
             Report("changeset", "cached");
-            return new ReviewResult(cached, info);
+            return new ReviewResult(cached, info, target, analyses[0], analyses[1]);
         }
 
         Report("changeset", "applying the map to both ends");
@@ -94,7 +98,7 @@ public static class ReviewPipeline
         var changeset = ChangesetBuilder.Build(facts[0], facts[1], root, baseCommit, headCommit);
         cache?.WriteChangeset(baseCommit, headCommit, target, mapText!, layoutText, changeset);
         Report("changeset", $"{changeset.Files.Count(f => f.Status != "unchanged")} files and {changeset.Edges.Count(e => e.Status != "unchanged")} edges changed");
-        return new ReviewResult(changeset, info);
+        return new ReviewResult(changeset, info, target, analyses[0], analyses[1]);
     }
 
     /// <summary>
@@ -102,9 +106,9 @@ public static class ReviewPipeline
     /// derived, the directory relative to the repository's top that its paths are relative to, and the solution
     /// relative to that directory.
     /// </summary>
-    private sealed record ChosenMap(ArchMap? Map, string? Text, string? LayoutText, string Root, string Solution, string Kind, string Source);
+    private sealed record ChosenMap(ArchMap? Map, string? Text, string? LayoutText, string Root, string Solution, string Kind, string Source, int? Version = null);
 
-    private static ChosenMap ChooseMap(ReviewRequest request, string top, string start, string baseCommit, string headCommit, List<string> warnings)
+    private static ChosenMap ChooseMap(ReviewRequest request, string top, string start, string baseCommit, string headCommit, List<string> warnings, ReviewCache? cache)
     {
         if (request.MapPath is not null)
         {
@@ -137,15 +141,24 @@ public static class ReviewPipeline
         var solution = request.Solution is not null
             ? MapLocator.Relative(top, Path.GetFullPath(Path.Combine(top, start, request.Solution)))
             : MapLocator.FindSolution(top, start, headCommit);
+        var (solutionDir, solutionName) = (MapLocator.DirectoryOf(solution), solution[(solution.LastIndexOf('/') + 1)..]);
+        if (cache?.ReadGeneratedMap(new AnalysisTarget(solutionDir, solutionName, request.Build)) is var (generatedText, version))
+        {
+            var errors = new List<string>();
+            var generated = MapReader.Read(generatedText, errors);
+            if (generated is not null && errors.Count == 0)
+                return new ChosenMap(generated, generatedText, null, solutionDir, solutionName, "generated", $"the concept map Claude generated for this repository (version {version})", version);
+            warnings.Add($"the generated map cannot be read, so the namespace skeleton is drawn instead: {string.Join("; ", errors)}");
+        }
         var source = warnings.Count > 0 ? "the namespace skeleton" : "the namespace skeleton, since the repository has no map";
-        return new ChosenMap(null, null, null, MapLocator.DirectoryOf(solution), solution[(solution.LastIndexOf('/') + 1)..], "skeleton", source);
+        return new ChosenMap(null, null, null, solutionDir, solutionName, "skeleton", source);
     }
 
     /// <summary>
     /// Returns the head analysis with the projects, types and external references that exist only at base added, so that
-    /// a skeleton derived from it binds the types a changeset removes as well as those it keeps.
+    /// a map derived from it binds the types a changeset removes as well as those it keeps.
     /// </summary>
-    private static AnalysisResult Union(AnalysisResult head, AnalysisResult baseAnalysis)
+    public static AnalysisResult Union(AnalysisResult head, AnalysisResult baseAnalysis)
     {
         var types = head.Types.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         var projects = head.Projects.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);

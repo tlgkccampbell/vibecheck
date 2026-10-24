@@ -98,8 +98,70 @@ public class ReviewServerTests
 
     private static HttpClient Client() => new(new HttpClientHandler { CookieContainer = new CookieContainer() }) { Timeout = TimeSpan.FromSeconds(20) };
 
+    [Fact]
+    public async Task GeneratesAConceptMapAfterASkeletonReviewThenSwitchesToItAndSavesIt()
+    {
+        using var repo = new TempRepo();
+        using var temp = new TempDirectory();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        var claude = new FakeClaude(MapGeneratorTests.Complete);
+        await using var server = new ReviewServer(Options(repo) with { Cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo")), Claude = claude });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        var id = $"{before[..7]}-{after[..7]}";
+        var api = $"{server.BaseAddress}/api/reviews/{id}";
+
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        var events = await ReadEventsAsync(client, api + "/events", e => Is(e, "map", "ready") || Is(e, "map", "failed"));
+        var mapReady = events[^1];
+        Assert.Equal(("ready", 1), (mapReady.GetProperty("state").GetString(), mapReady.GetProperty("version").GetInt32()));
+        Assert.Contains(events, e => Is(e, "map", "generating"));
+        Assert.Contains("\"mapKind\":\"skeleton\"", await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js"), StringComparison.Ordinal);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(api + "/map", new { action = "save" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/map", new { action = "switch" })).StatusCode);
+        var seq = mapReady.GetProperty("seq").GetInt32();
+        await ReadEventsAsync(client, api + "/events", e => e.GetProperty("type").GetString() == "ready" && e.GetProperty("seq").GetInt32() > seq);
+        var script = await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js");
+        Assert.Contains("\"mapKind\":\"generated\"", script, StringComparison.Ordinal);
+        Assert.Contains("\"mapVersion\":1", script, StringComparison.Ordinal);
+        Assert.Equal("claude-opus-5-5", Assert.Single(claude.Requests).Model);
+
+        var saved = await client.PostAsJsonAsync(api + "/map", new { action = "save" });
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        Assert.Contains("\"shared\"", File.ReadAllText(Path.Combine(repo.Path, "app", "archmap.json")), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(api + "/map", new { action = "save" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task SaysWhyThereIsNoConceptMapWhenClaudeIsMissing()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        await using var server = new ReviewServer(Options(repo) with { ClaudeNotice = "no claude here" });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        var events = await ReadEventsAsync(client, $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}/events", e => Is(e, "map", "unavailable"));
+        Assert.Equal("no claude here", events[^1].GetProperty("message").GetString());
+    }
+
+    private static bool Is(JsonElement e, string type, string state) =>
+        e.GetProperty("type").GetString() == type && e.TryGetProperty("state", out var s) && s.GetString() == state;
+
     /// <summary>Reads a server-sent event stream until a <c>ready</c> or <c>failed</c> event, and returns the events read.</summary>
-    private static async Task<List<JsonElement>> ReadEventsAsync(HttpClient client, string url)
+    private static Task<List<JsonElement>> ReadEventsAsync(HttpClient client, string url) =>
+        ReadEventsAsync(client, url, e => e.GetProperty("type").GetString() is "ready" or "failed");
+
+    /// <summary>Reads a server-sent event stream until an event meets a condition, and returns the events read.</summary>
+    private static async Task<List<JsonElement>> ReadEventsAsync(HttpClient client, string url, Func<JsonElement, bool> last)
     {
         using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         using var reader = new StreamReader(await response.Content.ReadAsStreamAsync());
@@ -109,7 +171,7 @@ public class ReviewServerTests
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
             var e = JsonDocument.Parse(line[6..]).RootElement.Clone();
             events.Add(e);
-            if (e.GetProperty("type").GetString() is "ready" or "failed") break;
+            if (last(e)) break;
         }
         return events;
     }

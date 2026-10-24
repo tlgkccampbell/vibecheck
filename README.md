@@ -78,8 +78,20 @@ touching the index, the files or any ref.
 The review checks out both ends into temporary worktrees, builds and analyzes them in
 parallel, and draws the changeset. The map is the `--map` file when given, then the
 `archmap.json` nearest the current directory at the head revision, then the one at
-the base revision, and otherwise the namespace skeleton of both ends. A map that
-cannot be read is reported, and the skeleton is drawn instead.
+the base revision, then the concept map Claude generated for the solution in an
+earlier review, and otherwise the namespace skeleton of both ends. A map that cannot
+be read is reported, and the skeleton is drawn instead.
+
+A review drawn with the skeleton asks Claude Code to generate a concept map in the
+background, revising it against the dependency graph for up to three rounds, and
+the viewer offers to switch to it when it is ready. The generated map is kept and
+reused for later reviews, and a review that finds types it does not place asks
+Claude to place them, which makes a new version. "Save to repository" writes the
+map as `archmap.json` beside the solution. The calls run on your own Claude account,
+with no tools, settings or MCP servers. Map generation uses Claude Opus 5.5 and
+placement uses Claude Sonnet 5.5, whatever your Claude Code default is; `--model`
+names one model for every call, and `--no-ai` turns the calls off. The terminal logs
+each call's model, time and cost.
 
 Each commit's analysis, and each changeset, is cached under `%LOCALAPPDATA%\archmap`
 on Windows and `~/.cache/archmap` elsewhere, or under `ARCHMAP_CACHE` when it is set.
@@ -92,7 +104,7 @@ on `127.0.0.1` only and answers only a browser that opened the link it printed.
 ```
 archmap           [review options]
 archmap review    [<base> [<head>] | <range>] [--map <archmap.json>] [--root <dir>] [--solution <sln>]
-                  [--no-build] [--no-cache] [--no-open] [--port <n>] [--viewer <dir>]
+                  [--no-build] [--no-cache] [--no-ai] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
 archmap init      --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
 archmap units     [--map <archmap.json>] [--root <dir>] [--out <units.txt>]
 archmap check     [--map <archmap.json>] [--root <dir>] [--facts <out.json>] [--strict]

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Archmap.Analysis;
+using Archmap.Assist;
 using Archmap.Bootstrap;
 using Archmap.Checking;
 using Archmap.Diffing;
@@ -16,7 +17,7 @@ public static class Program
         usage:
           archmap           [review options]
           archmap review    [<base> [<head>] | <range>] [--map <archmap.json>] [--root <dir>] [--solution <sln>]
-                            [--no-build] [--no-cache] [--no-open] [--port <n>] [--viewer <dir>]
+                            [--no-build] [--no-cache] [--no-ai] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
           archmap init      --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
           archmap units     [--map <archmap.json>] [--root <dir>] [--out <units.txt>]
           archmap check     [--map <archmap.json>] [--root <dir>] [--facts <out.json>] [--strict]
@@ -340,6 +341,13 @@ public static class Program
         var dir = Directory.GetCurrentDirectory();
         if (Git.TryRun(dir, "rev-parse", "--show-toplevel") is null) throw new ArgumentException("review must run inside a git repository");
         RoslynAnalyzer.EnsureMSBuild();
+        // Without a map, a review asks Claude Code for one. A missing command line only costs the concept map.
+        var claude = options.ContainsKey("no-ai") ? null : new ClaudeCli(log: m => Console.Error.WriteLine("  " + m));
+        if (claude is not null && await claude.VersionAsync() is null)
+        {
+            claude = null;
+            Console.Error.WriteLine("claude was not found on the path; reviews without a map draw the namespace skeleton");
+        }
         var serverOptions = new ReviewServerOptions
         {
             Directory = dir,
@@ -352,6 +360,10 @@ public static class Program
             ViewerDirectory = options.TryGetValue("viewer", out var viewer) ? Path.GetFullPath(viewer) : null,
             Port = int.Parse(options.GetValueOrDefault("port", "0")),
             Log = Console.Error.WriteLine,
+            Claude = claude,
+            Models = options.TryGetValue("model", out var model) ? ClaudeModels.All(model) : ClaudeModels.Default,
+            ClaudeNotice = options.ContainsKey("no-ai") ? null
+                : "Claude Code was not found on the path, so the namespace skeleton is drawn. Install Claude Code and sign in, and archmap generates a concept map.",
         };
         await using var server = new ReviewServer(serverOptions);
         var url = await server.StartAsync();

@@ -107,6 +107,36 @@ public sealed class ReviewCache
     private string ChangesetPath(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText) =>
         Path.Combine(Directory, "changesets", $"{baseCommit[..12]}-{headCommit[..12]}-{Hash(baseCommit, headCommit, target.Root, target.Solution, target.Build ? "build" : "no-build", mapText, layoutText ?? "", ToolId)}.json.gz");
 
+    /// <summary>
+    /// Returns the latest version of the map Claude generated for a solution, and its version number, or
+    /// <see langword="null"/> when none has been generated. Generated maps are kept apart from the evicted entries,
+    /// since a map is what keeps the picture of a repository stable from one review to the next.
+    /// </summary>
+    public (string Text, int Version)? ReadGeneratedMap(AnalysisTarget target)
+    {
+        var dir = GeneratedMapDirectory(target);
+        if (!System.IO.Directory.Exists(dir)) return null;
+        var latest = System.IO.Directory.EnumerateFiles(dir, "*.json")
+            .Select(f => (Path: f, Version: int.TryParse(Path.GetFileNameWithoutExtension(f), out var v) ? v : 0))
+            .Where(f => f.Version > 0).OrderByDescending(f => f.Version).FirstOrDefault();
+        return latest.Path is null ? null : (File.ReadAllText(latest.Path), latest.Version);
+    }
+
+    /// <summary>Stores a new version of the map Claude generated for a solution, and returns its version number. Every version is kept.</summary>
+    public int WriteGeneratedMap(AnalysisTarget target, string text)
+    {
+        lock (running)
+        {
+            var version = (ReadGeneratedMap(target)?.Version ?? 0) + 1;
+            var path = Path.Combine(GeneratedMapDirectory(target), $"{version:D4}.json");
+            System.IO.Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+            return version;
+        }
+    }
+
+    private string GeneratedMapDirectory(AnalysisTarget target) => Path.Combine(Directory, "maps", Hash(target.Root, target.Solution));
+
     /// <summary>Returns a short hexadecimal hash of strings, each kept distinct from its neighbors.</summary>
     private static string Hash(params string[] parts) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0', parts))))[..16];
