@@ -13,15 +13,19 @@ public static class Program
 {
     private const string Usage = """
         usage:
-          archmap init  --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
-          archmap units [--map <archmap.json>] [--out <units.txt>]
-          archmap check [--map <archmap.json>] [--facts <out.json>] [--strict]
-          archmap why   <from> <to> [--map <archmap.json>] [--facts <facts.json>] [--limit <n>]
-          archmap fmt   [--map <archmap.json>] [--check]
-          archmap facts [--map <archmap.json>] [--out <out.json>] [--commit <sha>]
-          archmap diff  <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
+          archmap init      --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
+          archmap units     [--map <archmap.json>] [--root <dir>] [--out <units.txt>]
+          archmap check     [--map <archmap.json>] [--root <dir>] [--facts <out.json>] [--strict]
+          archmap why       <from> <to> [--map <archmap.json>] [--root <dir>] [--facts <facts.json>] [--limit <n>]
+          archmap fmt       [--map <archmap.json>] [--check]
+          archmap facts     [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
+          archmap diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
+          archmap changeset <base> [<head>] [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--no-build]
 
-        The map defaults to ./archmap.json. The repository root is the map's directory.
+        The map defaults to ./archmap.json, and the layout file sits beside it. The repository root,
+        which the map's solution path and every reported path are relative to, defaults to the map's
+        directory; pass --root when the map is kept outside the repository. changeset takes two
+        revisions or one range (a..b, or a...b for a pull request), and the head defaults to HEAD.
         """;
 
     public static async Task<int> Main(string[] args)
@@ -39,6 +43,7 @@ public static class Program
                 "fmt" => Fmt(options),
                 "facts" => await FactsAsync(options),
                 "diff" => Diff(positional, options),
+                "changeset" => await ChangesetAsync(positional, options),
                 "--help" or "-h" or "help" => Help(),
                 _ => Unknown(args[0]),
             };
@@ -87,18 +92,25 @@ public static class Program
     private static string MapPath(Dictionary<string, string> options) =>
         Path.GetFullPath(options.GetValueOrDefault("map", "archmap.json"));
 
-    private static (ArchMap Map, string Text, string Root) LoadMap(Dictionary<string, string> options)
+    /// <summary>
+    /// Reads the map and returns it with its text, the repository root and the map's directory. The root is the
+    /// <c>--root</c> option when given and otherwise the map's directory.
+    /// </summary>
+    private static (ArchMap Map, string Text, string Root, string MapDir) LoadMap(Dictionary<string, string> options)
     {
         var path = MapPath(options);
         if (!File.Exists(path)) throw new IOException($"map not found: {path}");
         var text = File.ReadAllText(path);
-        return (MapReader.Read(text), text, Path.GetDirectoryName(path)!);
+        var mapDir = Path.GetDirectoryName(path)!;
+        var root = Path.GetFullPath(options.GetValueOrDefault("root", mapDir));
+        if (!Directory.Exists(root)) throw new IOException($"root not found: {root}");
+        return (MapReader.Read(text), text, root, mapDir);
     }
 
     private static async Task<AnalysisResult> AnalyzeAsync(string root, string solution)
     {
         var solutionPath = Path.GetFullPath(Path.Combine(root, solution));
-        if (!File.Exists(solutionPath)) throw new IOException($"solution not found: {solutionPath}");
+        if (!File.Exists(solutionPath)) throw new IOException($"solution not found: {solutionPath}; pass --root when the map is kept outside the repository");
         var progress = new Progress<string>(m => Console.Error.WriteLine("  " + m));
         var sw = Stopwatch.StartNew();
         var result = await RoslynAnalyzer.AnalyzeAsync(root, solutionPath, progress);
@@ -119,9 +131,10 @@ public static class Program
         var map = Skeleton.Build(analysis, Path.GetRelativePath(root, solutionPath));
         File.WriteAllText(mapPath, MapWriter.Write(map));
         Console.WriteLine($"wrote {mapPath}: {map.Nodes.Count} nodes, excluding {string.Join(", ", map.Exclude)}");
+        if (Path.GetFullPath(Path.GetDirectoryName(mapPath)!) != root) Console.WriteLine($"the map is outside the root; pass --root {root} to the other commands");
 
         var facts = Checker.Run(map, analysis, new CheckOptions { Commit = DetectCommit(root) });
-        var factsPath = options.GetValueOrDefault("facts", Path.Combine(root, "archmap.facts.json"));
+        var factsPath = options.GetValueOrDefault("facts", Path.Combine(Path.GetDirectoryName(mapPath)!, "archmap.facts.json"));
         File.WriteAllText(factsPath, FactsJson.Serialize(facts));
         Console.WriteLine($"wrote {factsPath}");
         return Report(facts, strict: false);
@@ -129,7 +142,7 @@ public static class Program
 
     private static async Task<int> UnitsAsync(Dictionary<string, string> options)
     {
-        var (map, _, root) = LoadMap(options);
+        var (map, _, root, _) = LoadMap(options);
         var analysis = await AnalyzeAsync(root, map.Solution);
         var errors = new List<string>();
         var (included, _) = Exclusion.Parse(map.Exclude, errors).Apply(analysis);
@@ -142,9 +155,9 @@ public static class Program
 
     private static async Task<int> CheckAsync(Dictionary<string, string> options)
     {
-        var (map, text, root) = LoadMap(options);
+        var (map, text, root, mapDir) = LoadMap(options);
         var analysis = await AnalyzeAsync(root, map.Solution);
-        var facts = Checker.Run(map, analysis, new CheckOptions { Commit = DetectCommit(root), MapText = text, LayoutText = ReadLayout(root) });
+        var facts = Checker.Run(map, analysis, new CheckOptions { Commit = DetectCommit(root), MapText = text, LayoutText = ReadLayout(mapDir) });
         if (options.TryGetValue("facts", out var factsPath)) File.WriteAllText(factsPath, FactsJson.Serialize(facts));
         return Report(facts, options.ContainsKey("strict"));
     }
@@ -186,7 +199,7 @@ public static class Program
         }
         else
         {
-            var (map, text, root) = LoadMap(options);
+            var (map, text, root, _) = LoadMap(options);
             var analysis = await AnalyzeAsync(root, map.Solution);
             facts = Checker.Run(map, analysis, new CheckOptions { MapText = text });
         }
@@ -205,9 +218,9 @@ public static class Program
 
     private static int Fmt(Dictionary<string, string> options)
     {
-        var (map, text, root) = LoadMap(options);
+        var (map, text, _, mapDir) = LoadMap(options);
         var canonical = MapWriter.Write(map);
-        var layoutPath = Path.Combine(root, LayoutFile.FileName);
+        var layoutPath = Path.Combine(mapDir, LayoutFile.FileName);
         string? layoutText = null, layoutCanonical = null;
         if (File.Exists(layoutPath))
         {
@@ -231,10 +244,10 @@ public static class Program
 
     private static async Task<int> FactsAsync(Dictionary<string, string> options)
     {
-        var (map, text, root) = LoadMap(options);
+        var (map, text, root, mapDir) = LoadMap(options);
         var analysis = await AnalyzeAsync(root, map.Solution);
         var commit = options.GetValueOrDefault("commit") ?? DetectCommit(root);
-        var facts = Checker.Run(map, analysis, new CheckOptions { Commit = commit, MapText = text, LayoutText = ReadLayout(root) });
+        var facts = Checker.Run(map, analysis, new CheckOptions { Commit = commit, MapText = text, LayoutText = ReadLayout(mapDir) });
         var json = FactsJson.Serialize(facts);
         if (options.TryGetValue("out", out var outPath)) { File.WriteAllText(outPath, json); Console.Error.WriteLine($"wrote {outPath}"); }
         else Console.Out.Write(json);
@@ -246,54 +259,84 @@ public static class Program
         if (positional.Count != 2) throw new ArgumentException("diff requires a base and a head facts document");
         var baseFacts = FactsJson.Deserialize<Facts>(File.ReadAllText(positional[0]));
         var headFacts = FactsJson.Deserialize<Facts>(File.ReadAllText(positional[1]));
-        List<FileHunks>? hunks = null;
+        var changeset = ChangesetBuilder.Build(baseFacts, headFacts);
         if (options.TryGetValue("repo", out var repo))
         {
             var baseRev = options.GetValueOrDefault("base-rev") ?? baseFacts.Commit ?? throw new ArgumentException("--base-rev is required when the base facts carry no commit");
             var headRev = options.GetValueOrDefault("head-rev") ?? headFacts.Commit ?? throw new ArgumentException("--head-rev is required when the head facts carry no commit");
-            var preview = ChangesetBuilder.Build(baseFacts, headFacts);
-            var changed = preview.Files.Where(f => f.Status != "unchanged").Select(f => f.Path);
-            hunks = GitHunks.Collect(repo, baseRev.Replace("+dirty", ""), headRev.Replace("+dirty", ""), changed);
+            changeset = ChangesetBuilder.Build(baseFacts, headFacts, repo, baseRev.Replace("+dirty", ""), headRev.Replace("+dirty", ""));
         }
-        var changeset = ChangesetBuilder.Build(baseFacts, headFacts, hunks);
-        var json = FactsJson.Serialize(changeset);
-        if (options.TryGetValue("out", out var outPath)) { File.WriteAllText(outPath, json); Console.Error.WriteLine($"wrote {outPath}"); }
-        else Console.Out.Write(json);
+        WriteChangeset(changeset, options);
         return 0;
     }
 
-    private static string? ReadLayout(string root)
+    private static void WriteChangeset(Changeset changeset, Dictionary<string, string> options)
     {
-        var path = Path.Combine(root, LayoutFile.FileName);
+        var json = FactsJson.Serialize(changeset);
+        if (options.TryGetValue("out", out var outPath)) { File.WriteAllText(outPath, json); Console.Error.WriteLine($"wrote {outPath}"); }
+        else Console.Out.Write(json);
+    }
+
+    /// <summary>
+    /// Produces the changeset between two revisions in one step, by checking each out into a temporary worktree,
+    /// building and analyzing both in parallel, and applying the current map to both. Ctrl+C stops the run and still
+    /// removes the worktrees.
+    /// </summary>
+    private static async Task<int> ChangesetAsync(List<string> positional, Dictionary<string, string> options)
+    {
+        if (positional.Count is < 1 or > 2) throw new ArgumentException("changeset requires a base and an optional head, or one range");
+        var (map, text, root, mapDir) = LoadMap(options);
+        var (baseCommit, headCommit) = RevisionChangeset.ResolveRange(root, positional[0], positional.ElementAtOrDefault(1));
+        Console.Error.WriteLine($"comparing {baseCommit[..8]} with {headCommit[..8]}");
+        using var cancel = new CancellationTokenSource();
+        ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cancel.Cancel(); };
+        Console.CancelKeyPress += onCancel;
+        try
+        {
+            RoslynAnalyzer.EnsureMSBuild();
+            var progress = new Progress(m => Console.Error.WriteLine("  " + m));
+            var sw = Stopwatch.StartNew();
+            var request = new ChangesetRequest(root, map, text, ReadLayout(mapDir), baseCommit, headCommit, Build: !options.ContainsKey("no-build"));
+            var result = await RevisionChangeset.BuildAsync(request, RoslynAnalyzer.AnalyzeAsync, progress, cancel.Token);
+            foreach (var (name, facts) in new[] { ("base", result.Base), ("head", result.Head) })
+            {
+                var unsorted = facts.Types.Count(t => t.Leaf == ArchMap.Unsorted);
+                Console.Error.WriteLine($"  {name}: {facts.Types.Count} types, {unsorted} unsorted, {facts.Warnings.Count} warning(s)");
+            }
+            var cs = result.Changeset;
+            Console.Error.WriteLine($"  {cs.Files.Count(f => f.Status != "unchanged")} files and {cs.Edges.Count(e => e.Status != "unchanged")} edges changed, in {sw.Elapsed.TotalSeconds:F0}s");
+            WriteChangeset(cs, options);
+            return 0;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("cancelled");
+            return 130;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancel;
+        }
+    }
+
+    /// <summary>Reports progress on the calling thread as it arrives, unlike <see cref="Progress{T}"/>, which posts it.</summary>
+    private sealed class Progress(Action<string> report) : IProgress<string>
+    {
+        public void Report(string value) => report(value);
+    }
+
+    private static string? ReadLayout(string mapDir)
+    {
+        var path = Path.Combine(mapDir, LayoutFile.FileName);
         return File.Exists(path) ? File.ReadAllText(path) : null;
     }
 
     /// <summary>Returns the HEAD commit of the repository that contains a directory, suffixed with <c>+dirty</c> when the tree has changes, or <see langword="null"/> outside git.</summary>
     private static string? DetectCommit(string root)
     {
-        try
-        {
-            var sha = Git(root, "rev-parse", "HEAD");
-            if (sha is null) return null;
-            var status = Git(root, "status", "--porcelain");
-            return string.IsNullOrWhiteSpace(status) ? sha : sha + "+dirty";
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string? Git(string root, params string[] args)
-    {
-        var psi = new ProcessStartInfo("git") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        psi.ArgumentList.Add("-C");
-        psi.ArgumentList.Add(root);
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi);
-        if (p is null) return null;
-        var output = p.StandardOutput.ReadToEnd().Trim();
-        p.WaitForExit();
-        return p.ExitCode == 0 ? output : null;
+        var sha = Git.TryRun(root, "rev-parse", "HEAD");
+        if (sha is null) return null;
+        var status = Git.TryRun(root, "status", "--porcelain");
+        return string.IsNullOrWhiteSpace(status) ? sha : sha + "+dirty";
     }
 }

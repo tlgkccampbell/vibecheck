@@ -22,7 +22,7 @@ complexity and none of the understanding, and it was removed. Section 8 records 
 
 ## 1. Files
 
-| File | Purpose | Reviewed as |
+| File | Purpose | Reviewed as, when committed |
 |---|---|---|
 | `archmap.json` | The map: nodes, bindings, views, exclusions. | A structural change to how the system is described. |
 | `archmap.layout.json` | Stored node positions and sizes per view. | Presentation only. |
@@ -31,6 +31,12 @@ Layout is stored separately so that moving a box on the diagram never appears as
 structural change, and so that a structural change never has to carry coordinates.
 A node missing from the layout file is placed by a deterministic rule and drawn
 with a "new" treatment until a position is stored for it.
+
+Neither file has to be committed. A team that reviews the map with the code keeps
+both at the repository root, where the tool looks by default. A reviewer can keep
+them anywhere else instead and name the repository with `--root`, and nothing in the
+repository changes. Each run reads the map once and applies it to every revision it
+analyzes, so a map kept outside the repository describes both ends of a changeset.
 
 ### 1.1 Format
 
@@ -560,16 +566,19 @@ the facts say, as part of the normal test run.
 
 | Command | Purpose |
 |---|---|
-| `archmap init --solution <sln>` | Emits the deterministic skeleton as `archmap.json` beside the solution, and the facts document as `archmap.facts.json`. Refuses to overwrite an existing map. See section 5.1. |
+| `archmap init --solution <sln>` | Emits the deterministic skeleton as `archmap.json` beside the solution, or at the path `--map` names, and the facts document as `archmap.facts.json` beside the map. Refuses to overwrite an existing map. See section 5.1. |
 | `archmap units` | Writes the unit listing of section 5.2 for the solution the map names, with the map's exclusions applied. |
 | `archmap check` | Produces the facts for the working tree and prints the warnings and the metrics. Exit code 1 on a failure, or on a warning with `--strict`. `--facts <path>` also writes the facts document. |
 | `archmap why <from> <to>` | Lists the type pairs behind the edge between two nodes, with counts, from a facts document given with `--facts` or from a fresh analysis. |
 | `archmap fmt` | Rewrites both files in canonical form. `--check` reports without writing. |
 | `archmap facts` | Emits the facts document for the working tree, recording the HEAD commit, suffixed `+dirty` when the tree has changes. |
 | `archmap diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, attaches hunks from `git diff` between the two commits, with trivial edits marked. |
+| `archmap changeset <base> [<head>]` | Produces the changeset document between two revisions in one step. Each revision is checked out into a temporary git worktree, built and analyzed, the two in parallel, and the current map is applied to both. The worktrees are removed afterward. One argument may be a range: `a..b`, or `a...b` to compare from the merge base as a pull request does. The head defaults to `HEAD`. `--no-build` skips the builds, which leaves out generated types. |
 
-Every command takes `--map <path>`; the default is `./archmap.json`, and the
-repository root is the map's directory.
+Every command takes `--map <path>`; the default is `./archmap.json`, and the layout
+file sits beside the map. The repository root, which the map's solution path and
+every reported path are relative to, is `--root <dir>` when given and otherwise the
+map's directory.
 
 ### 7.1 Turnaround
 
@@ -577,7 +586,9 @@ Opening a solution with Roslyn costs a full compilation, which is tens of second
 a large solution. The intended shape is for `check` and `facts` to cache the facts
 document keyed by commit so that `diff` on a reviewed range costs one compilation per
 unseen commit, and so that `why` and `units` never compile at all. v0 does not
-cache; `facts --out` and `why --facts` are the manual equivalent.
+cache; `facts --out` and `why --facts` are the manual equivalent. `changeset` runs
+both ends in parallel, so it costs about one build and one compilation of the
+larger end, but each worktree starts without build output and builds from scratch.
 
 ## 8. Out of scope for v0
 

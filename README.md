@@ -1,7 +1,7 @@
 # archviz
 
-Tooling for reviewing large, generated pull requests at the architecture level. A
-checked-in architecture map binds types to logical components by namespace pattern,
+Tooling for reviewing large, generated pull requests at the architecture level. An
+architecture map binds types to logical components by namespace pattern,
 by exact name, or by an `[Archmap]` attribute. A checker reads every dependency from
 the code and reports it per pair of components, and a viewer renders changesets as a
 schematic that reviewers drill into. The map is proposed by a language model from a
@@ -38,22 +38,45 @@ edit loop, run the unit tests alone:
 dotnet test --filter "FullyQualifiedName!~Sample"
 ```
 
+## Installing
+
+`archmap` is a .NET tool. Pack it and install it from the local package folder:
+
+```
+dotnet pack src/Archmap.Cli -c Release -o nupkg
+dotnet tool install --global archmap --configfile tool.nuget.config
+```
+
+To pick up later changes, pack again with a higher `<Version>` in
+`src/Archmap.Cli/Archmap.Cli.csproj` and run `dotnet tool update --global archmap
+--configfile tool.nuget.config`. `tool.nuget.config` names the local folder as the
+only source for `archmap`, which works where a user-level NuGet configuration uses
+package source mapping and so refuses `--add-source`. Without installing, run
+`dotnet run --project src/Archmap.Cli --` from this repository.
+
 ## Using the tool
 
-Run from the repository root with `dotnet run --project src/Archmap.Cli --`, or
-publish the CLI and put `archmap` on the path.
-
 ```
-archmap init  --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
-archmap units [--map <archmap.json>] [--out <units.txt>]
-archmap check [--map <archmap.json>] [--facts <out.json>] [--strict]
-archmap why   <from> <to> [--map <archmap.json>] [--facts <facts.json>] [--limit <n>]
-archmap fmt   [--map <archmap.json>] [--check]
-archmap facts [--map <archmap.json>] [--out <out.json>] [--commit <sha>]
-archmap diff  <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
+archmap init      --solution <path.sln> [--root <dir>] [--map <archmap.json>] [--facts <out.json>]
+archmap units     [--map <archmap.json>] [--root <dir>] [--out <units.txt>]
+archmap check     [--map <archmap.json>] [--root <dir>] [--facts <out.json>] [--strict]
+archmap why       <from> <to> [--map <archmap.json>] [--root <dir>] [--facts <facts.json>] [--limit <n>]
+archmap fmt       [--map <archmap.json>] [--check]
+archmap facts     [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
+archmap diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
+archmap changeset <base> [<head>] [--map <archmap.json>] [--root <dir>] [--out <out.json>] [--no-build]
 ```
 
-The map defaults to `./archmap.json` and the repository root is the map's directory.
+The map defaults to `./archmap.json`, and the layout file sits beside it. The
+repository root defaults to the map's directory.
+
+Nothing has to be committed to the repository under review. To keep the map
+elsewhere, write it there with `init --map` and pass `--root` to the other commands:
+
+```
+archmap init  --solution C:\src\app\App.sln --map C:\maps\app\archmap.json
+archmap check --map C:\maps\app\archmap.json --root C:\src\app
+```
 To try it on the sample:
 
 ```
@@ -94,13 +117,15 @@ types, the files that changed, their diffs, and the type pairs behind each of it
 edges. Changed edges carry a label with the count and the delta; a change of fewer
 than three references or under one percent is drawn as minor and left unlabeled.
 
-To regenerate the data for another range, produce facts at both ends and diff them:
+To produce the data for another range, run `changeset` from the repository:
 
 ```
-archmap facts --out base.json          # at the base revision
-archmap facts --out head.json          # at the head revision
-archmap diff base.json head.json --out changeset.json --repo <repo> --base-rev <a> --head-rev <b>
+archmap changeset main...feature --out changeset.json
 ```
 
-Source generators run only when the solution has been built, so build each
-revision before `facts`, or the generated types are missing from the picture.
+It checks out both revisions into temporary git worktrees, builds and analyzes them
+in parallel, applies the current map to both, and removes the worktrees afterward,
+so the working tree is left alone and the map need not exist at either revision.
+The builds matter because source generators run only in a build; `--no-build`
+skips them and leaves the generated types out. `facts` and `diff` remain for doing
+the same steps by hand.

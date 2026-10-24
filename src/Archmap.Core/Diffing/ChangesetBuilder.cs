@@ -6,6 +6,17 @@ namespace Archmap.Diffing;
 /// <summary>Combines a base and a head facts document into a changeset document.</summary>
 public static class ChangesetBuilder
 {
+    /// <summary>
+    /// Combines a base and a head facts document into a changeset document, with the hunks of every changed file read
+    /// by <see cref="GitHunks.Collect"/> between two revisions. File paths are relative to <paramref name="repo"/>.
+    /// </summary>
+    public static Changeset Build(Facts baseFacts, Facts headFacts, string repo, string baseRev, string headRev)
+    {
+        var changed = DiffFiles(baseFacts, headFacts).Where(f => f.Status != "unchanged").Select(f => f.Path);
+        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changed));
+    }
+
+    /// <summary>Combines a base and a head facts document into a changeset document, attaching the hunks given, if any.</summary>
     public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null)
     {
         var files = DiffFiles(baseFacts, headFacts);
