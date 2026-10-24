@@ -390,9 +390,16 @@ A later phase brings failures closer:
 
 - Check annotations carry a path and lines. They appear in the diff tables, like
   threads, and are counted on the map, so a failing build points at the blocks it
-  concerns.
+  concerns. Annotations belong to the head commit, so they land on lines only in a
+  review of the pull request's head, and are listed at the top of their file
+  otherwise. Only failures and warnings are counted. Workflows also annotate paths
+  that are not files, such as `.github`, and those annotations stay in the check's
+  row.
 - A failed job shows the last lines of its log, read through REST
-  `GET /actions/jobs/{id}/logs`, in the check's row.
+  `GET /actions/jobs/{id}/logs`, in the check's row. The page asks for it when the
+  reviewer opens it, rather than with every poll, and the server keeps a finished
+  job's log in memory. GitHub deletes logs after the repository's retention period,
+  90 days by default, and the row then says so.
 
 ## 10. The API
 

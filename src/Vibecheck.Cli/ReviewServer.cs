@@ -87,6 +87,9 @@ public sealed class ReviewServer : IAsyncDisposable
     private readonly Dictionary<string, MapJob> mapJobs = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource stopping = new();
     private readonly ReviewedFiles reviewed;
+
+    // The ends of the logs of finished GitHub Actions jobs, by job identifier.
+    private readonly ConcurrentDictionary<long, List<string>> jobLogs = new();
     private WebApplication? app;
     private int port;
 
@@ -372,7 +375,7 @@ public sealed class ReviewServer : IAsyncDisposable
             review.SentSnapshot = text;
             review.Stale = null;
         }
-        review.Add(new { type = "pull", snapshot, threads = Placements(review, snapshot) });
+        review.Add(new { type = "pull", snapshot, threads = Placements(review, snapshot), annotations = AnnotationPlaces(review, snapshot) });
     }
 
     /// <summary>
@@ -387,6 +390,16 @@ public sealed class ReviewServer : IAsyncDisposable
         var sameBase = sameHead && review.Since is null && review.Base is { } b && Git.TryRun(options.Directory, "merge-base", snapshot.BaseOid, snapshot.HeadOid) == b;
         return ThreadPlacer.Place(discussion.Threads, result.Changeset.Hunks, result.Target.Root, review.Head, sameHead, sameBase);
     }
+
+    /// <summary>
+    /// Returns where the annotations of a pull request's checks go in a review's diffs, keyed as
+    /// <see cref="ThreadPlacer.PlaceAnnotations"/> keys them, or <see langword="null"/> before the review has a result.
+    /// See <c>docs/pull-requests.md</c> section 9.
+    /// </summary>
+    private static Dictionary<string, ThreadPlace>? AnnotationPlaces(Review review, PullSnapshot? snapshot) =>
+        review.Result is { } result && snapshot?.CheckList is { } checks
+            ? ThreadPlacer.PlaceAnnotations(checks, result.Changeset.Hunks, result.Target.Root, review.Head == snapshot.HeadOid)
+            : null;
 
     /// <summary>Sends a review's pages a <c>pull</c> event saying that the snapshot they have is stale, and why, unless they were told already.</summary>
     private static void PublishStale(Review review, string message)
@@ -808,6 +821,24 @@ public sealed class ReviewServer : IAsyncDisposable
             return await WriteAsync(review, $"discarded the pending review with {pending.Comments} comment(s)", () => github.DeleteReviewAsync(pending.Id, stopping.Token));
         });
 
+        web.MapGet("/api/reviews/{id}/pull/checks/{job:long}/log", async (string id, long job) =>
+        {
+            if (!reviews.TryGetValue(id, out var review) || options.GitHub is not { } github || review.Snapshot?.CheckList?.FirstOrDefault(c => c.JobId == job) is not { } check)
+                return Results.NotFound(new { message = "the review's pull request has no such job" });
+            if (jobLogs.TryGetValue(job, out var cached)) return Results.Json(new { lines = cached }, FactsJson.Options);
+            try
+            {
+                var lines = JobLogs.Tail(await github.GetJobLogAsync(job, stopping.Token), 60);
+                // A finished job's log no longer changes, so it is read from GitHub once.
+                if (check.State != "pending") jobLogs[job] = lines;
+                return Results.Json(new { lines }, FactsJson.Options);
+            }
+            catch (GitHubException ex)
+            {
+                return Results.Json(new { message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
+            }
+        });
+
         web.MapPost("/api/markdown", async (HttpContext ctx) =>
         {
             if (options.GitHub is not { } github) return Results.NotFound(new { message = options.GitHubNotice ?? "GitHub is turned off" });
@@ -847,7 +878,7 @@ public sealed class ReviewServer : IAsyncDisposable
                 solution = info.Solution, title = info.Title ?? r.Label, range = info.Range, map = info.MapSource, mapKind = info.MapKind,
                 mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
                 narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root),
-                pull = r.Snapshot, pullThreads = Placements(r, r.Snapshot), pullCommits = r.OpenedCommits, pullStale = r.Stale,
+                pull = r.Snapshot, pullThreads = Placements(r, r.Snapshot), pullAnnotations = AnnotationPlaces(r, r.Snapshot), pullCommits = r.OpenedCommits, pullStale = r.Stale,
             };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
             return Results.Text(script, "text/javascript; charset=utf-8");

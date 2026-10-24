@@ -1,0 +1,509 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "id": "PR_kwDODKw3uc7tijZP",
+    "number": 13788,
+    "title": "fix: preserve percent-encoded path in DisplayURL",
+    "url": "https://github.com/cli/cli/pull/13788",
+    "state": "OPEN",
+    "isDraft": false,
+    "author": {
+     "login": "user-2"
+    },
+    "bodyHTML": "<h2 dir=\"auto\">Summary</h2>\n<p dir=\"auto\"><span class=\"issue-keyword tooltipped tooltipped-se\" aria-label=\"This pull request closes issue #13546.\">Fixes</span> <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4549277326\" data-permission-text=\"Title is private\" data-url=\"https://github.com/cli/cli/issues/13546\" data-hovercard-type=\"issue\" data-hovercard-url=\"/cli/cli/issues/13546/hovercard\" href=\"https://github.com/cli/cli/issues/13546\">#13546</a></p>\n<p dir=\"auto\"><code class=\"notranslate\">DisplayURL</code> was using <code class=\"notranslate\">u.Path</code> which is the unescaped version of the URL path. This caused branch names with special characters (like quotes) to be displayed incorrectly in the terminal when using <code class=\"notranslate\">gh pr create --web</code>.</p>\n<p dir=\"auto\">For example, a branch named <code class=\"notranslate\">test-\"quoted\"-branch-pr</code> would display as:</p>\n<div class=\"snippet-clipboard-content notranslate position-relative overflow-auto\" data-snippet-clipboard-copy-content=\"https://github.com/OWNER/REPO/compare/...test-&quot;quoted&quot;-branch-pr\"><pre class=\"notranslate\"><code class=\"notranslate\">https://github.com/OWNER/REPO/compare/...test-\"quoted\"-branch-pr\n</code></pre></div>\n<p dir=\"auto\">Instead of the correct:</p>\n<div class=\"snippet-clipboard-content notranslate position-relative overflow-auto\" data-snippet-clipboard-copy-content=\"https://github.com/OWNER/REPO/compare/...test-%22quoted%22-branch-pr\"><pre class=\"notranslate\"><code class=\"notranslate\">https://github.com/OWNER/REPO/compare/...test-%22quoted%22-branch-pr\n</code></pre></div>\n<h2 dir=\"auto\">Changes</h2>\n<p dir=\"auto\">Uses <code class=\"notranslate\">u.RawPath</code> (when available) instead of <code class=\"notranslate\">u.Path</code> to preserve the original percent-encoding from the URL.</p>",
+    "createdAt": "2026-07-03T10:12:24Z",
+    "headRefName": "fix-percent-encoded-url",
+    "headRefOid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda",
+    "baseRefName": "trunk",
+    "baseRefOid": "b300f2ec7ec9dc9addc39b2ad88c54097ded7ca0",
+    "reviewDecision": "REVIEW_REQUIRED",
+    "mergeStateStatus": "BLOCKED",
+    "viewerDidAuthor": false,
+    "commits": {
+     "totalCount": 1
+    },
+    "viewerLatestReview": null,
+    "lastCommit": {
+     "nodes": [
+      {
+       "commit": {
+        "oid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda",
+        "statusCheckRollup": {
+         "state": "FAILURE",
+         "contexts": {
+          "nodes": [
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXYg",
+            "databaseId": 84988385122,
+            "name": "build (ubuntu-latest)",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-07-03T11:15:44Z",
+            "completedAt": "2026-07-03T11:19:44Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994029/job/84988385122",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "FAILURE",
+               "title": "",
+               "message": "Process completed with exit code 1.",
+               "location": {
+                "start": {
+                 "line": 347
+                },
+                "end": {
+                 "line": 347
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXWg",
+            "databaseId": 84988385114,
+            "name": "CodeQL-Build (go)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:44Z",
+            "completedAt": "2026-07-03T11:18:53Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994018/job/84988385114",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Code Scanning"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXpQ",
+            "databaseId": 84988385189,
+            "name": "lint",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:44Z",
+            "completedAt": "2026-07-03T11:17:50Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994013/job/84988385189",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Lint"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXVA",
+            "databaseId": 84988385108,
+            "name": "build (windows-latest)",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-07-03T11:15:43Z",
+            "completedAt": "2026-07-03T11:23:01Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994029/job/84988385108",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "FAILURE",
+               "title": "",
+               "message": "Process completed with exit code 1.",
+               "location": {
+                "start": {
+                 "line": 347
+                },
+                "end": {
+                 "line": 347
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXOg",
+            "databaseId": 84988385082,
+            "name": "CodeQL-Build (actions)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:43Z",
+            "completedAt": "2026-07-03T11:16:24Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994018/job/84988385082",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Code Scanning"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXRA",
+            "databaseId": 84988385092,
+            "name": "build (macos-latest)",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-07-03T11:15:44Z",
+            "completedAt": "2026-07-03T11:21:04Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994029/job/84988385092",
+            "isRequired": true,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "FAILURE",
+               "title": "",
+               "message": "Process completed with exit code 1.",
+               "location": {
+                "start": {
+                 "line": 347
+                },
+                "end": {
+                 "line": 347
+                }
+               }
+              },
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "The macos-latest label will migrate to macOS 26 beginning June 15, 2026. For more information see https://github.com/actions/runner-images/issues/14167",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXug",
+            "databaseId": 84988385210,
+            "name": "govulncheck",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:44Z",
+            "completedAt": "2026-07-03T11:16:07Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994013/job/84988385210",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Lint"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXXQ",
+            "databaseId": 84988385117,
+            "name": "integration-tests (ubuntu-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:43Z",
+            "completedAt": "2026-07-03T11:17:06Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994029/job/84988385117",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXOA",
+            "databaseId": 84988385080,
+            "name": "integration-tests (windows-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:46Z",
+            "completedAt": "2026-07-03T11:18:00Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994029/job/84988385080",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": []
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybPXZA",
+            "databaseId": 84988385124,
+            "name": "integration-tests (macos-latest)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:15:45Z",
+            "completedAt": "2026-07-03T11:16:51Z",
+            "detailsUrl": "https://github.com/cli/cli/actions/runs/28656994029/job/84988385124",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Actions"
+             },
+             "workflowRun": {
+              "workflow": {
+               "name": "Unit and Integration Tests"
+              }
+             }
+            },
+            "annotations": {
+             "nodes": [
+              {
+               "path": ".github",
+               "annotationLevel": "NOTICE",
+               "title": "",
+               "message": "The macos-latest label will migrate to macOS 26 beginning June 15, 2026. For more information see https://github.com/actions/runner-images/issues/14167",
+               "location": {
+                "start": {
+                 "line": 1
+                },
+                "end": {
+                 "line": 1
+                }
+               }
+              }
+             ]
+            }
+           },
+           {
+            "__typename": "CheckRun",
+            "id": "CR_kwDODKw3uc8AAAATybVaQw",
+            "databaseId": 84988484163,
+            "name": "CodeQL",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "startedAt": "2026-07-03T11:16:16Z",
+            "completedAt": "2026-07-03T11:16:18Z",
+            "detailsUrl": "https://github.com/cli/cli/runs/84988484163",
+            "isRequired": false,
+            "checkSuite": {
+             "app": {
+              "name": "GitHub Advanced Security"
+             },
+             "workflowRun": null
+            },
+            "annotations": {
+             "nodes": []
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    },
+    "pending": {
+     "nodes": []
+    },
+    "reviewThreads": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNy0yMVQwNDoyNjoxM1rOknVhAw=="
+     },
+     "nodes": [
+      {
+       "id": "PRRT_kwDODKw3uc6SdWED",
+       "path": "internal/text/text.go",
+       "diffSide": "RIGHT",
+       "line": 84,
+       "startLine": 84,
+       "originalLine": 84,
+       "originalStartLine": null,
+       "subjectType": "LINE",
+       "isResolved": false,
+       "isOutdated": false,
+       "resolvedBy": null,
+       "comments": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc7XvAEI",
+          "author": {
+           "login": "user-3"
+          },
+          "bodyHTML": "<p dir=\"auto\">u.RawPath is only populated when the raw path differs from the default escaping of u.Path, so this misses the common case. e.g. <a href=\"https://x/a%20b\" rel=\"nofollow\">https://x/a%20b</a> decodes Path to \"a b\" whose canonical escape is \"a%20b\", which matches raw, so RawPath stays \"\" and you fall back to the decoded Path. u.EscapedPath() handles both and is what you want here.</p>",
+          "createdAt": "2026-07-21T04:26:13Z",
+          "url": "https://github.com/cli/cli/pull/13788#discussion_r3619422472",
+          "state": "SUBMITTED",
+          "diffHunk": "@@ -77,7 +77,12 @@ func DisplayURL(urlStr string) string {\n \tif scheme == \"\" {\n \t\tscheme = \"https\"\n \t}\n-\treturn scheme + \"://\" + u.Hostname() + u.Path\n+\tpath := u.Path\n+\t// Preserve percent-encoding from the original URL path\n+\tif u.RawPath != \"\" {\n+\t\tpath = u.RawPath\n+\t}",
+          "originalCommit": {
+           "oid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda"
+          },
+          "pullRequestReview": {
+           "id": "PRR_kwDODKw3uc8AAAABGplw5Q"
+          }
+         }
+        ]
+       }
+      }
+     ]
+    },
+    "timelineItems": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": "Y3Vyc29yOnYyOpPPAAABn4LsnogFqjQ3NDEyMzA4MjE="
+     },
+     "nodes": [
+      {
+       "__typename": "IssueComment",
+       "id": "IC_kwDODKw3uc8AAAABIpSWGA",
+       "author": {
+        "login": "user-1"
+       },
+       "bodyHTML": "<p dir=\"auto\">Thanks for your pull request! While it doesn't meet all of our standard requirements, it appears to be a small, focused contribution and has been routed to the team for review.</p>\n<p dir=\"auto\"><strong>Note:</strong> We still encourage linking to an issue with the <code class=\"notranslate\">help wanted</code> label when possible, as it helps us prioritize and track contributions.</p>",
+       "createdAt": "2026-07-03T10:12:40Z",
+       "url": "https://github.com/cli/cli/pull/13788#issuecomment-4875130392"
+      },
+      {
+       "__typename": "PullRequestCommit",
+       "id": "PURC_lADODKw3uc7tijZP2gAoMjUzN2EzYjY5MzFhNzg3ZDZiNGIwYWI2ODZjZDRjZjdlZGEwZGZkYQ",
+       "url": "https://github.com/cli/cli/pull/13788/commits/2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda",
+       "commit": {
+        "oid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda",
+        "messageHeadline": "fix: preserve percent-encoded path in DisplayURL",
+        "committedDate": "2026-07-03T11:15:33Z",
+        "author": {
+         "name": "Author 1",
+         "user": {
+          "login": "user-2"
+         }
+        }
+       }
+      },
+      {
+       "__typename": "HeadRefForcePushedEvent",
+       "id": "HRFPE_lADODKw3uc8AAAABHkGZ_88AAAAGaLDbgg",
+       "actor": {
+        "login": "user-2"
+       },
+       "createdAt": "2026-07-03T11:15:36Z",
+       "beforeCommit": {
+        "oid": "5ef3685da996f3a310ca5ecdecdb2ce62c841215"
+       },
+       "afterCommit": {
+        "oid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda"
+       }
+      },
+      {
+       "__typename": "IssueComment",
+       "id": "IC_kwDODKw3uc8AAAABIpxRRA",
+       "author": {
+        "login": "user-2"
+       },
+       "bodyHTML": "<p dir=\"auto\">The build failures on macOS/Windows/Ubuntu appear to be pre-existing infrastructure issues unrelated to this change. The lint, govulncheck, and all integration tests pass. The change is local to <code class=\"notranslate\">internal/text/text.go</code> and only affects the DisplayURL helper function.</p>",
+       "createdAt": "2026-07-03T11:23:37Z",
+       "url": "https://github.com/cli/cli/pull/13788#issuecomment-4875637060"
+      },
+      {
+       "__typename": "PullRequestReview",
+       "id": "PRR_kwDODKw3uc8AAAABGplw5Q",
+       "author": {
+        "login": "user-3"
+       },
+       "state": "COMMENTED",
+       "bodyHTML": "",
+       "createdAt": "2026-07-21T04:26:13Z",
+       "submittedAt": "2026-07-21T04:26:13Z",
+       "url": "https://github.com/cli/cli/pull/13788#pullrequestreview-4741230821",
+       "commit": {
+        "oid": "2537a3b6931a787d6b4b0ab686cd4cf7eda0dfda"
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

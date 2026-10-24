@@ -11,8 +11,8 @@ The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step 
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
 Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
-its first four phases, reviewed files and the full diff, opening pull requests, reading the
-discussion, and writing, are built.
+all five of its phases are built: reviewed files and the full diff, opening pull requests,
+reading the discussion, writing, and checks in detail.
 
 ## Layout
 
@@ -144,7 +144,11 @@ side to comment on the lines between. **Add single comment** posts at once, and 
 review** gathers comments in a pending review, as on GitHub. Threads take replies and can be
 resolved, comment boxes preview through GitHub's Markdown renderer, and **Suggest change**
 fills in a suggestion block. **Review** in the bar submits the pending review as a comment,
-an approval or a request for changes, or discards it. Nothing is posted except by one of
+an approval or a request for changes, or discards it.
+
+The Conversation tab opens with the head commit's checks, failing first, with required checks
+marked; a failed GitHub Actions job shows the end of its log on request. Failures and warnings
+that checks report on lines appear in the diffs and are counted on the map's blocks. Nothing is posted except by one of
 these actions, and the terminal logs each write with GitHub's answer. A closed or merged pull
 request is read-only.
 `--no-github` leaves GitHub out.

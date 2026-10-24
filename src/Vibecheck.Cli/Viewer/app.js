@@ -895,7 +895,8 @@
         bg.append(text(r.x + r.w - bw / 2 - 8, r.y + 3, badge.toUpperCase(), { class: "badge-text", "text-anchor": "middle" }));
         g.append(bg);
       }
-      const talk = openThreadsUnder(c.key).length;
+      const talk = openThreadsUnder(c.key).length, problems = problemsUnder(c.key).length;
+      let left = r.x + 8;
       if (talk) {
         const tw = String(talk).length * MONO.badge + 26, tx = r.x + 8;
         const tg = svg("g", { class: "talk-badge" });
@@ -904,6 +905,15 @@
         tg.append(text(tx + 19, r.y + 3, String(talk), { class: "talk-text" }));
         tg.append(svg("title", {}, `${plural(talk, "unresolved review thread", "unresolved review threads")} on files under ${nameOf(c.id)}`));
         g.append(tg);
+        left = tx + tw + 6;
+      }
+      if (problems) {
+        const label = "✕ " + problems, pw = label.length * MONO.badge + 12;
+        const pg = svg("g", { class: "problem-badge" });
+        pg.append(svg("rect", { x: left, y: r.y - 8, width: pw, height: 15, rx: 7.5, class: "problem-bg" }));
+        pg.append(text(left + pw / 2, r.y + 3, label, { class: "problem-text", "text-anchor": "middle" }));
+        pg.append(svg("title", {}, `${plural(problems, "check failure or warning", "check failures and warnings")} on files under ${nameOf(c.id)}`));
+        g.append(pg);
       }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
@@ -1035,7 +1045,8 @@
 
   // Returns the split diff of one hunk of a file. The threads given, keyed by hunk and line index as threadsOf keys
   // them, show under their lines.
-  function diffTable(path, hunk, index, threads) {
+  // The annotations given, keyed the same way, show under their lines after the threads.
+  function diffTable(path, hunk, index, threads, notes) {
     const nums = parseHeader(hunk.header);
     let la = nums.a, lb = nums.b;
     // The columns are fixed: each line-number column fits the hunk's largest line number, and the two code columns
@@ -1072,7 +1083,10 @@
       if (row.l !== null) la++;
       if (row.r !== null) lb++;
       if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, lineComposer(path, hunk))));
-      const here = threads ? [...new Set([row.l, row.r])].filter((i) => i !== null).flatMap((i) => threads.get(index + ":" + i) || []) : [];
+      const at = [...new Set([row.l, row.r])].filter((i) => i !== null).map((i) => index + ":" + i);
+      const marks = notes ? at.flatMap((k) => notes.get(k) || []) : [];
+      if (marks.length) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, ...marks.map((a) => annotationBox(a)))));
+      const here = threads ? at.flatMap((k) => threads.get(k) || []) : [];
       if (here.length) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, ...here.map((t) => threadBox(t)))));
     }
     table.append(body);
@@ -1114,13 +1128,15 @@
     head.append(el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path));
     if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
     if (done && REASON_TEXT[REVIEWED.get(path)]) head.append(el("span", { class: "file-note" }, REASON_TEXT[REVIEWED.get(path)]));
-    const talk = threadsOf(path);
+    const talk = threadsOf(path), notes = annotationsOf(path);
+    const problems = [...notes.lines.values()].flat().concat(notes.top).filter(isProblem).length;
+    if (problems) head.append(el("span", { class: "file-note problem-note" }, plural(problems, "check problem", "check problems")));
     const open = [...talk.lines.values()].flat().concat(talk.top).filter((t) => !t.isResolved).length;
     if (open) head.append(el("span", { class: "file-note talk-note" }, plural(open, "unresolved thread", "unresolved threads")));
     const muted = done && state.opts.mute;
     const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
     const diffs = el("div", { class: "file-diffs" });
-    const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(diffTable(path, h, i, talk.lines))); };
+    const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(diffTable(path, h, i, talk.lines, notes.lines))); };
     if (muted && !state.expanded.has(path)) diffs.hidden = true;
     else fill();
     if (muted && hunks.length) {
@@ -1131,6 +1147,7 @@
         ev.target.textContent = show ? "Hide diff" : "Show diff";
       } }, diffs.hidden ? "Show diff" : "Hide diff"));
     }
+    if (notes.top.length) block.append(el("div", { class: "file-threads" }, ...notes.top.map((a) => annotationBox(a))));
     if (talk.top.length) block.append(el("div", { class: "file-threads" }, ...talk.top.map((t) => threadBox(t, { top: true }))));
     block.append(diffs);
     return block;
@@ -1326,7 +1343,7 @@
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
       if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf) || "");
-      box.append(threadList(l.leaf) || "");
+      box.append(threadList(l.leaf) || "", problemList(l.leaf) || "");
       box.append(el("p", { class: "hint" }, "Changed types show their diffs. Click an edge row to see the type pairs behind it. Esc goes back to the schematic."));
       return;
     }
@@ -1353,7 +1370,7 @@
       if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
       const bar = reviewedBar(id);
       if (bar) box.append(bar);
-      box.append(threadList(id) || "");
+      box.append(threadList(id) || "", problemList(id) || "");
       const m = metricsOf(id);
       if (m.head) box.append(kv("Types", deltaText(m.base ? m.base.types : null, m.head.types)));
       else if (id === ROOT) box.append(kv("Types", deltaText(CS.types.filter((t) => t.leafBase).length, CS.types.filter((t) => t.leafHead).length)));
@@ -1383,7 +1400,7 @@
       box.append(kv("Files", `${content.files}` + (content.added + content.removed + content.modified ? ` · +${content.added} −${content.removed} ~${content.modified}` : "")));
       const bar = reviewedBar(child.key);
       if (bar) box.append(bar);
-      box.append(threadList(child.key) || "");
+      box.append(threadList(child.key) || "", problemList(child.key) || "");
       if (level.inCycle.has(child.key)) {
         const cyc = level.cycles.find((c) => c.includes(child.key));
         box.append(el("p", { class: "warn" }, "In a cycle with " + cyc.filter((k) => k !== child.key).map(nameOf).join(", ") + "."));
@@ -2012,7 +2029,8 @@
   // The bar under the top bar shows its state, and a notice offers a new review when the author pushes. See
   // docs/pull-requests.md sections 2, 3.3 and 4.6.
   // Each thread's place in this review's diffs arrives with the snapshot, by thread identifier (section 7.1).
-  const PULL = { snapshot: META.pull || null, stale: META.pullStale || null, places: META.pullThreads || {} };
+  // The places of the annotations of the checks arrive the same way, keyed by check and annotation (section 9).
+  const PULL = { snapshot: META.pull || null, stale: META.pullStale || null, places: META.pullThreads || {}, notes: META.pullAnnotations || {} };
   // How the bar words GitHub's check rollup states, review decisions and merge states, each with the pill's tone.
   const CHECK_TEXT = { SUCCESS: ["checks pass", "good"], FAILURE: ["checks fail", "bad"], ERROR: ["checks fail", "bad"], PENDING: ["checks pending", "wait"], EXPECTED: ["checks pending", "wait"] };
   const DECISION_TEXT = { APPROVED: ["approved", "good"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "wait"] };
@@ -2280,9 +2298,13 @@
     const col = el("div", { class: "talk-col" });
     box.replaceChildren(col);
     if (!p) return;
-    col.append(el("div", { class: "talk-checks" }, el("span", {}, "Checks"), pill(CHECK_TEXT[p.checks] || ["no checks", ""]), pill(DECISION_TEXT[p.reviewDecision]),
+    // The list of checks below says what the rollup says, so the line above it gives the rollup only when there is no list.
+    const listed = allChecks().length > 0;
+    col.append(el("div", { class: "talk-checks" }, listed ? null : el("span", {}, "Checks"), listed ? null : pill(CHECK_TEXT[p.checks] || ["no checks", ""]), pill(DECISION_TEXT[p.reviewDecision]),
       p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
       el("span", { class: "spacer" }), el("a", { href: p.url, target: "_blank", rel: "noopener" }, "Open on GitHub")));
+    const checks = checkList();
+    if (checks) col.append(checks);
     if (!d) { col.append(el("p", { class: "hint" }, "GitHub has not sent the discussion yet.")); return; }
     const reviews = new Set(d.timeline.filter((i) => i.kind === "review").map((i) => i.id));
     const started = new Map();
@@ -2307,6 +2329,128 @@
     if (other.length) col.append(el("section", { class: "card" }, el("header", {}, el("b", {}, "Other review threads")),
       el("div", { class: "card-threads" }, ...other.map((t) => threadBox(t, { away: true })))));
     if (canWrite()) col.append(conversationComposer());
+  }
+
+  // ---------- Checks ----------
+
+  // The checks of the pull request's head commit, and the annotations their runs left. The server places each
+  // annotation in this review's diffs as it places threads: under its last line in a review of the head, at the top of
+  // its file otherwise, and only in its check's row when the diff does not hold its path. Failures and warnings count on
+  // the map, so a failing build points at the blocks it concerns. See docs/pull-requests.md section 9.
+  const allChecks = () => (PULL.snapshot && PULL.snapshot.checkList) || [];
+  const CHECK_ORDER = { failure: 0, pending: 1, cancelled: 2, neutral: 3, success: 4, skipped: 5 };
+  const CHECK_TONE = { failure: "bad", pending: "wait", cancelled: "", neutral: "", success: "good", skipped: "" };
+  const isProblem = (a) => a.level === "FAILURE" || a.level === "WARNING";
+
+  // Returns every annotation with its check and the key the server places it by.
+  function allAnnotations() {
+    return allChecks().flatMap((check) => check.annotations.map((a, i) => ({ ...a, check, key: check.id + "/" + i })));
+  }
+
+  // Returns the annotations on a file of this review: those under each line, keyed by hunk and line index as threadsOf
+  // keys threads, and those listed at the top of the file.
+  function annotationsOf(path) {
+    const lines = new Map(), top = [];
+    for (const a of allAnnotations()) {
+      const p = PULL.notes[a.key];
+      if (!p || p.path !== path) continue;
+      if (p.hunk === null || p.hunk === undefined) { top.push(a); continue; }
+      const k = p.hunk + ":" + p.line;
+      if (!lines.has(k)) lines.set(k, []);
+      lines.get(k).push(a);
+    }
+    return { lines, top };
+  }
+
+  // Returns the failures and warnings on the changed files under a node or a group, by the rule of reviewedCount.
+  function problemsUnder(key) {
+    const notes = allAnnotations().filter((a) => isProblem(a) && PULL.notes[a.key]);
+    if (!notes.length) return [];
+    const paths = new Set(reviewedCount(key).paths);
+    return notes.filter((a) => paths.has(PULL.notes[a.key].path));
+  }
+
+  // Returns an annotation: its level, its check, its lines and its message, which is plain text. The away option shows
+  // its path too, for a check's row in the conversation.
+  function annotationBox(a, opts = {}) {
+    const lines = a.startLine !== a.endLine ? `lines ${a.startLine}–${a.endLine}` : `line ${a.endLine}`;
+    const box = el("div", { class: "annotation level-" + a.level.toLowerCase(), "data-note": opts.away ? null : a.key },
+      el("div", { class: "annotation-head" }, el("span", { class: "pill " + (a.level === "FAILURE" ? "bad" : a.level === "WARNING" ? "wait" : "") }, a.level.toLowerCase()),
+        el("b", {}, a.check.name), el("span", { class: "thread-where" }, opts.away ? `${a.path} · ${lines}` : lines), a.title ? el("span", {}, a.title) : null),
+      el("div", { class: "annotation-message" }, a.message));
+    if (opts.away && PULL.notes[a.key]) box.append(el("button", { class: "link", onclick: () => openNote(a) }, "Show in the diff"));
+    return box;
+  }
+
+  // Opens the Map tab on the diff that shows an annotation, and scrolls to it.
+  async function openNote(a) {
+    const p = PULL.notes[a.key];
+    if (!p) return;
+    if (state.tab !== "map") showTab("map");
+    state.expanded.add(p.path);
+    await openFile(p.path);
+    const target = document.querySelector(`[data-note="${CSS.escape(a.key)}"]`);
+    if (target) target.scrollIntoView({ block: "center" });
+  }
+
+  // Returns the list of a node's failures and warnings for the details panel, each opening its line, or null when it
+  // has none.
+  function problemList(key) {
+    const problems = problemsUnder(key);
+    if (!problems.length) return null;
+    const ul = el("ul", { class: "list" });
+    for (const a of problems) {
+      const path = PULL.notes[a.key].path;
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => openNote(a), title: `${a.check.name}: ${a.message}` },
+        el("span", { class: "row-name" }, path.slice(path.lastIndexOf("/") + 1)), el("span", { class: "row-meta" }, `${a.level.toLowerCase()} · line ${a.endLine}`))));
+    }
+    return el("div", {}, el("h3", {}, plural(problems.length, "check problem", "check problems")), ul);
+  }
+
+  // Returns how long a check ran, such as "1m 24s", or nothing when it has not finished.
+  function duration(check) {
+    if (!check.started || !check.completed) return "";
+    const s = Math.max(0, Math.round((new Date(check.completed) - new Date(check.started)) / 1000));
+    return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  }
+
+  // Returns the checks for the top of the Conversation tab, failing first: each with its state, name, workflow,
+  // whether it is required, how long it ran, and its page. A failed GitHub Actions job shows the end of its log on
+  // request, and annotations that no diff line of this review shows are listed under their check.
+  function checkList() {
+    const checks = allChecks().slice().sort((a, b) => (CHECK_ORDER[a.state] ?? 9) - (CHECK_ORDER[b.state] ?? 9) || (b.required - a.required));
+    if (!checks.length) return null;
+    const failing = checks.filter((c) => c.state === "failure").length;
+    const list = el("div", { class: "checks" });
+    for (const c of checks) {
+      const row = el("div", { class: "check st-" + c.state },
+        el("span", { class: "pill " + (CHECK_TONE[c.state] || "") }, c.state),
+        el("span", { class: "check-name" }, c.name), c.workflow ? el("span", { class: "check-workflow" }, c.workflow) : null,
+        c.required ? el("span", { class: "chip" }, "required") : null, c.description ? el("span", { class: "check-workflow" }, c.description) : null,
+        el("span", { class: "spacer" }), el("span", { class: "check-time" }, duration(c)),
+        c.url ? el("a", { href: c.url, target: "_blank", rel: "noopener" }, "Details") : null);
+      const box = el("div", { class: "check-box" }, row);
+      if (c.state === "failure" && c.jobId && API) {
+        const log = el("pre", { class: "check-log" });
+        log.hidden = true;
+        row.append(el("button", { class: "link", onclick: async (ev) => {
+          if (!log.hidden) { log.hidden = true; ev.target.textContent = "Show log"; return; }
+          log.hidden = false; ev.target.textContent = "Hide log";
+          if (log.childElementCount || log.textContent) return;
+          log.textContent = "Reading the log…";
+          const r = await fetch(`${API}/pull/checks/${c.jobId}/log`).catch(() => null);
+          const body = r ? await r.json().catch(() => ({})) : {};
+          log.textContent = r && r.ok ? body.lines.join("\n") : body.message || "The log could not be read.";
+          log.scrollTop = log.scrollHeight;
+        } }, "Show log"));
+        box.append(log);
+      }
+      const away = c.annotations.map((a, i) => ({ ...a, check: c, key: c.id + "/" + i })).filter((a) => !(PULL.notes[a.key] && PULL.notes[a.key].hunk !== null && PULL.notes[a.key].hunk !== undefined));
+      if (away.length) box.append(el("div", { class: "check-notes" }, ...away.map((a) => annotationBox(a, { away: true }))));
+      list.append(box);
+    }
+    return el("section", { class: "card" }, el("header", {}, el("b", {}, "Checks"),
+      el("span", { class: failing ? "verb bad" : "verb" }, failing ? `${failing} of ${checks.length} failing` : plural(checks.length, "check", "checks"))), list);
   }
 
   // ---------- Writing ----------
@@ -2539,7 +2683,7 @@
       if (e.type === "pull") {
         if (!fresh) return;
         if (e.stale) PULL.stale = e.message;
-        else { PULL.snapshot = e.snapshot; PULL.places = e.threads || {}; PULL.stale = null; }
+        else { PULL.snapshot = e.snapshot; PULL.places = e.threads || {}; PULL.notes = e.annotations || {}; PULL.stale = null; }
         renderPull();
         if (!$("#reviewbox").hidden) renderReviewBox();
         if (e.stale) return;

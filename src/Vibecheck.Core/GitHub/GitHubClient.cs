@@ -54,6 +54,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
         var data = await QueryAsync("pull.graphql", variables, ct);
         if (data.GetProperty("repository").GetProperty("pullRequest") is not { ValueKind: JsonValueKind.Object } pr) return null;
         var nodeId = Str(pr, "id");
+        var checks = CheckList(pr.GetProperty("lastCommit"));
         var latest = pr.GetProperty("viewerLatestReview");
         var reviewed = latest.ValueKind == JsonValueKind.Object;
         var timeline = new List<PullItem> { new("description", "description", Login(pr), Time(pr, "createdAt"), Str(pr, "url")) { BodyHtml = Str(pr, "bodyHTML") } };
@@ -77,7 +78,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
             if (data.GetProperty("repository").GetProperty("pullRequest") is not { ValueKind: JsonValueKind.Object } next) break;
             pr = next;
         }
-        return snapshot with { Discussion = new PullDiscussion(timeline, threads, pending), NodeId = nodeId };
+        return snapshot with { Discussion = new PullDiscussion(timeline, threads, pending), NodeId = nodeId, CheckList = checks };
     }
 
     /// <summary>
@@ -189,6 +190,19 @@ public sealed class GitHubClient : IGitHub, IDisposable
     public Task DeleteReviewAsync(string reviewId, CancellationToken ct = default) =>
         MutateAsync("Discard", new() { ["review"] = reviewId }, ct);
 
+    public async Task<string> GetJobLogAsync(long jobId, CancellationToken ct = default)
+    {
+        try
+        {
+            return await SendTextAsync(new HttpRequestMessage(HttpMethod.Get, new Uri(api, $"repos/{Repository.Owner}/{Repository.Name}/actions/jobs/{jobId}/logs")), ct);
+        }
+        catch (GitHubException ex) when (ex.Status == HttpStatusCode.Gone)
+        {
+            // GitHub deletes logs after the repository's retention period, 90 days unless it is set otherwise.
+            throw new GitHubException("GitHub no longer keeps this job's log; it deletes logs after the repository's retention period.") { Status = ex.Status };
+        }
+    }
+
     public Task<string> RenderMarkdownAsync(string text, CancellationToken ct = default) =>
         SendTextAsync(Post("markdown", new Dictionary<string, object> { ["text"] = text, ["mode"] = "gfm", ["context"] = Repository.NameWithOwner }), ct);
 
@@ -242,7 +256,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
             var message = Message(text) ?? response.ReasonPhrase ?? response.StatusCode.ToString();
             if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.Forbidden && RetryAfter(response) is { } wait)
                 throw new GitHubRateLimitException($"GitHub limited the rate of requests: {message}", wait);
-            throw new GitHubException($"GitHub answered {(int)response.StatusCode}: {message}");
+            throw new GitHubException($"GitHub answered {(int)response.StatusCode}: {message}") { Status = response.StatusCode };
         }
     }
 
@@ -261,6 +275,60 @@ public sealed class GitHubClient : IGitHub, IDisposable
         try { using var doc = JsonDocument.Parse(text); return Str(doc.RootElement, "message"); }
         catch (JsonException) { return null; }
     }
+
+    /// <summary>Reads each check of the last commit in a <c>commits(last: 1)</c> connection, which is empty when it has none.</summary>
+    private static List<PullCheck> CheckList(JsonElement commits)
+    {
+        var result = new List<PullCheck>();
+        foreach (var n in commits.GetProperty("nodes").EnumerateArray())
+        {
+            if (Obj(n.GetProperty("commit"), "statusCheckRollup") is not { } rollup || Obj(rollup, "contexts") is not { } contexts) continue;
+            foreach (var c in contexts.GetProperty("nodes").EnumerateArray())
+            {
+                var required = c.TryGetProperty("isRequired", out var r) && r.ValueKind == JsonValueKind.True;
+                if (Str(c, "__typename") == "StatusContext")
+                {
+                    result.Add(new PullCheck(Str(c, "id")!, Str(c, "context")!, null, required, StatusState(Str(c, "state")), Time(c, "createdAt"), null, Str(c, "targetUrl")) { Description = Str(c, "description") });
+                    continue;
+                }
+                if (Str(c, "__typename") != "CheckRun") continue;
+                var suite = Obj(c, "checkSuite");
+                var actions = Obj(suite, "app") is { } app && Str(app, "name") == "GitHub Actions";
+                var workflow = Obj(Obj(suite, "workflowRun"), "workflow") is { } w ? Str(w, "name") : null;
+                var annotations = Obj(c, "annotations") is { } a
+                    ? a.GetProperty("nodes").EnumerateArray().Select(x => new CheckAnnotation(Str(x, "path")!, Line(x, "start"), Line(x, "end"), Str(x, "annotationLevel") ?? "NOTICE", Str(x, "message") ?? "", Str(x, "title"))).ToList()
+                    : [];
+                result.Add(new PullCheck(Str(c, "id")!, Str(c, "name")!, workflow, required, RunState(Str(c, "status"), Str(c, "conclusion")), Time(c, "startedAt"), Time(c, "completedAt"), Str(c, "detailsUrl"))
+                {
+                    JobId = actions && c.TryGetProperty("databaseId", out var id) && id.ValueKind == JsonValueKind.Number ? id.GetInt64() : null,
+                    Annotations = annotations,
+                });
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Returns the line where an annotation's location starts or ends.</summary>
+    private static int Line(JsonElement annotation, string end) =>
+        Obj(Obj(annotation, "location"), end) is { } at && Int(at, "line") is { } line ? line : 1;
+
+    /// <summary>Returns the state of a check run: pending until it completes, and then what its conclusion says.</summary>
+    private static string RunState(string? status, string? conclusion) => status != "COMPLETED" ? "pending" : conclusion switch
+    {
+        "SUCCESS" => "success",
+        "FAILURE" or "TIMED_OUT" or "STARTUP_FAILURE" or "ACTION_REQUIRED" => "failure",
+        "CANCELLED" => "cancelled",
+        "SKIPPED" => "skipped",
+        _ => "neutral",
+    };
+
+    /// <summary>Returns the state of a commit status.</summary>
+    private static string StatusState(string? state) => state switch
+    {
+        "SUCCESS" => "success",
+        "FAILURE" or "ERROR" => "failure",
+        _ => "pending",
+    };
 
     /// <summary>Returns the rollup state of the checks of the last commit in a <c>commits(last: 1)</c> connection, or null when it has none.</summary>
     private static string? Checks(JsonElement commits) =>

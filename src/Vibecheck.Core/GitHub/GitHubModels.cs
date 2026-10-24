@@ -38,6 +38,9 @@ public sealed record PullSnapshot(int Number, string Title, string Url, string S
 
     /// <summary>Gets GitHub's node identifier of the pull request, which writes through GraphQL name it by.</summary>
     public string? NodeId { get; init; }
+
+    /// <summary>Gets each check of the head commit, in GitHub's order, or <see langword="null"/> when they were not read.</summary>
+    public IReadOnlyList<PullCheck>? CheckList { get; init; }
 }
 
 /// <summary>
@@ -100,6 +103,33 @@ public sealed record ThreadComment(string Id, string? Author, string BodyHtml, D
 public sealed record PendingReview(string Id, int Comments);
 
 /// <summary>
+/// One check of a pull request's head commit: a check run, such as a job of a GitHub Actions workflow, or a commit
+/// status that another service set. The state is <c>success</c>, <c>failure</c>, <c>pending</c>, <c>cancelled</c>,
+/// <c>skipped</c> or <c>neutral</c>, whichever kind the check is. See <c>docs/pull-requests.md</c> section 9.
+/// </summary>
+/// <param name="Workflow">The name of the workflow a GitHub Actions job belongs to, or null.</param>
+/// <param name="Required">A value indicating whether the base branch's protection requires the check to pass before merging.</param>
+/// <param name="Url">The check's page, on GitHub or on the service that set it.</param>
+public sealed record PullCheck(string Id, string Name, string? Workflow, bool Required, string State, DateTimeOffset? Started, DateTimeOffset? Completed, string? Url)
+{
+    /// <summary>Gets the identifier of the GitHub Actions job that a check run is, whose log can be read, or <see langword="null"/> for any other check.</summary>
+    public long? JobId { get; init; }
+
+    /// <summary>Gets the description a commit status carries, or <see langword="null"/>.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Gets the annotations a check run left, at most the fifty the query reads.</summary>
+    public IReadOnlyList<CheckAnnotation> Annotations { get; init; } = [];
+}
+
+/// <summary>
+/// A note that a check run left on lines of the head commit. The level is <c>FAILURE</c>, <c>WARNING</c> or
+/// <c>NOTICE</c>. The path is relative to the repository's top, and a workflow can name a path that is not a file,
+/// such as <c>.github</c>.
+/// </summary>
+public sealed record CheckAnnotation(string Path, int StartLine, int EndLine, string Level, string Message, string? Title);
+
+/// <summary>
 /// Locates a comment in a pull request's diff as GitHub's API takes it: the path relative to the repository's top, and
 /// the side and line number of the comment's last line. A comment on several lines also has the side and line of its
 /// first line. The side is <c>LEFT</c> for lines at base and <c>RIGHT</c> for lines at head. See
@@ -111,7 +141,11 @@ public sealed record DiffAnchor(string Path, string Side, int Line, string? Star
 public sealed record PullFile(string Path, string Status, string? PreviousPath);
 
 /// <summary>Reports that a request to GitHub failed, with GitHub's message when it gave one.</summary>
-public class GitHubException(string message) : Exception(message);
+public class GitHubException(string message) : Exception(message)
+{
+    /// <summary>Gets the HTTP status GitHub answered with, or <see langword="null"/> when it did not answer or answered a query with errors.</summary>
+    public System.Net.HttpStatusCode? Status { get; init; }
+}
 
 /// <summary>Reports that GitHub asked for requests to stop for a while, as its secondary rate limit does.</summary>
 public sealed class GitHubRateLimitException(string message, TimeSpan retryAfter) : GitHubException(message)
@@ -179,6 +213,10 @@ public interface IGitHub
     /// <summary>Deletes the viewer's pending review with its comments.</summary>
     /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
     Task DeleteReviewAsync(string reviewId, CancellationToken ct = default);
+
+    /// <summary>Returns the log of a GitHub Actions job.</summary>
+    /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>
+    Task<string> GetJobLogAsync(long jobId, CancellationToken ct = default);
 
     /// <summary>Returns Markdown rendered as HTML the way GitHub renders it in the repository.</summary>
     /// <exception cref="GitHubException">GitHub refused the request or could not be reached.</exception>

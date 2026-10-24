@@ -268,6 +268,47 @@ public class ReviewServerTests
     }
 
     [Fact]
+    public async Task PlacesAnnotationsAndReadsTheEndOfAFailedJobsLogOnce()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        var build = new PullCheck("CR_1", "build", "CI", true, "failure", null, null, "https://github.com/o/r/actions/runs/1/job/7")
+        {
+            JobId = 7,
+            Annotations = [new CheckAnnotation("app/" + TestData.X1, 1, 1, "FAILURE", "CS0103: The name 'Service' does not exist", null)],
+        };
+        var github = new FakeGitHub
+        {
+            Pulls = [new PullSummary(3, "Call", "u", "author", false, after, "main", null, "FAILURE", false)],
+            Snapshots = { [3] = Snapshot(3, after, before) with { CheckList = [build] } },
+            Log = "2026-10-01T10:00:00.0000000Z build\n2026-10-01T10:00:01.0000000Z ##[error]Process completed with exit code 1.\n",
+        };
+        await using var server = new ReviewServer(Options(repo) with { Directory = Path.Combine(repo.Path, "app"), GitHub = github });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        var id = $"{before[..7]}-{after[..7]}";
+        var api = $"{server.BaseAddress}/api/reviews/{id}";
+        await ReadEventsAsync(client, api + "/events");
+
+        // The annotation on the head's first line of the changed file goes under that line.
+        var script = await client.GetStringAsync($"{server.BaseAddress}/reviews/{id}/changeset.js");
+        Assert.Contains($"\"pullAnnotations\":{{\"CR_1/0\":{{\"path\":\"{TestData.X1}\",\"hunk\":0,\"line\":1}}}}", script, StringComparison.Ordinal);
+
+        for (var i = 0; i < 2; i++)
+        {
+            var log = await client.GetFromJsonAsync<JsonElement>(api + "/pull/checks/7/log");
+            Assert.Equal(["build", "##[error]Process completed with exit code 1."], log.GetProperty("lines").EnumerateArray().Select(l => l.GetString()));
+        }
+        Assert.Equal(1, github.LogReads);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(api + "/pull/checks/8/log")).StatusCode);
+    }
+
+    [Fact]
     public async Task AttachesARangeWhoseHeadIsAPullRequestsHead()
     {
         using var repo = new TempRepo();
@@ -380,6 +421,15 @@ public class ReviewServerTests
         public Task SubmitReviewAsync(string pullId, string? reviewId, string commit, string @event, string body, CancellationToken ct = default) => Write($"submit {pullId} {reviewId} {commit} {@event} {body}");
         public Task DeleteReviewAsync(string reviewId, CancellationToken ct = default) => Write($"delete {reviewId}");
         public Task<string> RenderMarkdownAsync(string text, CancellationToken ct = default) => Task.FromResult($"<strong>{text}</strong>");
+
+        public string Log { get; init; } = "";
+        public int LogReads;
+
+        public Task<string> GetJobLogAsync(long jobId, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref LogReads);
+            return Task.FromResult(Log);
+        }
     }
 
     private static ReviewServerOptions Options(TempRepo repo) => new()

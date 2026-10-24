@@ -253,6 +253,83 @@ public class GitHubTests
     }
 
     [Fact]
+    public async Task ReadsTheHeadCommitsChecksWithTheirAnnotations()
+    {
+        using var client = Client(_ => Json(Fixture("checks.json")));
+        var checks = (await client.GetPullAsync(13788))!.CheckList!;
+
+        Assert.Equal(11, checks.Count);
+        var failed = checks.Where(c => c.State == "failure").ToList();
+        Assert.Equal(["build (ubuntu-latest)", "build (windows-latest)", "build (macos-latest)"], failed.Select(c => c.Name));
+        Assert.All(failed, c => Assert.True(c.Required && c.Workflow == "Unit and Integration Tests" && c.Url!.StartsWith("https://github.com/")));
+        Assert.Equal(84988385122, failed[0].JobId);
+        Assert.Equal(new CheckAnnotation(".github", 347, 347, "FAILURE", "Process completed with exit code 1.", null), failed[0].Annotations.Single() with { Title = null });
+        Assert.True(failed[0].Completed > failed[0].Started);
+        // A check run that GitHub Actions did not run has no job whose log can be read.
+        var codeql = checks.Single(c => c.Name == "CodeQL");
+        Assert.Equal(("success", null, null), (codeql.State, codeql.JobId, codeql.Workflow));
+    }
+
+    [Fact]
+    public async Task ChecksOfEveryKindHaveOneOfTheSameStates()
+    {
+        // A run in progress, a cancelled run, and commit statuses that failed and that wait, beside the recorded checks.
+        var doc = JsonNode.Parse(Fixture("checks.json"))!;
+        var nodes = doc["data"]!["repository"]!["pullRequest"]!["lastCommit"]!["nodes"]![0]!["commit"]!["statusCheckRollup"]!["contexts"]!["nodes"]!.AsArray();
+        nodes[1]!["status"] = "IN_PROGRESS";
+        nodes[1]!["conclusion"] = null;
+        nodes[2]!["conclusion"] = "CANCELLED";
+        nodes[6]!["conclusion"] = "TIMED_OUT";
+        nodes.Add(JsonNode.Parse("""{"__typename":"StatusContext","id":"SC_1","context":"ci/external","state":"ERROR","description":"Build errored","targetUrl":"https://ci.example/1","createdAt":"2026-10-01T00:00:00Z","isRequired":true}"""));
+        nodes.Add(JsonNode.Parse("""{"__typename":"StatusContext","id":"SC_2","context":"ci/slow","state":"EXPECTED","description":null,"targetUrl":null,"createdAt":"2026-10-01T00:00:00Z","isRequired":false}"""));
+        using var client = Client(_ => Json(doc.ToJsonString()));
+        var checks = (await client.GetPullAsync(13788))!.CheckList!;
+        Assert.Equal(["failure", "pending", "cancelled", "failure"], new[] { 0, 1, 2, 6 }.Select(i => checks[i].State));
+        Assert.Equal(("failure", true, "Build errored", (long?)null), (checks[^2].State, checks[^2].Required, checks[^2].Description, checks[^2].JobId));
+        Assert.Equal("pending", checks[^1].State);
+    }
+
+    [Fact]
+    public async Task ReadsTheEndOfAJobsLogWithoutTimesOrColors()
+    {
+        string? path = null;
+        using var client = Client(r =>
+        {
+            path = r.RequestUri!.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("﻿2026-10-01T10:00:00.1234567Z ##[group]Run tests\r\n2026-10-01T10:00:01.0000000Z \u001b[31mFAIL\u001b[0m TestThing\r\n2026-10-01T10:00:02.0000000Z ##[error]Process completed with exit code 1.\r\n\r\n") };
+        });
+        var log = await client.GetJobLogAsync(84988385122);
+        Assert.Equal("/repos/cli/cli/actions/jobs/84988385122/logs", path);
+        Assert.Equal(["##[group]Run tests", "FAIL TestThing", "##[error]Process completed with exit code 1."], JobLogs.Tail(log, 60));
+        Assert.Equal(["##[error]Process completed with exit code 1."], JobLogs.Tail(log, 1));
+
+        // GitHub answers 410 for a log it has deleted after the retention period.
+        using var expired = Client(_ => Json("""{"message":"Server Error","status":"410"}""", HttpStatusCode.Gone));
+        var gone = await Assert.ThrowsAsync<GitHubException>(() => expired.GetJobLogAsync(1));
+        Assert.Contains("no longer keeps this job's log", gone.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnnotationsLandOnTheHeadsLinesOnlyInAReviewOfThatHead()
+    {
+        var check = new PullCheck("CR_1", "build", "CI", true, "failure", null, null, null)
+        {
+            Annotations =
+            [
+                new CheckAnnotation("src/C.cs", 12, 12, "FAILURE", "CS1002: ; expected", null),
+                new CheckAnnotation("src/C.cs", 40, 40, "WARNING", "unused", null),
+                new CheckAnnotation(".github", 347, 347, "FAILURE", "Process completed with exit code 1.", null),
+            ],
+        };
+        var current = ThreadPlacer.PlaceAnnotations([check], OneHunk("C.cs"), "src", sameHead: true);
+        Assert.Equal(new ThreadPlace("C.cs", 0, 3), current["CR_1/0"]);
+        Assert.Equal(new ThreadPlace("C.cs", null, null), current["CR_1/1"]);
+        Assert.False(current.ContainsKey("CR_1/2"));
+        var earlier = ThreadPlacer.PlaceAnnotations([check], OneHunk("C.cs"), "src", sameHead: false);
+        Assert.Equal(new ThreadPlace("C.cs", null, null), earlier["CR_1/0"]);
+    }
+
+    [Fact]
     public async Task ListsAPullRequestsFilesPageByPageWithRenames()
     {
         // GitHub's REST schema gives a renamed file its earlier path as previous_filename.

@@ -477,6 +477,25 @@
   .review-choices { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
   .review-choices label.blocked { color: var(--muted); text-decoration: line-through; }
   .confirm { display: inline-flex; align-items: center; gap: 8px; color: var(--removed); font-size: 13px; }
+  /* The checks of the head commit and the annotations their runs left. */
+  .checks { display: grid; }
+  .check-box + .check-box { border-top: 1px solid var(--line); }
+  .check { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 12px; font-size: 13px; }
+  .check .spacer { flex: 1; }
+  .check-name { font-weight: 600; }
+  .check-workflow, .check-time { color: var(--muted); font-size: 12px; }
+  .check.st-success .check-name, .check.st-skipped .check-name { font-weight: 400; }
+  .check-log { margin: 0 12px 8px; max-height: 320px; overflow: auto; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; font: 12px var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .check-notes { display: grid; gap: 6px; padding: 0 12px 8px; }
+  .annotation { border: 1px solid var(--line); border-left: 3px solid var(--line-strong); border-radius: 4px; background: var(--surface); padding: 4px 10px 6px; font-family: var(--sans); font-size: 13px; white-space: normal; }
+  .annotation.level-failure { border-left-color: var(--removed); }
+  .annotation.level-warning { border-left-color: var(--modified); }
+  .annotation-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; }
+  .annotation-head .thread-where { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .annotation-message { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px var(--code); margin-top: 2px; }
+  .problem-note { color: var(--removed); }
+  svg#stage .problem-bg { fill: var(--surface); stroke: var(--removed); stroke-width: 1; }
+  svg#stage .problem-text { fill: var(--removed); font-size: 9px; font-weight: 600; }
   .loading { padding: 40px; text-align: center; color: var(--muted); font-family: var(--mono); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>

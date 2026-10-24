@@ -50,6 +50,29 @@ public static class ThreadPlacer
     }
 
     /// <summary>
+    /// Returns where each annotation of the checks on a file of the review's diff is shown, keyed by the check's
+    /// identifier and the annotation's index, joined by a slash. Annotations belong to the pull request's head commit,
+    /// so they land on lines only in a review of that head, under their last line. The rest are listed at the top of
+    /// their file, and annotations on paths that the diff does not hold are only in the check's row.
+    /// </summary>
+    /// <param name="root">The directory the changeset's paths are relative to, relative to the repository's top.</param>
+    /// <param name="sameHead">A value indicating whether the review's head is the pull request's current head.</param>
+    public static Dictionary<string, ThreadPlace> PlaceAnnotations(IEnumerable<PullCheck> checks, IEnumerable<FileHunks> hunks, string root, bool sameHead)
+    {
+        var byPath = hunks.ToDictionary(h => h.Path, h => h.Hunks, StringComparer.Ordinal);
+        var result = new Dictionary<string, ThreadPlace>(StringComparer.Ordinal);
+        foreach (var check in checks)
+            for (var i = 0; i < check.Annotations.Count; i++)
+            {
+                var a = check.Annotations[i];
+                if (ReviewPipeline.ChangesetPath(a.Path, root) is not { } path || !byPath.TryGetValue(path, out var fileHunks)) continue;
+                var at = sameHead ? Find(fileHunks, right: true, a.EndLine) : null;
+                result[check.Id + "/" + i] = new ThreadPlace(path, at?.Hunk, at?.Line);
+            }
+        return result;
+    }
+
+    /// <summary>
     /// Returns where GitHub takes a comment on lines of one side of a hunk, given by their indexes in
     /// <see cref="Hunk.Lines"/>. A context line is on both sides, an added line only at head, and a removed line only at
     /// base.
