@@ -40,6 +40,12 @@ public sealed record Facts
     public required List<ViolationFact> Violations { get; init; }
     public List<string> Warnings { get; init; } = [];
 
+    /// <summary>Gets the declarations of the types the map holds, as <see cref="AnalysisResult.Declarations"/> lists them.</summary>
+    public List<Declaration> Declarations { get; init; } = [];
+
+    /// <summary>Gets the sites among the types the map holds, as <see cref="AnalysisResult.Sites"/> lists them. Every site of a declaration is here or in <see cref="Dependencies"/>.</summary>
+    public List<Site> Sites { get; init; } = [];
+
     [JsonIgnore]
     public bool Passed => Violations.Count == 0;
 }

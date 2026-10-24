@@ -138,6 +138,86 @@
   const REASON_TEXT = { trivial: "no code changed", renamed: "renamed without changes" };
   const CHANGED_FILES = CS.files.filter((f) => f.status !== "unchanged");
 
+  // ---------- Decisions and consequences ----------
+  // A decision is a hunk that changes a declaration, and a consequence is a hunk whose every changed line follows from
+  // decisions, as the changeset finds them. A consequence stays collapsed under a line that names its decision, and a
+  // file whose hunks are all consequences sorts after the files that hold decisions. See docs/attention.md section 4.
+  const DECISIONS = new Map((CS.decisions || []).map((d) => [d.id, d]));
+  const hunkId = (path, index) => path + "#" + index;
+  const CHANGE_TEXT = { added: "added", removed: "removed", reshaped: "signature changed", renamed: "renamed", moved: "moved" };
+
+  // Returns a value indicating whether every hunk of a file is a consequence or trivial, and at least one is a consequence.
+  function consequenceOnly(path) {
+    const hunks = HUNKS.get(path) || [];
+    return hunks.some((h) => h.follows) && hunks.every((h) => h.follows || h.trivial);
+  }
+  // Returns the name a declaration is shown by: a type's own name, or a member's type and name, without the namespace.
+  function memberName(symbol, kind) {
+    const parts = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < symbol.length; i++) {
+      const ch = symbol[i];
+      if (ch === "<") depth++;
+      else if (ch === ">") depth--;
+      else if (ch === "." && !depth) { parts.push(symbol.slice(start, i)); start = i + 1; }
+    }
+    parts.push(symbol.slice(start));
+    return parts.slice(kind === "type" ? -1 : -2).join(".");
+  }
+  // Returns a declaration of a decision as text, naming its old name too when it was renamed or moved.
+  const declText = (x) => x.previous ? `${memberName(x.previous, x.kind)} → ${memberName(x.symbol, x.kind)}` : memberName(x.symbol, x.kind);
+  // Returns the declaration a decision is named by: the one with the most sites at either end.
+  const leadOf = (d) => d.declarations.slice().sort((a, b) => b.sitesBase + b.sitesHead - a.sitesBase - a.sitesHead)[0];
+  // Returns the files that hold a decision's consequences and the leaves those files count under.
+  function reachOf(d) {
+    const files = [...new Set(d.consequences.map((c) => c.file))];
+    const blocks = new Set(files.flatMap((p) => { const f = fileOf(p); return f ? countedLeaves(f) : []; }));
+    return { files, blocks };
+  }
+  function reachText(d) {
+    const r = reachOf(d);
+    return `${plural(d.consequences.length, "consequence", "consequences")} in ${plural(r.files.length, "file", "files")}, across ${plural(r.blocks.size, "block", "blocks")}`;
+  }
+  // Returns the leaves the decision's own file counts under, which are the blocks the decision is drawn from.
+  function sourceLeavesOf(d) {
+    const f = fileOf(d.file);
+    return f ? countedLeaves(f) : [];
+  }
+  // The decisions in the order the Changes panel lists them: the widest reach first, by blocks, then files, then
+  // public before private, then by the number of consequences. The order never changes, so it is computed once.
+  const DECISION_LIST = [...DECISIONS.values()].map((d) => { const r = reachOf(d); return { d, rank: [r.blocks.size, r.files.length, d.public ? 1 : 0, d.consequences.length] }; })
+    .sort((a, b) => { for (let i = 0; i < a.rank.length; i++) if (a.rank[i] !== b.rank[i]) return b.rank[i] - a.rank[i]; return 0; }).map((x) => x.d);
+  // Returns the decisions whose own files count under any of the leaves.
+  function decisionsUnder(leaves) {
+    const set = new Set(leaves);
+    return DECISION_LIST.filter((d) => sourceLeavesOf(d).some((l) => set.has(l)));
+  }
+  // Returns how the changed hunks divide: decisions, consequences, trivial hunks, and the hunks that are none of
+  // these, which are the edits nothing in the changeset accounts for.
+  function hunkTally() {
+    const t = { total: 0, decisions: 0, consequences: 0, trivial: 0, other: 0 };
+    for (const f of CHANGED_FILES) {
+      (HUNKS.get(f.path) || []).forEach((h, i) => {
+        t.total++;
+        if (DECISIONS.has(hunkId(f.path, i))) t.decisions++;
+        else if (h.follows && DECISIONS.has(h.follows[0])) t.consequences++;
+        else if (h.trivial) t.trivial++;
+        else t.other++;
+      });
+    }
+    return t;
+  }
+  // Returns the level that draws a set of leaves as separate blocks: the deepest node above all of them, or the parent
+  // of that node when it is itself a leaf, or the top level when nothing is common.
+  function levelShowing(leaves) {
+    const chains = [...new Set(leaves)].map((l) => [ROOT, ...ancestors(l)]);
+    if (!chains.length) return ROOT;
+    let depth = 0;
+    while (chains.every((c) => c.length > depth + 1 && c[depth + 1] === chains[0][depth + 1])) depth++;
+    const common = chains[0][depth];
+    return isLeaf(common) ? parentOf(common) : common;
+  }
+
   // Returns the leaves a changed file counts under, as the changeset's content counts it: its leaves at head, its
   // leaves at base when it was removed, and its leaves at both ends when it was renamed. A file that no type binds
   // counts under its Other files leaf.
@@ -740,6 +820,12 @@
     compose: null,
     // The reviewed files whose diffs the reader has shown, by path.
     expanded: new Set(),
+    // The consequences whose diffs the reader has shown, by hunk identifier.
+    expandedHunks: new Set(),
+    // The selected decision's identifier, whose consequences the details panel lists and the map marks, or null.
+    decision: null,
+    // What the last mark action of a decision did: the decision's identifier and the text that says so, or null.
+    decisionNote: null,
     current: null, // { level, layout }
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
@@ -863,15 +949,20 @@
     });
     root.append(edgeLayer);
 
-    // Blocks.
+    // Blocks. The block the selected decision is in is marked as its source, and those that hold its consequences as
+    // its reach.
     const nodeLayer = svg("g", { class: "nodes" });
+    const selectedDecision = state.decision && DECISIONS.has(state.decision) ? DECISIONS.get(state.decision) : null;
+    const reach = selectedDecision ? reachOf(selectedDecision).blocks : new Set();
+    const source = new Set(selectedDecision ? sourceLeavesOf(selectedDecision) : []);
     for (const c of level.children) {
       const r = rectOf(level, layout, c.key);
       const st = statusOf(c.key);
       const leaf = c.kind === "unsorted" || (c.kind === "node" && isLeaf(c.id));
       const cat = categoryOf(c.id);
       const cls = "node" + statusClass(st) + familyClass(c.id) + (c.kind === "unsorted" ? " unsorted" : "") + (isOther(c.id) ? " other" : "") + (leaf ? " leaf" : " container") +
-        (level.inCycle.has(c.key) ? " in-cycle" : "") + (c.key === state.selected ? " selected" : "");
+        (level.inCycle.has(c.key) ? " in-cycle" : "") + (c.key === state.selected ? " selected" : "") +
+        (c.leaves.some((l) => source.has(l)) ? " source" : c.leaves.some((l) => reach.has(l)) ? " reach" : "");
       const g = svg("g", { class: cls, "data-key": c.key, tabindex: 0,
         onclick: (ev) => clickSelect(ev, c.key),
         onmouseenter: () => hover(c.key), onmouseleave: () => hover(null),
@@ -917,6 +1008,18 @@
         pg.append(text(left + pw / 2, r.y + 3, label, { class: "problem-text", "text-anchor": "middle" }));
         pg.append(svg("title", {}, `${plural(problems, "check failure or warning", "check failures and warnings")} on files under ${nameOf(c.id)}`));
         g.append(pg);
+        left += pw + 6;
+      }
+      // The decision badge says how many decisions the block's files hold, so that the map shows where the causes are
+      // before any decision is selected.
+      const decisions = decisionsUnder(c.leaves);
+      if (decisions.length) {
+        const label = "◆ " + decisions.length, dw = label.length * MONO.badge + 12;
+        const dg = svg("g", { class: "decision-badge" });
+        dg.append(svg("rect", { x: left, y: r.y - 8, width: dw, height: 15, rx: 7.5, class: "decision-bg" }));
+        dg.append(text(left + dw / 2, r.y + 3, label, { class: "decision-text", "text-anchor": "middle" }));
+        dg.append(svg("title", {}, `${plural(decisions.length, "decision", "decisions")} in files under ${nameOf(c.id)}`));
+        g.append(dg);
       }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
@@ -930,6 +1033,7 @@
       nodeLayer.append(g);
     }
     root.append(nodeLayer);
+    if (selectedDecision) root.append(reachArrows(level, layout, selectedDecision));
 
     // Pins.
     const pinLayer = svg("g", { class: "pins" });
@@ -957,6 +1061,61 @@
     root.append(pinLayer);
     root.append(labelLayer);
     return root;
+  }
+
+  // Returns the block of a level that each leaf is drawn in, by key.
+  function ownerMap(level) {
+    const owner = new Map();
+    for (const c of level.children) for (const l of c.leaves) owner.set(l, c.key);
+    return owner;
+  }
+  // Returns the keys of the blocks a decision is drawn from and reaches at a level, and the number of its consequence
+  // hunks in each reached block. A block that is both source and reach counts as the source alone.
+  function decisionBlocks(level, d) {
+    const owner = ownerMap(level);
+    const source = new Set(sourceLeavesOf(d).map((l) => owner.get(l)).filter(Boolean));
+    const reach = new Map();
+    d.consequences.forEach((c, i) => {
+      const f = fileOf(c.file);
+      for (const leaf of f ? countedLeaves(f) : []) {
+        const k = owner.get(leaf);
+        if (!k || source.has(k)) continue;
+        if (!reach.has(k)) reach.set(k, new Set());
+        reach.get(k).add(i);
+      }
+    });
+    return { source, reach };
+  }
+  // Returns the point on a rectangle's border where the line from its center toward a point leaves it.
+  function borderPoint(r, to) {
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2, dx = to.x - cx, dy = to.y - cy;
+    if (!dx && !dy) return { x: cx, y: cy };
+    const k = Math.min(dx ? Math.abs(r.w / 2 / dx) : Infinity, dy ? Math.abs(r.h / 2 / dy) : Infinity);
+    return { x: cx + dx * k, y: cy + dy * k };
+  }
+  // Returns the arrows from the block a decision is drawn from to each block that holds its consequences, each
+  // labeled with the number of consequence hunks it points at. They are drawn above the blocks, straight and dashed, so
+  // that cause pointing at effect is told apart from the dependency edges the layout routed.
+  function reachArrows(level, layout, d) {
+    const g = svg("g", { class: "reach-arrows" });
+    const { source, reach } = decisionBlocks(level, d);
+    for (const sk of source) {
+      const a = rectOf(level, layout, sk);
+      if (!a) continue;
+      const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+      for (const [tk, hunks] of reach) {
+        const b = rectOf(level, layout, tk);
+        if (!b) continue;
+        const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+        const p = borderPoint(a, bc), q = borderPoint(b, ac);
+        g.append(svg("path", { d: `M${p.x.toFixed(1)},${p.y.toFixed(1)} L${q.x.toFixed(1)},${q.y.toFixed(1)}`, class: "reach-line", "marker-end": "url(#arrow-reach)" }));
+        const label = plural(hunks.size, "hunk", "hunks"), w = label.length * MONO.badge + 12;
+        const mx = p.x + (q.x - p.x) * 0.55, my = p.y + (q.y - p.y) * 0.55;
+        g.append(svg("rect", { x: mx - w / 2, y: my - 8, width: w, height: 16, rx: 8, class: "reach-lbl" }));
+        g.append(text(mx, my + 3.5, label, { class: "reach-lbl-text", "text-anchor": "middle" }));
+      }
+    }
+    return g;
   }
 
   function groupContent(c) {
@@ -1109,8 +1268,147 @@
     return ul;
   }
 
-  // Puts reviewed items after the rest, keeping the order within each part.
-  const reviewedLast = (items, isReviewed) => items.filter((x) => !isReviewed(x)).concat(items.filter(isReviewed));
+  // Orders items by rank, lowest first, keeping the order within each rank.
+  const byRank = (items, rank) => items.map((x, i) => [rank(x), i, x]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((p) => p[2]);
+  // Ranks a file in the leaf view: files with decisions or other edits first, then files whose hunks all follow from
+  // decisions, then reviewed files.
+  const fileRank = (path) => fileStatus(path) === "reviewed" ? 2 : consequenceOnly(path) ? 1 : 0;
+  // Ranks a type in the leaf view by its changed files, as fileRank ranks them.
+  const typeRank = (t) => {
+    if (typeStatus(t) === "reviewed") return 2;
+    const ranks = t.files.filter((p) => fileStatus(p) !== "unchanged").map(fileRank);
+    return ranks.length && ranks.every((r) => r >= 1) ? 1 : 0;
+  };
+
+  // Returns the header of a decision's hunk: what changed, whether it is public, its reach, and the action that marks
+  // the files that follow from it alone.
+  function decisionHead(d) {
+    const lead = leadOf(d), others = d.declarations.length - 1;
+    const head = el("div", { class: "decision-head" + (state.decision === d.id ? " selected" : "") },
+      el("span", { class: "chip chip-decision" }, "decision"),
+      el("span", {}, CHANGE_TEXT[lead.change] + " ", el("code", { title: lead.symbol }, declText(lead)), others ? ` and ${plural(others, "other", "others")}` : ""));
+    if (d.public) head.append(el("span", { class: "public-mark", title: "Callers outside the solution may exist that the changeset cannot show." }, "public"));
+    head.append(el("button", { class: "link", onclick: () => selectDecision(d.id), title: "List the consequences by block and mark them on the map" },
+      d.consequences.length ? reachText(d) : "no consequences"));
+    if (d.consequences.length) head.append(el("button", { class: "btn", onclick: () => markConsequences(d) }, "Mark consequences reviewed"));
+    if (state.decisionNote && state.decisionNote.id === d.id) head.append(el("span", { class: "file-note" }, state.decisionNote.text));
+    return head;
+  }
+
+  // Returns a consequence's hunk collapsed to one line that names the decision it follows from, which shows the diff on
+  // a click. A consequence with threads or check annotations on its lines starts out shown.
+  function consequenceBlock(path, hunk, index, table, flagged) {
+    const key = hunkId(path, index), d = DECISIONS.get(hunk.follows[0]), lead = leadOf(d);
+    const box = el("div", { class: "consequence", "data-hunk": key });
+    const shown = state.expandedHunks.has(key) || flagged;
+    const toggle = el("button", { class: "link", onclick: () => {
+      const show = !box.querySelector(".diff-scroll");
+      if (show) { box.append(table()); state.expandedHunks.add(key); } else { box.querySelector(".diff-scroll").remove(); state.expandedHunks.delete(key); }
+      toggle.textContent = show ? "Hide diff" : "Show diff";
+    } }, shown ? "Hide diff" : "Show diff");
+    const more = hunk.follows.length - 1;
+    box.append(el("div", { class: "consequence-head" }, el("span", { class: "chip chip-consequence" }, "consequence"), el("span", {}, hunk.header),
+      el("span", {}, "follows from ", el("button", { class: "link", title: lead.symbol, onclick: () => openHunk(d.file, d.hunk) }, declText(lead)), more ? ` and ${plural(more, "other decision", "other decisions")}` : ""),
+      toggle));
+    if (shown) box.append(table());
+    return box;
+  }
+
+  // Returns one hunk of a file for the leaf view: a decision under its header, a consequence collapsed, or the diff alone.
+  function hunkBlock(path, hunk, index, threads, notes) {
+    const table = () => diffTable(path, hunk, index, threads, notes);
+    const key = hunkId(path, index), d = DECISIONS.get(key);
+    if (d) return el("div", { class: "decision", "data-hunk": key }, decisionHead(d), table());
+    if (hunk.follows && DECISIONS.has(hunk.follows[0])) {
+      const flagged = [threads, notes].some((m) => m && [...m.keys()].some((k) => k.startsWith(index + ":")));
+      return consequenceBlock(path, hunk, index, table, flagged);
+    }
+    const t = table();
+    t.dataset.hunk = key;
+    return t;
+  }
+
+  // Selects a decision, or clears the selection when it is already selected or when the identifier is null.
+  function selectDecision(id) {
+    state.decision = id && state.decision !== id ? id : null;
+    redraw();
+  }
+
+  // Selects a decision and shows it on the map, at the level that draws the block it is in and every block it reaches
+  // as separate blocks, unless the level on screen already draws them all.
+  async function showDecision(d) {
+    state.decision = d.id;
+    const sources = sourceLeavesOf(d), leaves = [...sources, ...reachOf(d).blocks];
+    if (state.current && !loc().leaf) {
+      // The level on screen serves when it draws every leaf involved, and draws the reach apart from the source
+      // wherever the reach goes beyond the source's own leaves.
+      const owner = ownerMap(state.current.level);
+      const beyond = [...reachOf(d).blocks].some((l) => !sources.includes(l));
+      if (leaves.every((l) => owner.has(l)) && (!beyond || decisionBlocks(state.current.level, d).reach.size)) { redraw(); return; }
+    }
+    const level = levelShowing(leaves);
+    rememberView();
+    state.trail = [{ level: ROOT }, ...ancestors(level).map((x) => ({ level: x }))];
+    state.selected = null;
+    const m = await mount();
+    if (m) setViewBox(arrive(m));
+  }
+
+  // Marks reviewed every file whose hunks all follow from a decision alone or are trivial, and says how many it marked
+  // and how many files with consequences it left because they also carry other edits.
+  async function markConsequences(d) {
+    const todo = d.marks.filter((p) => !REVIEWED.has(p));
+    const left = reachOf(d).files.filter((p) => !d.marks.includes(p)).length;
+    const already = d.marks.length - todo.length;
+    state.decisionNote = { id: d.id, text: `Marked ${plural(todo.length, "file", "files")}` + (already ? `, ${already} already reviewed` : "") +
+      (left ? `; left ${plural(left, "file that also carries", "files that also carry")} other edits` : "") + "." };
+    if (todo.length) await setReviewed(todo, true);
+    else redraw();
+  }
+
+  // Opens the leaf view at a hunk and scrolls to it, showing it when it is a collapsed consequence or in a reviewed file.
+  async function openHunk(path, index) {
+    const hunk = (HUNKS.get(path) || [])[index];
+    if (hunk && hunk.follows) state.expandedHunks.add(hunkId(path, index));
+    if (REVIEWED.has(path)) state.expanded.add(path);
+    await openFile(path);
+    const target = document.querySelector(`[data-hunk="${CSS.escape(hunkId(path, index))}"]`);
+    if (target) target.scrollIntoView({ block: "start" });
+  }
+
+  // Returns the details panel's section for the selected decision: its declarations, and its consequences grouped by
+  // the blocks that hold them, each opening its hunk.
+  function decisionPanel(d) {
+    const box = el("section", { class: "decision-panel" });
+    box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Decision"), el("button", { class: "link", onclick: () => selectDecision(null) }, "Close")));
+    box.append(el("p", { class: "ident" }, el("button", { class: "link", onclick: () => openHunk(d.file, d.hunk) }, `${d.file} · hunk ${d.hunk + 1}`),
+      loc().leaf && d.consequences.length ? el("span", {}, " · ", el("button", { class: "link", onclick: () => showDecision(d) }, "Show reach on the map")) : null));
+    for (const x of d.declarations) {
+      box.append(kv(CHANGE_TEXT[x.change], el("span", {}, el("code", { title: x.symbol }, declText(x)), ` · ${x.kind}, ${x.accessibility || "default"} · sites ${x.sitesBase === x.sitesHead ? x.sitesHead : x.sitesBase + " → " + x.sitesHead}`)));
+    }
+    if (d.public) box.append(el("p", { class: "warn" }, "Public: callers outside the solution may exist that the changeset cannot show."));
+    if (!d.consequences.length) { box.append(el("p", { class: "hint" }, "No other hunk follows from this decision alone.")); return box; }
+    box.append(el("h3", {}, reachText(d)));
+    const byBlock = new Map();
+    for (const c of d.consequences) {
+      const f = fileOf(c.file);
+      for (const leaf of f ? countedLeaves(f) : []) { if (!byBlock.has(leaf)) byBlock.set(leaf, []); byBlock.get(leaf).push(c); }
+    }
+    const ul = el("ul", { class: "list" });
+    for (const [leaf, list] of [...byBlock].sort((a, b) => b[1].length - a[1].length || nameOf(a[0]).localeCompare(nameOf(b[0])))) {
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => showInContext(leaf), title: leaf }, treeIcon(leaf), el("span", { class: "row-name" }, nameOf(leaf)),
+        el("span", { class: "row-meta" }, plural(list.length, "hunk", "hunks")))));
+      for (const c of list) {
+        const hunk = (HUNKS.get(c.file) || [])[c.hunk];
+        ul.append(el("li", {}, el("button", { class: "row reach-hunk" + (REVIEWED.has(c.file) ? " st-reviewed" : ""), onclick: () => openHunk(c.file, c.hunk), title: c.file },
+          el("span", { class: "row-name" }, c.file.split("/").pop() + (hunk ? " " + hunk.header : "")), el("span", { class: "row-meta" }, plural(c.lines, "line", "lines")))));
+      }
+    }
+    box.append(ul);
+    box.append(el("button", { class: "btn", onclick: () => markConsequences(d) }, "Mark consequences reviewed"));
+    if (state.decisionNote && state.decisionNote.id === d.id) box.append(el("p", { class: "hint" }, state.decisionNote.text));
+    return box;
+  }
 
   // Returns a file's header and diffs for the leaf view. A changed file's header carries its reviewed checkbox, and a
   // reviewed file's diffs stay collapsed while reviewed files are muted, until the reader shows them. A renamed file
@@ -1128,7 +1426,8 @@
     const head = el("div", { class: "file-head" });
     if (changed) head.append(el("input", { type: "checkbox", checked: done, "aria-label": "Reviewed", title: done ? "Reviewed. Clear it to review the file again." : "Mark the file reviewed",
       onchange: (ev) => setReviewed([path], ev.target.checked) }));
-    head.append(el("span", { class: "chip chip-" + fs }, fs), el("span", { class: "file-path" }, path));
+    const chip = fs !== "reviewed" && consequenceOnly(path) ? "consequence" : fs;
+    head.append(el("span", { class: "chip chip-" + chip }, chip), el("span", { class: "file-path" }, path));
     if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
     if (done && REASON_TEXT[REVIEWED.get(path)]) head.append(el("span", { class: "file-note" }, REASON_TEXT[REVIEWED.get(path)]));
     const talk = threadsOf(path), notes = annotationsOf(path);
@@ -1139,7 +1438,7 @@
     const muted = done && state.opts.mute;
     const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
     const diffs = el("div", { class: "file-diffs" });
-    const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(diffTable(path, h, i, talk.lines, notes.lines))); };
+    const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(hunkBlock(path, h, i, talk.lines, notes.lines))); };
     if (muted && !state.expanded.has(path)) diffs.hidden = true;
     else fill();
     if (muted && hunks.length) {
@@ -1174,7 +1473,7 @@
       el("div", { class: "leaf-sub" }, purposeOf(id))));
     if (isOther(id)) {
       // Files that no type binds have no types and no edges, so the leaf lists the files themselves.
-      const files = reviewedLast(otherFilesOf(id).map((f) => f.path), (p) => fileStatus(p) === "reviewed");
+      const files = byRank(otherFilesOf(id).map((f) => f.path), fileRank);
       wrap.append(reviewedBar(id) || "", el("h3", {}, plural(files.length, "changed file", "changed files")));
       const card = el("section", { class: "typecard" });
       for (const path of files) card.append(fileBlock(path));
@@ -1198,7 +1497,7 @@
 
     // Changed types with their files and hunks, the reviewed ones last.
     const types = typesOf(id);
-    const touched = reviewedLast(types.filter(typeTouched), (t) => typeStatus(t) === "reviewed");
+    const touched = byRank(types.filter(typeTouched), typeRank);
     wrap.append(el("h3", {}, touched.length ? `${touched.length} of ${types.length} types changed` : `No changes among ${types.length} types`));
     for (const t of touched) {
       const ts = typeStatus(t);
@@ -1209,7 +1508,7 @@
         el("span", { class: "typens" }, namespaceOf(t.name)));
       if (t.status === "moved") head.append(el("span", { class: "typens" }, `from ${t.leafBase} to ${t.leafHead}`));
       card.append(head);
-      for (const path of reviewedLast(t.files, (p) => fileStatus(p) === "reviewed")) card.append(fileBlock(path));
+      for (const path of byRank(t.files, fileRank)) card.append(fileBlock(path));
       wrap.append(card);
     }
 
@@ -1311,6 +1610,28 @@
     const tree = changeTree(ROOT);
     box.append(tree ? el("ul", { class: "tree" }, tree) : el("p", { class: "hint" }, "No file changed under any leaf."));
 
+    // Decisions, widest reach first, under the account of how many hunks they explain. Hovering a row shows the blocks
+    // it is drawn from and reaches, and a click selects it and shows it on the map.
+    if (DECISION_LIST.length) {
+      const t = hunkTally();
+      box.append(el("h3", {}, `Decisions: ${DECISION_LIST.length}`));
+      box.append(el("p", { class: "hint tally" }, `Of ${plural(t.total, "changed hunk", "changed hunks")}: ${t.decisions} ${t.decisions === 1 ? "is a decision" : "are decisions"}, ` +
+        `${t.consequences} ${t.consequences === 1 ? "follows" : "follow"} from them, ${t.trivial} ${t.trivial === 1 ? "is" : "are"} trivial, ${t.other} ${t.other === 1 ? "is an edit" : "are edits"} on ${t.other === 1 ? "its" : "their"} own.`));
+      const dl = el("ul", { class: "list scroll" });
+      for (const d of DECISION_LIST) {
+        const lead = leadOf(d), others = d.declarations.length - 1, r = reachOf(d);
+        dl.append(el("li", {}, el("button", { class: "row decision-row" + (REVIEWED.has(d.file) && state.opts.mute ? " st-reviewed" : "") + (state.decision === d.id ? " current" : ""),
+          onclick: () => showDecision(d), onmouseenter: () => hoverDecision(d), onmouseleave: () => hoverDecision(null),
+          title: `${d.file} · hunk ${d.hunk + 1}\n${CHANGE_TEXT[lead.change]} ${lead.symbol}` + (others ? ` and ${plural(others, "other", "others")}` : "") +
+            (d.public ? "\nPublic: callers outside the solution may exist that the changeset cannot show." : "") },
+          // The diamond is hollow for a public decision, since the row has no room for the word.
+          el("span", { class: "dot decision-dot" + (d.public ? " public" : "") }),
+          el("span", { class: "row-name" }, el("span", { class: "row-change" }, CHANGE_TEXT[lead.change] + " "), el("code", {}, declText(lead)), others ? ` +${others}` : ""),
+          el("span", { class: "row-meta" }, d.consequences.length ? `${d.consequences.length} in ${plural(r.blocks.size, "block", "blocks")}` : "none"))));
+      }
+      box.append(dl);
+    }
+
     box.append(el("h3", {}, `Edges: ${changedText(CHANGED_EDGES)}`));
     const ul = el("ul", { class: "list scroll" });
     const rank = (e) => (e.status === "added" || e.status === "removed" ? 1e9 : 0) + (isMinor(e) ? 0 : 1e6) + Math.abs(e.head - e.base);
@@ -1341,6 +1662,7 @@
   function renderDetails() {
     const box = $("#details");
     box.replaceChildren();
+    if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
     const l = loc();
     const cur = state.current;
     if (l.leaf) {
@@ -1794,6 +2116,17 @@
     mark(key);
     for (const e of edges) if (e.from === key || e.to === key) markEdge(e);
     return true;
+  }
+
+  // Brings the blocks a decision is drawn from and reaches out of the drawing while its row is under the pointer, and
+  // fades everything else. A null decision ends it. A leaf view has no drawing, so it does nothing there.
+  function hoverDecision(d) {
+    if (dragging || !state.current) return;
+    const s = stage();
+    for (const n of s.querySelectorAll(".hot")) n.classList.remove("hot");
+    const keys = d ? (({ source, reach }) => [...source, ...reach.keys()])(decisionBlocks(state.current.level, d)) : [];
+    for (const k of keys) for (const n of s.querySelectorAll(`[data-key="${CSS.escape(k)}"]`)) n.classList.add("hot");
+    s.classList.toggle("hovering", keys.length > 0);
   }
 
   // Shows the neighborhood of the block, pin or edge under the pointer and fades everything else.

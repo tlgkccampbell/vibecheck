@@ -224,7 +224,8 @@ A file becomes reviewed in one of two ways:
   whose contents did not change, with the reason "renamed without changes".
 - **By the reviewer.** A checkbox on each file's header in the leaf view marks or
   unmarks it. A leaf or block in the details panel offers to mark all
-  of its changed files.
+  of its changed files. A decision's header offers to mark the files that follow
+  from it alone, as [attention.md](attention.md) section 4.4 describes.
 
 The reviewer's choice wins. A trivial file that the reviewer unmarks stays unmarked.
 

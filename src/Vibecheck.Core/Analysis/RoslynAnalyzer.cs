@@ -61,55 +61,74 @@ public static class RoslynAnalyzer
         // Index every document first, so that a reference into any project resolves by
         // document identity rather than by path.
         var resolver = new SourceResolver(repoRoot);
-        var compilations = new Dictionary<ProjectId, Compilation>();
-        var documents = new Dictionary<ProjectId, List<(Document Document, string Path, string? Generator)>>();
+        var inputs = new List<ProjectTrees>();
         foreach (var project in projects)
         {
             progress?.Report($"compiling {project.Name}");
             var compilation = await project.GetCompilationAsync(ct);
             if (compilation is null) { warnings.Add($"{project.Name}: no compilation"); continue; }
-            compilations[project.Id] = compilation;
             var projectDir = ProjectDirectory(repoRoot, project);
-            var list = documents[project.Id] = [];
+            var trees = new List<(SyntaxTree Tree, string Path, string? Generator)>();
             foreach (var document in project.Documents)
             {
                 var path = resolver.AddDocument(document.FilePath);
-                if (path is not null) list.Add((document, path, null));
+                var tree = path is null ? null : await document.GetSyntaxTreeAsync(ct);
+                if (tree is not null) trees.Add((tree, path!, null));
             }
             foreach (var generated in await project.GetSourceGeneratedDocumentsAsync(ct))
             {
                 var generator = GeneratorNameOf(generated.FilePath, generated.HintName);
-                list.Add((generated, resolver.AddGenerated(generated.FilePath, generator, projectDir), generator));
+                var path = resolver.AddGenerated(generated.FilePath, generator, projectDir);
+                if (await generated.GetSyntaxTreeAsync(ct) is { } tree) trees.Add((tree, path, generator));
             }
+            inputs.Add(new ProjectTrees(project.Name, projectDir, compilation, trees));
         }
+        return Collect(resolver, inputs, warnings, progress, ct);
+    }
 
+    /// <summary>A compiled project and its source documents' syntax trees, each with its path and the generator that produced it.</summary>
+    internal sealed record ProjectTrees(string Name, string Directory, Compilation Compilation, List<(SyntaxTree Tree, string Path, string? Generator)> Trees);
+
+    /// <summary>
+    /// Builds the analysis of compiled projects whose documents a resolver has registered. Every path the analysis
+    /// reports comes from the resolver. Tests call this with compilations built in memory.
+    /// </summary>
+    internal static AnalysisResult Collect(SourceResolver resolver, IReadOnlyList<ProjectTrees> projects, List<string> warnings, IProgress<string>? progress = null, CancellationToken ct = default)
+    {
         var files = new Dictionary<string, SourceFile>(StringComparer.Ordinal);
         var types = new Dictionary<(string Assembly, string Name), TypeInfo>();
         var walked = new List<(DependencyWalker.Walked Dependency, string FromAssembly, string File)>();
+        var walkedSites = new List<(DependencyWalker.WalkedSite Site, string FromAssembly, string File)>();
+        var declarations = new List<(Declaration Declaration, string Assembly)>();
         var externals = new List<ExternalReference>();
         var unresolvable = new List<UnresolvableReference>();
         var projectInfos = new List<ProjectInfo>();
+        var fileAssembly = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var project in projects)
         {
-            if (!compilations.TryGetValue(project.Id, out var compilation)) continue;
+            var compilation = project.Compilation;
             progress?.Report($"walking {project.Name}");
-            var assembly = compilation.AssemblyName ?? project.AssemblyName;
-            projectInfos.Add(new ProjectInfo(project.Name, assembly, ProjectDirectory(repoRoot, project)));
+            var assembly = compilation.AssemblyName ?? project.Name;
+            projectInfos.Add(new ProjectInfo(project.Name, assembly, project.Directory));
 
-            foreach (var (document, path, generator) in documents[project.Id])
+            foreach (var (tree, path, generator) in project.Trees)
             {
+                fileAssembly.TryAdd(path, assembly);
                 if (files.ContainsKey(path)) continue;
-                var text = await document.GetTextAsync(ct);
+                var text = tree.GetText(ct);
                 files[path] = new SourceFile(path, HashOf(Encoding.UTF8.GetBytes(text.ToString())), project.Name, generator);
-                var tree = await document.GetSyntaxTreeAsync(ct);
-                if (tree is null) continue;
                 var model = compilation.GetSemanticModel(tree);
+                var root = tree.GetRoot(ct);
                 var walker = new DependencyWalker(model, compilation, resolver, path);
-                walker.Visit(await tree.GetRootAsync(ct));
+                walker.Visit(root);
                 walked.AddRange(walker.Dependencies.Select(d => (d, walker.Assembly, path)));
+                walkedSites.AddRange(walker.Sites.Select(s => (s, walker.Assembly, path)));
                 externals.AddRange(walker.ExternalReferences);
                 unresolvable.AddRange(walker.Unresolvable);
+                var declared = new DeclarationWalker(model, path);
+                declared.Visit(root);
+                declarations.AddRange(declared.Declarations.Select(d => (d, assembly)));
             }
 
             foreach (var type in TopLevelTypes(compilation.SourceModule.GlobalNamespace))
@@ -138,8 +157,10 @@ public static class RoslynAnalyzer
             TypeNames.Qualify(w.Dependency.FromType, w.FromAssembly, duplicated),
             TypeNames.Qualify(w.Dependency.ToType, w.Dependency.ToAssembly, duplicated),
             w.Dependency.Kind, w.Dependency.Symbol, w.File, w.Dependency.Line)).ToList();
-        var fileAssembly = documents.SelectMany(kv => kv.Value.Select(d => (d.Path, Assembly: compilations.TryGetValue(kv.Key, out var c) ? c.AssemblyName ?? "" : "")))
-            .GroupBy(x => x.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Assembly, StringComparer.Ordinal);
+        var sites = walkedSites.Select(w => new Site(w.Site.Symbol,
+            TypeNames.Qualify(w.Site.FromType, w.FromAssembly, duplicated),
+            TypeNames.Qualify(w.Site.ToType, w.Site.ToAssembly, duplicated), w.File, w.Site.Line)).ToList();
+        var declarationList = declarations.Select(d => d.Declaration with { Type = TypeNames.Qualify(d.Declaration.Type, d.Assembly, duplicated) }).ToList();
         var externalList = externals.Select(e => e with { FromType = TypeNames.Qualify(e.FromType, fileAssembly.GetValueOrDefault(e.File, ""), duplicated) }).ToList();
         var unresolvableList = unresolvable.Select(u => u with { FromType = TypeNames.Qualify(u.FromType, fileAssembly.GetValueOrDefault(u.File, ""), duplicated) }).ToList();
 
@@ -162,6 +183,8 @@ public static class RoslynAnalyzer
             Unresolvable = unresolvableList.OrderBy(u => u.File, StringComparer.Ordinal).ThenBy(u => u.Line).ToList(),
             Projects = projectInfos,
             Warnings = warnings,
+            Declarations = declarationList.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.FirstLine).ThenBy(d => d.Symbol, StringComparer.Ordinal).ToList(),
+            Sites = sites.OrderBy(s => s.File, StringComparer.Ordinal).ThenBy(s => s.Line).ThenBy(s => s.Symbol, StringComparer.Ordinal).ToList(),
         };
     }
 

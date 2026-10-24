@@ -15,7 +15,8 @@ all five of its phases are built: reviewed files and the full diff, opening pull
 reading the discussion, writing, and checks in detail.
 Directing the reviewer's attention, with decisions and their consequences, semantic
 triviality, a reading path, new concepts and a glossary, is designed in
-[docs/attention.md](docs/attention.md); none of it is built yet.
+[docs/attention.md](docs/attention.md); its first phase, decisions and their consequences,
+is built.
 
 ## Layout
 
@@ -240,6 +241,22 @@ kept in `reviewed.json` in the repository's cache folder, keyed by the path and 
 blobs at both ends, so a later range that leaves the file alone keeps the mark and one
 that changes it clears it. **Mute reviewed files** turns the muting off but keeps the
 marks.
+
+A hunk that adds, removes, renames, moves or changes the signature of a declaration is a
+**decision**, and carries a header that says what changed, marks it public when callers
+outside the solution may exist, and counts its consequences. A hunk whose every changed
+line is blank, a comment, or a use of a declaration a decision changed is a
+**consequence**: it is collapsed to one line that names its decision, and a file of
+nothing but consequences says `consequence` on its chip and sorts after the files with
+decisions. The Changes panel lists every decision in the changeset, widest reach first,
+under an account of how many hunks are decisions, follow from them, are trivial, or are
+edits on their own, and each block on the map carries a badge with the number of decisions
+its files hold. Hovering a decision in the list brings out the blocks it is in and
+reaches, and selecting one, from the list or from its header, lists its consequences by
+block in the details panel, outlines its block and the blocks it reaches on the map, and
+draws an arrow from the one to each of the others with the number of hunks it points at.
+**Mark consequences reviewed** marks the files whose edits that decision alone explains,
+and says how many it left.
 
 To write a changeset document without the viewer, run `changeset` from the repository:
 

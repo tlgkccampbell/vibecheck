@@ -39,8 +39,8 @@ public sealed class Exclusion
 
     /// <summary>
     /// Returns the analysis with every excluded type removed, along with the
-    /// dependencies, external references and unresolvable references that start or
-    /// end at one, and the files that declare nothing else. The counts say how many
+    /// dependencies, external references, unresolvable references and sites that start or
+    /// end at one, its declarations, and the files that declare nothing else. The counts say how many
     /// types and files were removed.
     /// </summary>
     public (AnalysisResult Analysis, ExcludedCounts Counts) Apply(AnalysisResult analysis)
@@ -64,6 +64,8 @@ public sealed class Exclusion
             Dependencies = analysis.Dependencies.Where(d => !excluded.Contains(d.FromType) && !excluded.Contains(d.ToType)).ToList(),
             ExternalReferences = analysis.ExternalReferences.Where(e => !excluded.Contains(e.FromType)).ToList(),
             Unresolvable = analysis.Unresolvable.Where(u => !excluded.Contains(u.FromType)).ToList(),
+            Declarations = analysis.Declarations.Where(d => !excluded.Contains(d.Type)).ToList(),
+            Sites = analysis.Sites.Where(s => !excluded.Contains(s.FromType) && !excluded.Contains(s.ToType)).ToList(),
         };
         return (result, new ExcludedCounts(excluded.Count, excludedFiles.Count));
     }
