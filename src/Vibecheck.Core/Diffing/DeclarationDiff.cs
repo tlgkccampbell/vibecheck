@@ -115,7 +115,7 @@ public static class DeclarationDiff
         a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out var other) && other.Kind == kv.Value.Kind && other.Shape == kv.Value.Shape && other.Body == kv.Value.Body);
 
     /// <summary>Returns the last dotted segment of a name, ignoring dots inside type arguments.</summary>
-    private static string SimpleName(string name)
+    internal static string SimpleName(string name)
     {
         var depth = 0;
         for (var i = name.Length - 1; i >= 0; i--)

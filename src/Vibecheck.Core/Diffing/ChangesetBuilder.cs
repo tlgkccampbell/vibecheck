@@ -16,17 +16,23 @@ public static class ChangesetBuilder
     {
         var changes = GitHunks.Changes(repo, baseRev, headRev);
         if (renames is not null) changes = GitHunks.Reconcile(changes, renames);
-        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changes), changes);
+        var texts = GitHunks.Texts(repo, changes);
+        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changes, mark: false), changes, texts);
     }
 
     /// <summary>
     /// Combines a base and a head facts document into a changeset document, attaching the hunks given, if any. The git
-    /// changes, when given, pair renamed files and add the changed files that neither analysis lists.
+    /// changes, when given, pair renamed files and add the changed files that neither analysis lists. When the files'
+    /// texts are given, the hunks are marked trivial by every rule of <see cref="TrivialEdits"/> first; otherwise they
+    /// are taken as marked.
     /// </summary>
-    public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null, IReadOnlyList<GitChange>? changes = null)
+    public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null, IReadOnlyList<GitChange>? changes = null,
+        IReadOnlyDictionary<string, (string? Base, string? Head)>? texts = null)
     {
         var files = DiffFiles(baseFacts, headFacts, changes ?? []);
-        var (decisions, clustered) = Clustering.Apply(baseFacts, headFacts, files, hunks ?? []);
+        var declarations = DeclarationDiff.Diff(baseFacts.Declarations, headFacts.Declarations);
+        var marked = texts is null ? hunks ?? [] : TrivialEdits.Mark(hunks ?? [], texts, baseFacts, headFacts, declarations, files);
+        var (decisions, clustered) = Clustering.Apply(baseFacts, headFacts, files, marked, declarations);
         return new Changeset
         {
             Base = baseFacts.Commit,

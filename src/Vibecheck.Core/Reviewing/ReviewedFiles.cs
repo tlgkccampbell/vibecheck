@@ -16,8 +16,8 @@ public sealed class ReviewedFiles
     /// <summary>The reason of a file that the reviewer marked.</summary>
     public const string ByReviewer = "reviewer";
 
-    /// <summary>The reason of a file whose edits are all trivial, as <see cref="TrivialEdits"/> defines them.</summary>
-    public const string NoCodeChanged = "trivial";
+    /// <summary>The reason of a file whose edits are all trivial, as <see cref="TrivialEdits"/> defines them. The other kinds of trivial edit take the kinds of <see cref="EditReason"/>.</summary>
+    public const string NoCodeChanged = EditReason.Trivial;
 
     /// <summary>The reason of a renamed file whose contents did not change.</summary>
     public const string RenamedWithoutChanges = "renamed";
@@ -34,7 +34,8 @@ public sealed class ReviewedFiles
 
     /// <summary>
     /// Returns the reviewed files of a changeset by path, each with the reason it is reviewed: <see cref="ByReviewer"/>,
-    /// <see cref="NoCodeChanged"/> or <see cref="RenamedWithoutChanges"/>. Unchanged files are never reviewed.
+    /// <see cref="RenamedWithoutChanges"/>, or a kind of <see cref="EditReason"/> such as <see cref="NoCodeChanged"/>.
+    /// Unchanged files are never reviewed.
     /// </summary>
     /// <param name="changeset">The changeset whose changed files are looked up.</param>
     /// <param name="root">The directory, relative to the repository's top, that the changeset's paths are relative to.</param>
@@ -80,10 +81,12 @@ public sealed class ReviewedFiles
 
     /// <summary>
     /// Returns why the tool marks a changed file reviewed on its own, or <see langword="null"/> when it does not: the
-    /// file's edits are all trivial, or the file was renamed and its contents did not change.
+    /// kind of its <see cref="FileHunks.Reason"/>, which says that its edits are all trivial or that a generator wrote
+    /// it, or that the file was renamed and its contents did not change.
     /// </summary>
     public static string? ToolReason(FileChange file, FileHunks? hunks)
     {
+        if (hunks?.Reason is { } reason) return reason.Kind;
         if (hunks?.Trivial == true) return NoCodeChanged;
         if (file.Status == "renamed" && file.BlobBase is not null && file.BlobBase == file.BlobHead) return RenamedWithoutChanges;
         return null;

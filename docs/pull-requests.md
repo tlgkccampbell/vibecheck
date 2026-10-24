@@ -220,8 +220,12 @@ and the two become one concept.
 A file becomes reviewed in one of two ways:
 
 - **By the tool.** A file whose edits are all trivial, as spec section 6 defines
-  them, starts out reviewed, with the reason "no code changed". So does a renamed file
-  whose contents did not change, with the reason "renamed without changes".
+  them, starts out reviewed, with the reason "no code changed", or, for the kinds of
+  [attention.md](attention.md) section 5, "renamed `Old` to `New`" linking to the
+  rename's decision, "moved from `path`", "members reordered" or "usings only". So
+  does a renamed file whose contents did not change, with the reason "renamed without
+  changes", and a file a generator wrote, with the reason "generated" linking to the
+  hand-written files of its types.
 - **By the reviewer.** A checkbox on each file's header in the leaf view marks or
   unmarks it. A leaf or block in the details panel offers to mark all
   of its changed files. A decision's header offers to mark the files that follow

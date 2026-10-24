@@ -15,20 +15,23 @@ public static class Clustering
     /// <summary>One changed line of a hunk: its marker, its one-based line number at the end it belongs to, and its text.</summary>
     private readonly record struct Line(bool Removed, int Number, string Text);
 
-    /// <summary>A hunk with the paths of its file at each end and its changed lines.</summary>
-    private sealed record Located(FileHunks File, int Index, string BasePath, string HeadPath, List<Line> Changed);
+    /// <summary>A hunk with the paths of its file at each end, its changed lines, and whether its edit is trivial.</summary>
+    private sealed record Located(FileHunks File, int Index, string BasePath, string HeadPath, List<Line> Changed, bool Trivial);
 
     /// <summary>
     /// Returns the decisions among the hunks, and the hunks with each consequence marked with the decisions it follows
-    /// from. A trivial hunk is neither a decision nor a consequence.
+    /// from. A trivial hunk is never a decision. It is a consequence when its lines follow from one, as a rename
+    /// consequence's do, and a rename consequence's reason then names the rename's decision.
     /// </summary>
     /// <param name="baseFacts">The facts at base, whose declarations and sites the removed lines are read against.</param>
     /// <param name="headFacts">The facts at head, whose declarations and sites the added lines are read against.</param>
     /// <param name="files">The changed files, which give a renamed file's path at base.</param>
     /// <param name="hunks">The hunks of every changed file.</param>
-    public static (List<Decision> Decisions, List<FileHunks> Hunks) Apply(Facts baseFacts, Facts headFacts, IReadOnlyList<FileChange> files, List<FileHunks> hunks)
+    /// <param name="changes">The declaration diff of the two ends, or <see langword="null"/> to compute it here.</param>
+    public static (List<Decision> Decisions, List<FileHunks> Hunks) Apply(Facts baseFacts, Facts headFacts, IReadOnlyList<FileChange> files, List<FileHunks> hunks,
+        IReadOnlyList<DeclarationChange>? changes = null)
     {
-        var changes = DeclarationDiff.Diff(baseFacts.Declarations, headFacts.Declarations);
+        changes ??= DeclarationDiff.Diff(baseFacts.Declarations, headFacts.Declarations);
         if (changes.Count == 0 || hunks.Count == 0) return ([], hunks);
         var decisive = changes.Where(c => c.Change != "rewritten").ToList();
         var atBase = decisive.Where(c => c.BaseSymbol is not null).ToDictionary(c => c.BaseSymbol!, StringComparer.Ordinal);
@@ -47,8 +50,8 @@ public static class Clustering
             for (var i = 0; i < file.Hunks.Count; i++)
             {
                 var hunk = file.Hunks[i];
-                if (hunk.Trivial == true || !hunk.TryRanges(out var old, out var now)) continue;
-                located.Add(new Located(file, i, previous.GetValueOrDefault(file.Path, file.Path), file.Path, ChangedLines(hunk, old.Start + 1, now.Start + 1)));
+                if (!hunk.TryRanges(out var old, out var now)) continue;
+                located.Add(new Located(file, i, previous.GetValueOrDefault(file.Path, file.Path), file.Path, ChangedLines(hunk, old.Start + 1, now.Start + 1), hunk.Trivial == true));
             }
         }
 
@@ -59,6 +62,7 @@ public static class Clustering
         var decided = new HashSet<Located>();
         foreach (var h in located)
         {
+            if (h.Trivial) continue;
             var held = new Dictionary<string, (DeclarationChange Change, Declaration Declaration)>(StringComparer.Ordinal);
             foreach (var line in h.Changed)
             {
@@ -117,9 +121,15 @@ public static class Clustering
             }
         }
 
+        // A rename consequence's reason names the decision that holds the rename, so that the viewer can link to it.
+        var renamedBy = decisions.SelectMany(d => d.Declarations.Where(x => x.Change == "renamed").Select(x => (x.Symbol, d.Id)))
+            .GroupBy(x => x.Symbol, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
+        EditReason? Linked(EditReason? reason) =>
+            reason is { Kind: EditReason.Rename, Decision: null, Symbol: { } symbol } && renamedBy.TryGetValue(symbol, out var id) ? reason with { Decision = id } : reason;
         var marked = hunks.Select(f => f with
         {
-            Hunks = f.Hunks.Select((hunk, i) => follows.TryGetValue((f.Path, i), out var ids) ? hunk with { Follows = ids } : hunk).ToList(),
+            Hunks = f.Hunks.Select((hunk, i) => (follows.TryGetValue((f.Path, i), out var ids) ? hunk with { Follows = ids } : hunk) with { Reason = Linked(hunk.Reason) }).ToList(),
+            Reason = Linked(f.Reason),
         }).ToList();
         // A decision's mark covers a file only when the decision alone explains every edit to it, so that marking it
         // never marks lines that follow from a decision the reviewer has not read.

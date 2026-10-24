@@ -44,6 +44,7 @@ internal static class Snippets
     {
         var hunks = new List<FileHunks>();
         var changes = new List<GitChange>();
+        var texts = new Dictionary<string, (string? Base, string? Head)>(StringComparer.Ordinal);
         foreach (var path in before.Keys.Union(after.Keys).Order(StringComparer.Ordinal))
         {
             var a = before.GetValueOrDefault(path);
@@ -51,8 +52,9 @@ internal static class Snippets
             if (a == b) continue;
             changes.Add(new GitChange(path, a is null ? "added" : b is null ? "removed" : "modified", null, a is null ? null : "x", b is null ? null : "y"));
             hunks.Add(new FileHunks(path, Diff(a ?? "", b ?? "")));
+            texts[path] = (a, b);
         }
-        return ChangesetBuilder.Build(Facts(before), Facts(after), hunks, changes);
+        return ChangesetBuilder.Build(Facts(before), Facts(after), hunks, changes, texts);
     }
 
     /// <summary>Returns the hunks of a line diff of two texts, with three lines of context as git gives them.</summary>
