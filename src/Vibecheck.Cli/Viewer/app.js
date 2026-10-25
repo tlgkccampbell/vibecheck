@@ -1382,9 +1382,6 @@
     head.append(el("button", { class: "link", onclick: () => selectDecision(d.id), title: "List the consequences by block and mark them on the map" },
       d.consequences.length ? reachText(d) : "no consequences"));
     head.append(testsLine(d) || "");
-    head.append(el("button", { class: "link", onclick: () => revealDecision(d), title: "Select this decision and show it in the Changes panel" }, "Show in Changes"));
-    if (d.consequences.length) head.append(el("button", { class: "btn", onclick: () => markConsequences(d) }, "Mark consequences reviewed"));
-    if (state.decisionNote && state.decisionNote.id === d.id) head.append(el("span", { class: "file-note" }, state.decisionNote.text));
     return head;
   }
 
@@ -1395,6 +1392,9 @@
   // needs. See docs/tests.md section 5.1.
   const NO_TESTS_TIP = "No test method names this decision's declarations, directly or through a helper. A test can still reach it through code of the system that those references do not name.";
   const testName = (t) => memberName(t.method, "method");
+  // The number of changed test methods a decision's header names before it counts the rest, so that a change to many
+  // tests does not push the code down the page.
+  const TESTS_NAMED = 2;
   const testTitle = (t) => t.method + (t.helper ? `\nThrough the helper ${memberName(t.helper, "method")}` : "") + `\n${t.status}`;
   // Opens the decision in the details panel with its tests shown.
   function showDecisionTests(d) {
@@ -1416,7 +1416,11 @@
     if (helper) line.append(link(direct ? `${helper} through helpers` : `${plural(helper, "test", "tests")} through helpers`, "List the test methods that reach it through a helper they call"));
     if (counts.length) line.append(": " + counts.join(", "));
     const changed = tests.filter((t) => t.status !== "unchanged");
-    if (changed.length) line.append(" · ", ...changed.flatMap((t, i) => [i ? ", " : "", el("code", { title: testTitle(t) }, testName(t))]));
+    if (changed.length) {
+      const named = changed.slice(0, TESTS_NAMED), more = changed.length - named.length;
+      line.append(" · ", ...named.flatMap((t, i) => [i ? ", " : "", el("code", { title: testTitle(t) }, testName(t))]));
+      if (more) line.append(" and ", link(`${more} more`, "List every test method in the details panel"));
+    }
     return line;
   }
   // Returns the details panel's lists of a decision's test methods, those that reference it directly and those that
@@ -1536,7 +1540,8 @@
     const box = el("section", { class: "decision-panel" });
     box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Decision", help(HELP.decision)), el("button", { class: "link", onclick: () => selectDecision(null) }, "Close")));
     box.append(el("p", { class: "ident" }, el("button", { class: "link", onclick: () => openHunk(d.file, d.hunk) }, `${d.file} · hunk ${d.hunk + 1}`),
-      loc().leaf && d.consequences.length ? el("span", {}, " · ", el("button", { class: "link", onclick: () => showDecision(d) }, "Show reach on the map")) : null));
+      loc().leaf && d.consequences.length ? el("span", {}, " · ", el("button", { class: "link", onclick: () => showDecision(d) }, "Show reach on the map")) : null,
+      " · ", el("button", { class: "link", onclick: () => revealDecision(d), title: "Show this decision in the Changes panel" }, "Show in Changes")));
     for (const x of d.declarations) {
       box.append(kv(CHANGE_TEXT[x.change], el("span", {}, el("code", { title: x.symbol }, declText(x)), ` · ${x.kind}, ${x.accessibility || "default"} · sites ${x.sitesBase === x.sitesHead ? x.sitesHead : x.sitesBase + " → " + x.sitesHead}`)));
     }
