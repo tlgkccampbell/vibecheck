@@ -53,6 +53,7 @@ public static class ChangesetBuilder
             Decisions = tested,
             Tests = tests,
             Patterns = PatternChanges.Build(baseFacts, headFacts, files, read),
+            NewPatterns = PatternChanges.New(baseFacts, headFacts),
         };
         return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views), Glossary = Glossary.Build(changeset, baseFacts, headFacts, declarations) };
     }

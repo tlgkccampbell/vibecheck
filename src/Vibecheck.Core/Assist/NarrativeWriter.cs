@@ -11,11 +11,17 @@ namespace Vibecheck.Assist;
 /// Represents a narrative: two or three sentences, written by Claude, that say why one part of a changeset changed,
 /// and the evidence it rests on. See <c>docs/review-workflow.md</c> section 6.
 /// </summary>
-/// <param name="Key">The part explained: <see cref="SummaryKey"/>, an <see cref="EdgeKey"/> or a <see cref="NodeKey"/>.</param>
-/// <param name="Text">The narrative.</param>
-/// <param name="Cites">The evidence cited: type pairs as <c>From → To</c> for an edge, file paths for a node, and node identifiers for the summary.</param>
+/// <param name="Key">The part explained: <see cref="SummaryKey"/>, an <see cref="EdgeKey"/>, a <see cref="NodeKey"/>, a term's key or a <see cref="PatternKey"/>.</param>
+/// <param name="Text">The narrative, or a pattern's purpose.</param>
+/// <param name="Cites">The evidence cited: type pairs as <c>From → To</c> for an edge, file paths for a node, a term or a pattern, and node identifiers for the summary.</param>
 public sealed record Narrative(string Key, string Text, IReadOnlyList<string> Cites)
 {
+    /// <summary>Gets the name Claude gives a pattern, or <see langword="null"/> for a narrative of anything else.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>Returns the key of the name and purpose of the pattern with some keys, such as <c>pattern:implements:MassTransit.IConsumer&lt;&gt;</c>.</summary>
+    public static string PatternKey(IEnumerable<string> keys) => "pattern:" + string.Join(" + ", keys);
+
     /// <summary>The key of the summary of the whole changeset.</summary>
     public const string SummaryKey = "summary";
 
@@ -46,6 +52,12 @@ public sealed record NarrativeContext(Changeset Changeset, AnalysisResult Base, 
 
     /// <summary>Gets the model that writes the narratives, or <see langword="null"/> for the Claude Code default.</summary>
     public string? Model { get; init; }
+
+    /// <summary>
+    /// Gets a function that returns the texts at base of the files at some paths, leaving out those it cannot read, or
+    /// <see langword="null"/> when no text at base can be read. A pattern is named from the source of its samples at base.
+    /// </summary>
+    public Func<IReadOnlyCollection<string>, IReadOnlyDictionary<string, string>>? ReadBase { get; init; }
 
     /// <summary>The most commits <see cref="ReadCommits"/> lists. A longer range lists its latest commits.</summary>
     public const int MaxCommits = 60;
@@ -114,9 +126,10 @@ public sealed record NarrativeTally(int Written, int Dropped, IReadOnlyList<stri
 /// <summary>
 /// Writes the narratives of a changeset with Claude, one batch at a time, and checks each against the evidence before
 /// it is accepted. An edge's narrative must cite only type pairs behind the edge, a node's only files under the node,
-/// a term's definition only the file that declares it, and the summary only nodes of the map. Narratives that fail,
-/// or that the answer leaves out, are requested once more on their own, and dropped if they fail again. See
-/// <c>docs/review-workflow.md</c> sections 6.2 and 6.3 and <c>docs/attention.md</c> section 8.3.
+/// a term's definition only the file that declares it, a pattern's name and purpose only the files of its samples, and
+/// the summary only nodes of the map. Narratives that fail, or that the answer leaves out, are requested once more on
+/// their own, and dropped if they fail again. See <c>docs/review-workflow.md</c> sections 6.2 and 6.3,
+/// <c>docs/attention.md</c> section 8.3 and <c>docs/patterns.md</c> section 8.
 /// </summary>
 public static class NarrativeWriter
 {
@@ -129,7 +142,8 @@ public static class NarrativeWriter
     /// <summary>How long one request may take. A request that takes longer counts as failed, so that one hung call cannot keep the narratives from finishing.</summary>
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(5);
 
-    private const int PairsPerEdge = 8, SitesPerSide = 4, DiffLinesPerNode = 160, FilesPerNode = 30, SummaryEdges = 12, DeclarationLines = 40, SitesPerTerm = 4;
+    private const int PairsPerEdge = 8, SitesPerSide = 4, DiffLinesPerNode = 160, FilesPerNode = 30, SummaryEdges = 12, DeclarationLines = 40, SitesPerTerm = 4,
+        LinesPerSample = 80, NameLength = 40;
 
     /// <summary>
     /// Writes every batch of a plan, starting them in the plan's order with at most <see cref="MaxParallel"/> running
@@ -221,18 +235,19 @@ public static class NarrativeWriter
     internal static string RequestKey(NarrativeBatch batch, NarrativeContext context) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0', Prompt(batch, context), Schema(batch), context.Model ?? ""))))[..24];
 
-    private static string Schema(NarrativeBatch batch) => Prompts.Read(batch.Kind switch { "summary" => "summary.schema.json", "term" => "terms.schema.json", _ => "narratives.schema.json" });
+    private static string Schema(NarrativeBatch batch) =>
+        Prompts.Read(batch.Kind switch { "summary" => "summary.schema.json", "term" => "terms.schema.json", "pattern" => "pattern.schema.json", _ => "narratives.schema.json" });
 
     /// <summary>Asks for a batch, checks the answer, and asks once more, on their own, for the narratives that failed or were left out.</summary>
     private static async Task<List<Narrative>> AskCheckedAsync(NarrativeBatch batch, NarrativeContext context, IClaude claude, Action<Narrative> accepted, CancellationToken ct)
     {
-        var (good, rejected) = Check(batch, context.Changeset, await AskAsync(batch, context, claude, null, ct));
+        var (good, rejected) = Check(batch, context, await AskAsync(batch, context, claude, null, ct));
         foreach (var n in good) accepted(n);
         if (rejected.Count == 0) return good;
         try
         {
             var retry = Only(batch, rejected.Keys);
-            var (again, _) = Check(retry, context.Changeset, await AskAsync(retry, context, claude, rejected, ct));
+            var (again, _) = Check(retry, context, await AskAsync(retry, context, claude, rejected, ct));
             foreach (var n in again) accepted(n);
             good.AddRange(again);
         }
@@ -278,8 +293,9 @@ public static class NarrativeWriter
     /// Checks an answer against a batch. Returns the narratives that pass, and for each requested narrative that fails
     /// or is missing, the reason. A narrative of something the batch did not ask about is ignored.
     /// </summary>
-    internal static (List<Narrative> Good, Dictionary<string, string> Rejected) Check(NarrativeBatch batch, Changeset changeset, JsonElement answer)
+    internal static (List<Narrative> Good, Dictionary<string, string> Rejected) Check(NarrativeBatch batch, NarrativeContext context, JsonElement answer)
     {
+        var changeset = context.Changeset;
         var good = new List<Narrative>();
         var rejected = new Dictionary<string, string>(StringComparer.Ordinal);
         if (batch.Kind == "summary")
@@ -291,6 +307,22 @@ public static class NarrativeWriter
             else if (parts.Count == 0) rejected[Narrative.SummaryKey] = "the summary cites no part of the map";
             else if (unknown.Count > 0) rejected[Narrative.SummaryKey] = $"the summary cites {string.Join(", ", unknown)}, which the map does not have";
             else good.Add(new Narrative(Narrative.SummaryKey, text, parts));
+            return (good, rejected);
+        }
+        if (batch.Kind == "pattern")
+        {
+            var key = batch.Keys.Single();
+            var name = Str(answer, "name").Trim();
+            var text = Text(answer);
+            var allowed = SampleFiles(batch.Pattern!, context.Base).ToHashSet(StringComparer.Ordinal);
+            var files = Strings(answer, "files").Distinct(StringComparer.Ordinal).ToList();
+            var foreign = files.Where(f => !allowed.Contains(f)).ToList();
+            if (name.Length == 0) rejected[key] = "the name is empty";
+            else if (name.Length > NameLength) rejected[key] = $"the name is longer than {NameLength} characters";
+            else if (text is null) rejected[key] = "the purpose is empty";
+            else if (files.Count == 0) rejected[key] = "the answer cites no file";
+            else if (foreign.Count > 0) rejected[key] = $"the answer cites {string.Join(", ", foreign)}, which does not declare one of the three instances";
+            else good.Add(new Narrative(key, text, files) { Name = name });
             return (good, rejected);
         }
         if (batch.Kind == "term")
@@ -373,6 +405,7 @@ public static class NarrativeWriter
         var cs = context.Changeset;
         if (batch.Kind == "summary") return SummaryPrompt(context);
         if (batch.Kind == "term") return TermPrompt(batch, context);
+        if (batch.Kind == "pattern") return PatternPrompt(batch.Pattern!, context);
         var involved = batch.Edges.SelectMany(e => new[] { e.From, e.To }).Concat(batch.Nodes).Distinct(StringComparer.Ordinal).ToList();
         var location = batch.Kind == "view" ? $"the view `{batch.Location}`, {cs.Map.Views[batch.Location].Name}, which regroups the leaves under `{cs.Map.Views[batch.Location].Level}`"
             : batch.Location == Identifiers.Root ? "the top level of the map" : $"the inside of `{batch.Location}`, {NameOf(cs.Map, batch.Location)}";
@@ -466,6 +499,37 @@ public static class NarrativeWriter
         }
         var location = batch.Location == ArchitectureMap.Unsorted ? "the types no leaf of the map binds" : $"`{batch.Location}`, {NameOf(cs.Map, batch.Location)}";
         return Prompts.Fill(Prompts.Read("define.md"), ("location", location), ("terms", sb.ToString().TrimEnd()));
+    }
+
+    /// <summary>Returns the files that declare a pattern's samples at base.</summary>
+    private static IEnumerable<string> SampleFiles(PatternChange pattern, AnalysisResult atBase) =>
+        atBase.Declarations.Where(d => d.Kind == "type" && d.Container is null && pattern.Samples.Contains(d.Type)).Select(d => d.File).Distinct(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the prompt that asks for the name and purpose of a pattern, from its keys and the source of its samples
+    /// at base, each up to <see cref="LinesPerSample"/> lines. It depends on the base alone, so that every review of
+    /// one base makes the same request.
+    /// </summary>
+    private static string PatternPrompt(PatternChange pattern, NarrativeContext context)
+    {
+        var files = SampleFiles(pattern, context.Base).ToList();
+        var texts = context.ReadBase is null || files.Count == 0 ? new Dictionary<string, string>() : context.ReadBase(files);
+        var sb = new StringBuilder();
+        foreach (var name in pattern.Samples)
+        {
+            var outline = PatternExamples.OutlineOf(name, context.Base.Declarations, texts);
+            var file = context.Base.Declarations.Where(d => d.Type == name && d.Kind == "type" && d.Container is null).Select(d => d.File).FirstOrDefault();
+            sb.Append($"### `{name}`\n\nDeclared in {file ?? "an unknown file"}.\n");
+            if (outline is null) { sb.Append("Its source is not available.\n\n"); continue; }
+            var lines = outline.Source.Lines;
+            sb.Append("```csharp\n").Append(string.Join("\n", lines.Take(LinesPerSample))).Append("\n```\n");
+            if (lines.Count > LinesPerSample || outline.Source.Cut) sb.Append("The declaration goes on past these lines.\n");
+            sb.Append('\n');
+        }
+        return Prompts.Fill(Prompts.Read("name-pattern.md"),
+            ("keys", string.Join("\n", pattern.Keys.Select(k => $"- `{k}`"))),
+            ("count", pattern.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            ("samples", sb.ToString().TrimEnd()));
     }
 
     private static string EdgeSection(DrawnEdge e, ArchitectureMap map, NarrativeContext context)

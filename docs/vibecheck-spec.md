@@ -735,9 +735,13 @@ as the differences:
   typical examples, every other instance at head with its leaf, the source at head of
   each reported instance and example, and the rows that align each reported instance
   with each of the others member by member, as [patterns.md](patterns.md) sections 5.7,
-  6 and 7.3 describe. A type is an instance at head when
+  6 and 7.3 describe, and the three samples at base that Claude names it from, as
+  section 8 there describes. A type is an instance at head when
   it carries every key of the pattern, and it is reported under the most specific of
   the patterns it is an instance of.
+- **NewPatterns**: the patterns new in this change, which three or more added types
+  share by a key that nothing at base carries, each with its keys and its instances
+  with their leaves, as [patterns.md](patterns.md) section 4.5 describes.
 - **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
   section 8 lists them: added types and members, renamed declarations, nodes, views
   and externals added to the map, and assemblies referenced at head and not at base.

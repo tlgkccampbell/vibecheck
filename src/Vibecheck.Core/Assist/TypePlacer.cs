@@ -3,12 +3,19 @@ using System.Text.Json;
 using Vibecheck.Analysis;
 using Vibecheck.Bootstrap;
 using Vibecheck.Checking;
+using Vibecheck.Diffing;
 using Vibecheck.Model;
 
 namespace Vibecheck.Assist;
 
 /// <summary>Holds a map with types placed into it, and how many types were placed and left unsorted.</summary>
 public sealed record Placement(ArchitectureMap Map, int Placed, int Unsorted);
+
+/// <summary>
+/// A hint for placing an unsorted type that is an instance of a pattern: the pattern's name, and the nearest example
+/// among its instances that a leaf holds, with that leaf. See <c>docs/patterns.md</c> section 7.6.
+/// </summary>
+public sealed record PatternHint(string Pattern, string Example, string Leaf);
 
 /// <summary>
 /// Places the types a generated map leaves unsorted. Claude names a leaf for each unsorted type, adding a leaf where none
@@ -32,9 +39,11 @@ public static class TypePlacer
         var units = Units.Build(included).Where(u => u.Members.Any(unsorted.Contains)).ToList();
 
         progress?.Report($"placing {unsorted.Count} unsorted type(s)");
+        var hints = Hints(facts, unsorted);
         var prompt = Prompts.Fill(Prompts.Read("place-types.md"),
             ("leaves", Leaves(map, facts)),
-            ("types", string.Join("\n", unsorted.Order(StringComparer.Ordinal).Select(t => "- " + t))),
+            ("types", string.Join("\n", unsorted.Order(StringComparer.Ordinal).Select(t => "- " + t
+                + (hints.TryGetValue(t, out var h) ? $": an instance of the pattern {h.Pattern}, whose nearest example `{h.Example}` is in `{h.Leaf}`" : "")))),
             ("listing", Units.Listing(units, units.Sum(u => u.Members.Count))));
         var answer = await claude.AskAsync(new ClaudeRequest(prompt, Prompts.Read("placement.schema.json")) { Model = model }, ct);
 
@@ -43,6 +52,36 @@ public static class TypePlacer
         if (!check.Passed) throw new ClaudeException("the placement made the map unusable: " + string.Join("; ", check.Violations.Select(v => v.Message)));
         var left = check.Types.Count(t => t.Leaf == ArchitectureMap.Unsorted);
         return new Placement(placed, unsorted.Count - left, left);
+    }
+
+    /// <summary>
+    /// Returns a hint for each unsorted type that is an instance of a pattern. The pattern is the one the review would
+    /// report the type under, and the example is its nearest instance, as <see cref="PatternExamples.Choose"/> chooses
+    /// it among the instances that are not unsorted. A type whose pattern has no such instance gets no hint.
+    /// </summary>
+    /// <param name="facts">The facts of the map, which hold the patterns.</param>
+    /// <param name="unsorted">The names of the unsorted types.</param>
+    internal static Dictionary<string, PatternHint> Hints(Facts facts, IReadOnlySet<string> unsorted)
+    {
+        var generated = facts.Files.Where(f => f.Generator is not null).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var types = PatternDiscovery.Candidates(facts.Types, generated).ToDictionary(t => t.Name, StringComparer.Ordinal);
+        var instances = facts.Patterns.ToDictionary(p => p.Id, p => p.Instances.Where(types.ContainsKey).Select(n => types[n]).ToList(), StringComparer.Ordinal);
+        var features = new PatternFeatures(facts, facts.Patterns, instances);
+        var hints = new Dictionary<string, PatternHint>(StringComparer.Ordinal);
+        foreach (var name in unsorted.Where(types.ContainsKey).Order(StringComparer.Ordinal))
+        {
+            foreach (var p in PatternDiscovery.ReportedUnder(facts.Patterns.Where(p => p.Instances.Contains(name)).ToList()))
+            {
+                var all = instances[p.Id];
+                var nearest = PatternExamples.Choose([types[name]], all, unsorted,
+                    all.ToDictionary(t => t.Name, t => features.Of(t, p), StringComparer.Ordinal),
+                    all.ToDictionary(t => t.Name, t => features.KeyArguments(t, p).ToList(), StringComparer.Ordinal))[name].Nearest;
+                if (nearest is null) continue;
+                hints[name] = new PatternHint(p.Name, nearest, types[nearest].Leaf);
+                break;
+            }
+        }
+        return hints;
     }
 
     /// <summary>

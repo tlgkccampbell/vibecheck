@@ -237,6 +237,10 @@
   /* While the Tests switch is on, the tests badge on a block counts the changed test files of the types it holds. */
   svg#stage .tests-bg { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
   svg#stage .tests-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--muted); }
+  svg#stage .patterns-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
+  svg#stage .patterns-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--accent); }
+  svg#stage .node.pattern-touched .box { stroke: var(--accent); stroke-width: 2.5; }
+  svg#stage .node.pattern-held .box { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; }
   /* A leaf's Tests section, and the test methods under a test type in the Tests switch. */
   .tests-section { margin: 12px 0; }
   .tests-section > summary { font-weight: 600; }
@@ -268,8 +272,8 @@
   .decision-row.st-reviewed { opacity: .55; }
   .tally { margin: -4px 0 6px; }
   /* The Path panel: a switch in the panel's title, a Next action, and one row per step with its kind and signal. */
-  .panel-switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .panel-switch .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 10px; }
+  .panel-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .panel-switch .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 8px; }
   /* The whole head of the Changes panel, its title with the switch and the path's arrows and count, stays at the top
      of the panel while a long path scrolls under it, so that nothing above the list ever moves. It bleeds into the
      panel's padding so that its background covers the full width. */
@@ -442,6 +446,9 @@
   .chip.chip-pattern { font-family: var(--mono); text-transform: none; letter-spacing: 0; background: var(--surface); color: var(--accent); border-color: var(--accent); cursor: pointer; }
   .chip.chip-pattern.on { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
   .chip.chip-pattern.departs { color: var(--warn); border-color: var(--warn); }
+  .list .row .departs { color: var(--warn); font-size: 12px; margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  h3.pattern-head { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--fg); }
+  h3.pattern-head .row-meta { font-weight: normal; font-size: 12px; }
   table.norms { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 6px; }
   table.norms td { padding: 3px 4px; border-top: 1px solid var(--line); vertical-align: top; }
   table.norms td.mark { width: 14px; text-align: center; }

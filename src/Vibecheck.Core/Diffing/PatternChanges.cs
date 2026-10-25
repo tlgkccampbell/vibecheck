@@ -21,6 +21,25 @@ public static class PatternChanges
     /// <param name="headFacts">The facts at head, whose types are the instances.</param>
     /// <param name="files">Every file of the changeset, with its status.</param>
     /// <param name="read">Returns the texts at head of the files at some paths, leaving out those it cannot read, or is <see langword="null"/> when no text can be read.</param>
+    /// <summary>The number of instances at base that Claude names a pattern from, as <see cref="PatternChange.Samples"/> holds them.</summary>
+    public const int Samples = 3;
+
+    /// <summary>
+    /// Returns the patterns new in a change, as <see cref="PatternDiscovery.New"/> finds them among the candidates at
+    /// head that are not types at base, each with its instances and their leaves at head.
+    /// </summary>
+    /// <param name="baseFacts">The facts at base, which hold the patterns found there.</param>
+    /// <param name="headFacts">The facts at head, whose map ignores keys and whose types are the instances.</param>
+    public static List<NewPattern> New(Facts baseFacts, Facts headFacts)
+    {
+        var atBase = baseFacts.Types.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+        var generated = headFacts.Files.Where(f => f.Generator is not null).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var added = PatternDiscovery.Candidates(headFacts.Types, generated).Where(t => !atBase.Contains(t.Name)).ToList();
+        var leafOf = added.ToDictionary(t => t.Name, t => t.Leaf, StringComparer.Ordinal);
+        return PatternDiscovery.New(headFacts.Map, added, baseFacts.Types, baseFacts.Patterns)
+            .Select(p => new NewPattern(p.Id, p.Name, p.Keys, p.Instances.Select(n => new PatternOther(n, leafOf[n])).ToList())).ToList();
+    }
+
     public static List<PatternChange> Build(Facts baseFacts, Facts headFacts, IReadOnlyList<FileChange> files,
         Func<IReadOnlyCollection<string>, IReadOnlyDictionary<string, string>>? read = null)
     {
@@ -99,9 +118,11 @@ public static class PatternChanges
                         compare[name] = PatternExamples.Mark(PatternExamples.Align(left, right), left, departures, unusual);
                     return i with { Compare = compare };
                 }).ToList();
+                var samples = PatternExamples.Typical(p.Instances, p.Instances.ToDictionary(n => n, n => atBase.Of(baseTypes[n], p), StringComparer.Ordinal));
                 return new PatternChange(p.Id, p.Name, p.Purpose, p.By, p.Keys, p.Instances.Count, withRows, others)
                 {
                     Norms = norms,
+                    Samples = samples.Take(Samples).ToList(),
                     Sources = new SortedDictionary<string, TypeSource>(outlines.ToDictionary(o => o.Key, o => o.Value.Source), StringComparer.Ordinal),
                 };
             })

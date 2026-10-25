@@ -8,8 +8,10 @@ reviewer can compare it with them. It builds on the map and facts of
 [attention.md](attention.md), and the test subjects of [tests.md](tests.md), and it
 lists, in section 11, the changes it makes to those documents.
 
-Phases 1 to 3 of section 13, traits and discovery, norms and departures, and examples
-and the compare view, are built. The other phases are not.
+Phases 1 to 4 of section 13, traits and discovery, norms and departures, examples and
+the compare view, and the Patterns switch with Claude's names, are built. Phase 5,
+member norms, is not. The new concepts notice that section 7.6 mentions is not built
+either, since attention.md section 7 is not; placement receives its hint without it.
 
 The design rests on one principle. A pattern is evidence about the code, not part of
 the architecture. Controllers sit in every feature, and a pattern cuts across the
@@ -461,8 +463,11 @@ The Changes panel's title gains **Patterns** beside Path, Changes, Glossary and 
 It lists the patterns of the changeset, most departures first, each with its new and
 changed instances, their departures and their leaves. Hovering a pattern outlines the
 blocks that hold its instances, new and changed ones apart from the rest, since a
-pattern is not a block and the map has no other way to show it. While the switch is
-on, each block carries a badge counting the new and changed instances it holds.
+pattern is not a block and the map has no other way to show it: a block with a new or
+changed instance has a solid outline, and a block with only other instances a dashed
+one. While the switch is on, each block carries a badge, ◇ and a count, of the new and
+changed instances it holds, those of patterns new in this change among them. A pattern
+step on the path, a chip and the details panel name a pattern as the switch does.
 
 After them, under **New in this change**, the switch lists the patterns of section
 4.5, each named from its first key with its instances and their leaves. Hovering one
@@ -472,18 +477,30 @@ a review.
 
 ### 7.6 Elsewhere
 
-- In the glossary, an added type that is an instance of a pattern names it.
+- In the glossary, an added type that is an instance of a pattern names it, and
+  opens it in the details panel. One that is an instance of a pattern new in this
+  change names that pattern too, and opens the Patterns switch.
 - In the new concepts notice, an `unsorted` type that is an instance of a pattern
   names the leaf of its nearest example, and placement receives that leaf as a hint.
+  The hint names the pattern the type would be reported under, and its nearest
+  instance among those a leaf holds, chosen as section 6 chooses examples.
 
 ## 8. Claude's part
 
 Claude names each discovered pattern and writes its purpose in one sentence, given its
-keys and the source of three instances. The request is keyed `pattern:<keys>`, made
-once per base commit through the narrative pipeline, and cached with it. An answer
-that cites a file other than the three is discarded, and the pattern is named from its
-first key, as "implements `IConsumer<>`", which is also the name while the answer is
-pending. A map entry's name and purpose win over Claude's.
+keys and the source of three instances. The three are the pattern's **samples**: its
+most typical instances at base, by the order of section 6, carried in the changeset
+as `samples`, with their source read at base and cut at 80 lines. The request is
+keyed `pattern:<keys>` and made through the narrative pipeline right after the
+summary, since the name shows on every chip. Its prompt depends on the base alone, so
+the narrative cache, which keys a request by its prompt, makes it once per base
+commit. An answer that cites a file other than the three, or none, or gives a name
+longer than 40 characters, is discarded, and the pattern is named from its first key,
+as "implements `IConsumer<>`", which is also the name while the answer is pending. A
+map entry's name and purpose each win over Claude's, and a pattern whose entry gives
+both is not asked about. A pattern new in this change is not named by Claude, since
+its keys are all the review knows of it. The details panel marks what Claude wrote,
+with the **regenerate** action of any narrative.
 
 Claude does not judge departures or say whether an instance is a good one. A sentence
 that a departure is harmless invites the reviewer to accept a difference they have not
@@ -496,8 +513,10 @@ The facts gain `traits` on each type and aggregate `externalRefs` by referenced 
 as section 3.3 describes, and list the patterns found among their types as
 `patterns`, each with its norms and the mean number of norms its own instances lack, so that the check and the changeset read them from one place, and their declarations gain `attributes`, as section 3.4
 does. The map schema gains `patterns`. The changeset gains `Patterns` and
-`NewPatterns`, the path gains pattern steps, and a changeset published as an artifact
-carries all of it, since none of it needs the server.
+`NewPatterns`, the path gains pattern steps, the glossary's terms gain `patterns`, and
+a changeset published as an artifact carries all of it, since none of it needs the
+server. Claude's names arrive as narrative events, which carry a `name` for a
+pattern, so a published changeset names its patterns from their first keys.
 
 No endpoint is added or changed.
 

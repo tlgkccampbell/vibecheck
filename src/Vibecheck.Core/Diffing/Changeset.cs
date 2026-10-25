@@ -55,7 +55,20 @@ public sealed record Changeset
 
     /// <summary>Gets the patterns found at base that have an added or changed instance, as <see cref="PatternChanges"/> lists them.</summary>
     public List<PatternChange> Patterns { get; init; } = [];
+
+    /// <summary>Gets the patterns new in this change, as <see cref="PatternChanges.New"/> finds them.</summary>
+    public List<NewPattern> NewPatterns { get; init; } = [];
 }
+
+/// <summary>
+/// A pattern new in a change: one that discovery finds among the types the change added, by keys that nothing at base
+/// carries. It has no norms and no examples, since every instance is new. See <c>docs/patterns.md</c> section 4.5.
+/// </summary>
+/// <param name="Id">The pattern's identifier, its keys joined.</param>
+/// <param name="Name">The pattern's name, from its first key.</param>
+/// <param name="Keys">The keys every instance carries.</param>
+/// <param name="Instances">The instances at head, with their leaves, ordered by name.</param>
+public sealed record NewPattern(string Id, string Name, IReadOnlyList<string> Keys, List<PatternOther> Instances);
 
 /// <summary>
 /// A pattern found at base, as <see cref="PatternFact"/> describes it, with the instances at head that the change added
@@ -73,6 +86,13 @@ public sealed record PatternChange(string Id, string Name, string? Purpose, stri
 {
     /// <summary>Gets the pattern's norms at base, most shared first.</summary>
     public List<NormChange> Norms { get; init; } = [];
+
+    /// <summary>
+    /// Gets the instances at base that Claude names the pattern from, the most typical first, as
+    /// <see cref="PatternExamples.Typical"/> orders them. They depend on the base alone, so that the request is the same
+    /// for every review of one base. See <c>docs/patterns.md</c> section 8.
+    /// </summary>
+    public List<string> Samples { get; init; } = [];
 
     /// <summary>Gets the source at head of each instance the pattern reports and of each of their examples, by the type's name.</summary>
     public SortedDictionary<string, TypeSource> Sources { get; init; } = new(StringComparer.Ordinal);

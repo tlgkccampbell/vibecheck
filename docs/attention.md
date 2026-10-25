@@ -407,8 +407,10 @@ declaration diff knows exactly:
 Each term carries its kind, its block, the file and line of its declaration, its
 documentation summary when it has one, the number of sites that use it at head, the
 file and line of the first use outside its declaring type, and the decision of
-section 4 that introduced it, when one did. A term with no documentation comment says
-so, which is itself worth a reviewer's attention in code a model wrote.
+section 4 that introduced it, when one did. An added type also carries the patterns
+that report it as an instance, as [patterns.md](patterns.md) section 7.6 describes. A
+term with no documentation comment says so, which is itself worth a reviewer's
+attention in code a model wrote.
 
 The glossary is carried in the changeset as `Glossary`, grouped by block and ordered
 by use count, so that the names a reviewer will meet most come first.

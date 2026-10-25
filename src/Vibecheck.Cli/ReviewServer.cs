@@ -518,13 +518,14 @@ public sealed class ReviewServer : IAsyncDisposable
                 {
                     WorkingDirectory = Path.GetFullPath(Path.Combine(review.Worktree.Path, result.Target.Root)),
                     Model = options.Models.Narrative,
+                    ReadBase = paths => GitHunks.TextsAt(Path.GetFullPath(Path.Combine(top, result.Target.Root)), review.Base!, paths),
                 };
                 job.Plan = NarrativePlanner.Plan(result.Changeset);
                 var total = job.Plan.Sum(b => b.Keys.Count());
                 options.Log?.Invoke($"  {review.Id} narratives: {total} in {job.Plan.Count} request(s)");
                 review.Add(new { type = "narratives", run, state = "writing", total, message = $"Claude is explaining the changes: {total} narratives." });
                 var tally = await NarrativeWriter.RunAsync(job.Plan, job.Context, options.Claude, options.Cache,
-                    n => review.Add(new { type = "narrative", run, key = n.Key, text = n.Text, cites = n.Cites }), regenerate, ct);
+                    n => review.Add(new { type = "narrative", run, key = n.Key, text = n.Text, cites = n.Cites, name = n.Name }), regenerate, ct);
                 foreach (var f in tally.Failures) options.Log?.Invoke($"  {review.Id} narratives failed: {f}");
                 options.Log?.Invoke($"  {review.Id} narratives: {tally.Written} written, {tally.Dropped} dropped");
                 review.Add(new { type = "narratives", run, state = "done", written = tally.Written, dropped = tally.Dropped, failures = tally.Failures });
@@ -556,7 +557,7 @@ public sealed class ReviewServer : IAsyncDisposable
             try
             {
                 var n = await NarrativeWriter.RegenerateAsync(batch, key, job.Context, options.Claude, options.Cache, job.Cancellation.Token);
-                if (n is not null) review.Add(new { type = "narrative", run = job.Run, key = n.Key, text = n.Text, cites = n.Cites });
+                if (n is not null) review.Add(new { type = "narrative", run = job.Run, key = n.Key, text = n.Text, cites = n.Cites, name = n.Name });
                 else review.Add(new { type = "narrative", run = job.Run, key, failed = true, message = "The new narrative failed its check, so the old one stays." });
             }
             catch (Exception ex) when (ex is ClaudeException or OperationCanceledException)

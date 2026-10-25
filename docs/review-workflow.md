@@ -256,6 +256,9 @@ changed, not only what changed. Counts and diffs already say what.
 - Each term of the glossary that has no documentation summary, as one sentence that
   says what the declaration is, keyed `term:<symbol>` and requested in batches by
   block after the levels and views. See [attention.md](attention.md) section 8.3.
+- The name and purpose of each pattern the changeset reports, keyed `pattern:<keys>`
+  and requested right after the summary, from the source of three of its instances at
+  base. See [patterns.md](patterns.md) section 8.
 
 Edges to the tabs on a level's frame have no narrative of their own. The edge they
 stand for has one at the enclosing level, and the viewer shows that one. An edge

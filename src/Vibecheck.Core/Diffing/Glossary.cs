@@ -50,6 +50,13 @@ public sealed record Term(string Key, string Name, string Symbol, string Kind, s
     /// <summary>Gets the identifier of the decision that introduced the term, or <see langword="null"/> when no decision holds its declaration.</summary>
     public string? Decision { get; init; }
 
+    /// <summary>
+    /// Gets the identifiers of the patterns that report an added type as an instance, those found at base as
+    /// <see cref="Changeset.Patterns"/> lists them and then those new in the change as <see cref="Changeset.NewPatterns"/>
+    /// lists them, or <see langword="null"/> for a term that no pattern reports.
+    /// </summary>
+    public List<string>? Patterns { get; init; }
+
     /// <summary>Returns the key of a declaration's term, such as <c>term:A.Clock.Now</c>.</summary>
     public static string KeyOf(string symbol) => "term:" + symbol;
 
@@ -90,6 +97,9 @@ public static class Glossary
         foreach (var s in headFacts.Sites) AddSite(s.Symbol, s.FromType, s.File, s.Line);
         var decisionOf = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var d in cs.Decisions) foreach (var x in d.Declarations) decisionOf.TryAdd(x.Symbol, d.Id);
+        var patternsOf = cs.Patterns.SelectMany(p => p.Instances.Where(i => i.Status == "added").Select(i => (i.Type, p.Id)))
+            .Concat(cs.NewPatterns.SelectMany(p => p.Instances.Select(i => (i.Type, p.Id))))
+            .GroupBy(x => x.Type, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList(), StringComparer.Ordinal);
 
         foreach (var c in changes)
         {
@@ -109,6 +119,7 @@ public static class Glossary
                 Summary = parts.Select(p => p.Summary).FirstOrDefault(s => s is not null),
                 FirstUse = outside.File is null ? null : new SiteRef(outside.File, outside.Line),
                 Decision = decisionOf.GetValueOrDefault(c.Symbol),
+                Patterns = c.Kind == "type" ? patternsOf.GetValueOrDefault(c.Symbol) : null,
             });
         }
 

@@ -59,23 +59,10 @@ public static class PatternDiscovery
     public static List<PatternFact> Discover(ArchitectureMap map, IReadOnlyList<TypeFact> types, IReadOnlySet<string> generated, List<string> warnings)
     {
         var candidates = Candidates(types, generated);
-        var ignored = map.Patterns.Select(p => p.Ignore).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var ignored = Ignored(map);
         foreach (var key in ignored.Where(k => PatternKeys.KindOf(k) == PatternKeys.Suffix))
             warnings.Add($"patterns: discovery never finds a suffix key, so ignoring \"{key}\" drops nothing");
-
-        var groups = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        foreach (var type in candidates)
-        {
-            foreach (var key in KeysOf(type.Traits).Where(k => !ignored.Contains(k)))
-            {
-                if (!groups.TryGetValue(key, out var set)) groups[key] = set = new SortedSet<string>(StringComparer.Ordinal);
-                set.Add(type.Name);
-            }
-        }
-        var discovered = groups.Where(g => g.Value.Count >= MinimumInstances)
-            .GroupBy(g => string.Join("\n", g.Value), StringComparer.Ordinal)
-            .Select(g => (Keys: Ordered(g.Select(x => x.Key)), Instances: g.First().Value.ToList()))
-            .ToList();
+        var discovered = Group(candidates, k => !ignored.Contains(k));
 
         var result = new List<PatternFact>();
         foreach (var entry in map.Patterns.Where(p => p.Keys is not null))
@@ -91,6 +78,49 @@ public static class PatternDiscovery
         }
         result.AddRange(discovered.Select(d => new PatternFact(string.Join(" + ", d.Keys), PatternKeys.NameOf(d.Keys[0]), null, ByKey, d.Keys, d.Instances)));
         return result.OrderByDescending(p => p.Instances.Count).ThenBy(p => p.Id, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Returns the patterns new in a change: those that discovery finds among the types the change added, by keys that
+    /// no type at base carries and no pattern at base has. Each is named from its first key, most instances first. See
+    /// <c>docs/patterns.md</c> section 4.5.
+    /// </summary>
+    /// <param name="map">The map at head, whose patterns list ignores keys.</param>
+    /// <param name="added">The candidates at head that the change added.</param>
+    /// <param name="atBase">The types at base.</param>
+    /// <param name="patterns">The patterns found at base.</param>
+    public static List<PatternFact> New(ArchitectureMap map, IEnumerable<TypeFact> added, IEnumerable<TypeFact> atBase, IEnumerable<PatternFact> patterns)
+    {
+        var ignored = Ignored(map);
+        var known = atBase.SelectMany(t => KeysOf(t.Traits)).Concat(patterns.SelectMany(p => p.Keys)).ToHashSet(StringComparer.Ordinal);
+        return Group(added, k => !ignored.Contains(k) && !known.Contains(k))
+            .Select(d => new PatternFact(string.Join(" + ", d.Keys), PatternKeys.NameOf(d.Keys[0]), null, ByKey, d.Keys, d.Instances))
+            .OrderByDescending(p => p.Instances.Count).ThenBy(p => p.Id, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Returns the keys that a map's patterns list ignores.</summary>
+    private static HashSet<string> Ignored(ArchitectureMap map) => map.Patterns.Select(p => p.Ignore).OfType<string>().ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Groups some types by each key they carry that a filter keeps, keeps each group of at least
+    /// <see cref="MinimumInstances"/> types, and merges groups with the same instances, as steps 1 to 4 of discovery do.
+    /// Returns each merged group's keys, in order, and its instances, by name.
+    /// </summary>
+    private static List<(List<string> Keys, List<string> Instances)> Group(IEnumerable<TypeFact> types, Func<string, bool> keep)
+    {
+        var groups = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        foreach (var type in types)
+        {
+            foreach (var key in KeysOf(type.Traits).Where(keep))
+            {
+                if (!groups.TryGetValue(key, out var set)) groups[key] = set = new SortedSet<string>(StringComparer.Ordinal);
+                set.Add(type.Name);
+            }
+        }
+        return groups.Where(g => g.Value.Count >= MinimumInstances)
+            .GroupBy(g => string.Join("\n", g.Value), StringComparer.Ordinal)
+            .Select(g => (Keys: Ordered(g.Select(x => x.Key)), Instances: g.First().Value.ToList()))
+            .ToList();
     }
 
     /// <summary>

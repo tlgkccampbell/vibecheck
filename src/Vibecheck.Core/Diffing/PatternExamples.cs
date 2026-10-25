@@ -39,9 +39,7 @@ public static class PatternExamples
         IReadOnlyDictionary<string, SortedSet<string>> features, IReadOnlyDictionary<string, List<string>> arguments)
     {
         var candidates = all.Where(t => !added.Contains(t.Name)).OrderBy(t => t.Name, StringComparer.Ordinal).ToList();
-        var typical = candidates
-            .Select(c => (Type: c, Total: candidates.Where(d => d != c).Sum(d => Likeness(features[c.Name], features[d.Name]))))
-            .OrderByDescending(x => x.Total).ThenBy(x => x.Type.Name, StringComparer.Ordinal).Select(x => x.Type.Name).ToList();
+        var typical = Typical(candidates.Select(c => c.Name), features);
         var result = new Dictionary<string, (string?, string?)>(StringComparer.Ordinal);
         foreach (var x in instances)
         {
@@ -54,6 +52,19 @@ public static class PatternExamples
             result[x.Name] = (nearest, typical.FirstOrDefault(n => n != x.Name && n != nearest));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Returns some instances with the most typical first: the one with the highest total <see cref="Likeness"/> to the
+    /// others, ties going to the first by name.
+    /// </summary>
+    /// <param name="names">The instances' names.</param>
+    /// <param name="features">The features of each instance, by its name.</param>
+    public static List<string> Typical(IEnumerable<string> names, IReadOnlyDictionary<string, SortedSet<string>> features)
+    {
+        var all = names.Order(StringComparer.Ordinal).ToList();
+        return all.Select(c => (Name: c, Total: all.Where(d => d != c).Sum(d => Likeness(features[c], features[d]))))
+            .OrderByDescending(x => x.Total).ThenBy(x => x.Name, StringComparer.Ordinal).Select(x => x.Name).ToList();
     }
 
     /// <summary>Returns the most leading namespace segments that a type argument of one list shares with one of another.</summary>
