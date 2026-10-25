@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -106,32 +107,46 @@ public static class RoslynAnalyzer
         var projectInfos = new List<ProjectInfo>();
         var fileAssembly = new Dictionary<string, string>(StringComparer.Ordinal);
 
+        // A file compiled into more than one project is walked once, with the first project that compiles it.
+        var work = new List<(ProjectTrees Project, string Assembly, SyntaxTree Tree, string Path, string? Generator)>();
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var project in projects)
         {
-            var compilation = project.Compilation;
-            progress?.Report($"walking {project.Name}");
-            var assembly = compilation.AssemblyName ?? project.Name;
+            var assembly = project.Compilation.AssemblyName ?? project.Name;
             projectInfos.Add(new ProjectInfo(project.Name, assembly, project.Directory));
-
             foreach (var (tree, path, generator) in project.Trees)
             {
                 fileAssembly.TryAdd(path, assembly);
-                if (files.ContainsKey(path)) continue;
-                var text = tree.GetText(ct);
-                files[path] = new SourceFile(path, HashOf(Encoding.UTF8.GetBytes(text.ToString())), project.Name, generator);
-                var model = compilation.GetSemanticModel(tree);
-                var root = tree.GetRoot(ct);
-                var walker = new DependencyWalker(model, compilation, resolver, path);
-                walker.Visit(root);
-                walked.AddRange(walker.Dependencies.Select(d => (d, walker.Assembly, path)));
-                walkedSites.AddRange(walker.Sites.Select(s => (s, walker.Assembly, path)));
-                externals.AddRange(walker.ExternalReferences);
-                unresolvable.AddRange(walker.Unresolvable);
-                var declared = new DeclarationWalker(model, path);
-                declared.Visit(root);
-                declarations.AddRange(declared.Declarations.Select(d => (d, assembly)));
+                if (claimed.Add(path)) work.Add((project, assembly, tree, path, generator));
             }
+        }
 
+        // Binding dominates the walk and each file binds independently, so the files are walked in parallel, the
+        // largest first so that no long file starts last. The results are merged in their original order.
+        progress?.Report($"walking {work.Count} files in {projects.Count} projects");
+        var results = new FileWalk[work.Count];
+        var largestFirst = Enumerable.Range(0, work.Count).OrderByDescending(i => work[i].Tree.Length).ToList();
+        Parallel.ForEach(Partitioner.Create(largestFirst, EnumerablePartitionerOptions.NoBuffering), new ParallelOptions { CancellationToken = ct }, i =>
+        {
+            var (project, _, tree, path, generator) = work[i];
+            results[i] = WalkFile(project, tree, path, generator, resolver, ct);
+        });
+        for (var i = 0; i < work.Count; i++)
+        {
+            var (_, assembly, _, path, _) = work[i];
+            var (file, walker, declared) = results[i];
+            files[path] = file;
+            walked.AddRange(walker.Dependencies.Select(d => (d, walker.Assembly, path)));
+            walkedSites.AddRange(walker.Sites.Select(s => (s, walker.Assembly, path)));
+            externals.AddRange(walker.ExternalReferences);
+            unresolvable.AddRange(walker.Unresolvable);
+            declarations.AddRange(declared.Declarations.Select(d => (d, assembly)));
+        }
+
+        foreach (var project in projects)
+        {
+            var compilation = project.Compilation;
+            var assembly = compilation.AssemblyName ?? project.Name;
             foreach (var type in TopLevelTypes(compilation.SourceModule.GlobalNamespace))
             {
                 var declFiles = type.DeclaringSyntaxReferences
@@ -188,6 +203,31 @@ public static class RoslynAnalyzer
             Declarations = declarationList.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.FirstLine).ThenBy(d => d.Symbol, StringComparer.Ordinal).ToList(),
             Sites = sites.OrderBy(s => s.File, StringComparer.Ordinal).ThenBy(s => s.Line).ThenBy(s => s.Symbol, StringComparer.Ordinal).ToList(),
         };
+    }
+
+    /// <summary>A walked source file: its record, the references found in it, and the declarations it makes.</summary>
+    private sealed record FileWalk(SourceFile File, DependencyWalker Dependencies, DeclarationWalker Declarations);
+
+    /// <summary>
+    /// Walks one source file for its references and declarations. Nullable analysis is disabled because the walkers
+    /// read symbols through their original definitions, which carry no nullable annotations, and the analysis costs
+    /// about half of the binding time.
+    /// </summary>
+    private static FileWalk WalkFile(ProjectTrees project, SyntaxTree tree, string path, string? generator, SourceResolver resolver, CancellationToken ct)
+    {
+        var compilation = project.Compilation;
+        var text = tree.GetText(ct);
+        var file = new SourceFile(path, HashOf(Encoding.UTF8.GetBytes(text.ToString())), project.Name, generator);
+        // The option is marked experimental. Should it be removed, dropping it costs speed, not correctness.
+#pragma warning disable RSEXPERIMENTAL001
+        var model = compilation.GetSemanticModel(tree, SemanticModelOptions.DisableNullableAnalysis);
+#pragma warning restore RSEXPERIMENTAL001
+        var root = tree.GetRoot(ct);
+        var walker = new DependencyWalker(model, compilation, resolver, path);
+        walker.Visit(root);
+        var declared = new DeclarationWalker(model, path);
+        declared.Visit(root);
+        return new FileWalk(file, walker, declared);
     }
 
     /// <summary>Returns the open form of a type, as <see cref="TraitType"/> describes it.</summary>
