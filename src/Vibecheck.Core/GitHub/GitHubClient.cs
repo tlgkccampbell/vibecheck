@@ -78,7 +78,7 @@ public sealed class GitHubClient : IGitHub, IDisposable
             if (data.GetProperty("repository").GetProperty("pullRequest") is not { ValueKind: JsonValueKind.Object } next) break;
             pr = next;
         }
-        return snapshot with { Discussion = new PullDiscussion(timeline, threads, pending), NodeId = nodeId, CheckList = checks };
+        return snapshot with { Discussion = new PullDiscussion(timeline, threads, pending), NodeId = nodeId, CheckList = checks, Body = Str(pr, "body") };
     }
 
     /// <summary>

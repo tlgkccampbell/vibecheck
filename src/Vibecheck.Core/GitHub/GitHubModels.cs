@@ -41,6 +41,9 @@ public sealed record PullSnapshot(int Number, string Title, string Url, string S
 
     /// <summary>Gets each check of the head commit, in GitHub's order, or <see langword="null"/> when they were not read.</summary>
     public IReadOnlyList<PullCheck>? CheckList { get; init; }
+
+    /// <summary>Gets the description's Markdown, which the review reads intents from, or <see langword="null"/> when it was not read.</summary>
+    public string? Body { get; init; }
 }
 
 /// <summary>

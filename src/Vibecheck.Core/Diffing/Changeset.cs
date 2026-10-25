@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Vibecheck.Analysis;
 using Vibecheck.Checking;
+using Vibecheck.Intents;
 using Vibecheck.Model;
 
 namespace Vibecheck.Diffing;
@@ -58,6 +59,13 @@ public sealed record Changeset
 
     /// <summary>Gets the patterns new in this change, as <see cref="PatternChanges.New"/> finds them.</summary>
     public List<NewPattern> NewPatterns { get; init; } = [];
+
+    /// <summary>
+    /// Gets the intents of the pull request's description, as <see cref="IntentResolver"/> resolves them. The
+    /// description changes without a commit, so a cached changeset has none, and the server sets them when it serves
+    /// the changeset. See <c>docs/intent.md</c> section 4.3.
+    /// </summary>
+    public List<ResolvedIntent> Intents { get; init; } = [];
 }
 
 /// <summary>

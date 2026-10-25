@@ -982,6 +982,8 @@
     opts: { threshold: "1", externals: false, dim: true, mute: true, talk: false },
     // The tab the page shows: "map" or "conversation".
     tab: "map",
+    // A value indicating whether the details panel shows the Intent list above the selection.
+    intentList: false,
     // The lines selected to comment on: a path, a hunk index, a side, and the first and last line indexes, or null.
     compose: null,
     // The files whose diffs the reader has shown (true) or hidden (false), by path. A file without an entry shows its
@@ -2629,6 +2631,10 @@
       "The patterns come from the code before this change, and a type joins one when it carries every key. A norm is what four in five of five or more instances share. " +
       "A departure is a norm that a new instance lacks, or that a changed instance had and no longer has. A departure is a difference to read, not a fault. Click an instance to open its type.",
     narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
+    intent: "These are the intents the pull request's author stated for this part, in the Intent section of its description. " +
+      "Each anchor says whether the change touches what it names. The review does not check that an intent is true; read it beside Claude's explanation and the code.",
+    intentList: "This list holds every intent the pull request's description states, in order. An intent that names nothing this change touches, " +
+      "and an anchor that names nothing in the map or the code, are flagged. A flag says what the description names, not that the intent is false.",
     patterns: "Patterns lists the roles that the change's new and changed types play, such as consumers or controllers, the most departures first. " +
       "Hover a pattern to outline the blocks that hold its instances, solid for new and changed ones and dashed for the rest. " +
       "While this list is open, a block's badge counts the new and changed instances it holds. Patterns new in this change come last.",
@@ -2751,10 +2757,12 @@
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
     if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
+    if (state.intentList && INTENTS.length) box.append(intentListPanel());
     const l = loc();
     const cur = state.current;
     if (l.leaf) {
       box.append(el("h2", {}, nameOf(l.leaf)), el("p", { class: "ident" }, l.leaf), el("p", { class: "purpose" }, purposeOf(l.leaf)));
+      box.append(intentBlock(intentsOfBlock(l.leaf, [l.leaf])) || "");
       if (contentOf(l.leaf).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + l.leaf), "node:" + l.leaf) || "");
       box.append(glossarySection(l.leaf) || "");
       box.append(threadList(l.leaf) || "", problemList(l.leaf) || "");
@@ -2782,6 +2790,7 @@
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
       if (l.view || viewsAt(l.level).length) box.append(el("p", { class: "hint" }, l.view ? GROUPING.view : GROUPING.tree));
+      if (id !== ROOT && (!l.view || l.group)) box.append(intentBlock(intentsOfBlock(l.group ? null : id, l.group ? VIEWS[l.view].groups[l.group].leaves : leavesUnder(id))) || "");
       if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
       if (id !== ROOT) box.append(glossarySection(id) || "");
       const bar = reviewedBar(id);
@@ -2806,6 +2815,7 @@
       box.append(el("h2", {}, nameOf(child.id)), el("p", { class: "ident" }, child.id), el("p", { class: "purpose" }, purposeOf(child.id)));
       const st = statusOf(child.key);
       box.append(kv("Status", st === "children" ? "contains changes" : st));
+      box.append(intentBlock(intentsOfBlock(child.kind === "group" ? null : child.id, child.leaves)) || "");
       if (child.kind !== "group" && contentOf(child.id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + child.id), "node:" + child.id) || "");
       box.append(glossarySection(child.kind === "group" ? child.key : child.id) || "");
       const m = metricsOf(child.key), content = child.kind === "group" ? groupContent(child) : contentOf(child.key);
@@ -2855,6 +2865,7 @@
       box.append(kv("Status", edge.status));
       box.append(kv("References", deltaText(edge.base, edge.head)));
       box.append(kv("Leaf pairs", String(edge.members.length)));
+      box.append(intentBlock(intentsOfEdge(edge)) || "");
       if (edge.status !== "unchanged") { const n = edgeNarrative(edge); box.append(narrativeBlock(n, n ? n.key : null) || ""); }
       if (edge.members.length > 1 || edge.members[0].from !== from || edge.members[0].to !== to) {
         box.append(el("h3", {}, "Made of"));
@@ -3447,6 +3458,127 @@
     if (NARR.errors.has("summary")) box.append(el("p", { class: "warn" }, NARR.errors.get("summary")));
     box.classList.toggle("clamped", !NARR.expanded);
     box.hidden = false;
+  }
+
+  // ---------- Stated intent ----------
+
+  // The intents of the pull request's description, resolved against this changeset, as the changeset carries them and
+  // intents events replace them. An intent is the author's claim, never evidence. See docs/intent.md section 5.
+  let INTENTS = CS.intents || [];
+  const ANCHOR_STATE = { touched: "changed", untouched: "not changed", unknown: "names nothing" };
+  const KIND_TEXT = { node: "a block", edge: "an edge", file: "a file", type: "a type" };
+  const isNodeId = (s) => /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(s);
+
+  // Returns the ends of an edge anchor's target.
+  function anchorEnds(a) { return a.target.split(" → "); }
+
+  // Gets a value indicating whether a type of a pair, behind a leaf edge from or to a leaf, is at an end of an edge
+  // anchor: under the end's block for a node end, or the end's type itself.
+  function endMatches(end, type, leaf) { return isNodeId(end) ? isUnder(leaf, end) : type === end; }
+
+  // Returns the changed leaf edges an edge anchor names, as IntentResolver matches them.
+  function anchoredEdges(a, edges) {
+    const [from, to] = anchorEnds(a);
+    if (isNodeId(from) && isNodeId(to)) return edges.filter((e) => isUnder(e.from, from) && isUnder(e.to, to));
+    return edges.filter((e) => (e.evidence || []).some((p) => endMatches(from, p.from, e.from) && endMatches(to, p.to, e.to)));
+  }
+
+  // Returns the leaves a file or type anchor's code sits in, at head and at base.
+  function anchorLeaves(a) {
+    if (a.kind === "file") { const f = fileOf(a.target); return f ? [...f.leavesHead, ...f.leavesBase] : []; }
+    const t = CS.types.find((x) => x.name === a.target);
+    return t ? [t.leafHead, t.leafBase].filter(Boolean) : [];
+  }
+
+  // Returns the intents that name a block: an anchor on the block or a node under it, or on a file or type whose code
+  // sits in one of the block's leaves. A group, which has no identifier of its own, is named through its leaves.
+  function intentsOfBlock(id, leaves) {
+    return INTENTS.filter((i) => i.anchors.some((a) => a.state !== "unknown" && (
+      a.kind === "node" ? (id ? isUnder(a.target, id) : leaves.includes(a.target))
+        : a.kind === "file" || a.kind === "type" ? anchorLeaves(a).some((l) => leaves.includes(l)) : false)));
+  }
+
+  // Returns the intents with an edge anchor that names one of the leaf edges a drawn edge is made of.
+  function intentsOfEdge(edge) {
+    return INTENTS.filter((i) => i.anchors.some((a) => a.kind === "edge" && a.state !== "unknown" && anchoredEdges(a, edge.members).length));
+  }
+
+  // Opens what an anchor names: a block in context, a file or a type in its leaf, or the first leaf edge it names.
+  function openAnchor(a) {
+    if (a.kind === "node") return showInContext(a.target);
+    if (a.kind === "file") return openFile(a.target);
+    if (a.kind === "type") return openType(a.target);
+    const [e] = anchoredEdges(a, CS.edges.filter((x) => x.status !== "unchanged"));
+    if (e) showEdge(e);
+  }
+
+  // Returns an anchor as a link to what it names, marked with whether the change touches it. An unknown anchor is
+  // flagged with what it was read as, and is not a link.
+  function anchorItem(a) {
+    if (a.state === "unknown")
+      return el("li", { class: "anchor unknown" }, el("code", {}, a.text), " ", el("span", { class: "intent-flag" }, `names nothing in the map or the code; read as ${KIND_TEXT[a.kind]}`));
+    const external = a.kind === "node" && EXTERNALS[a.target];
+    const name = el("code", {}, a.text);
+    return el("li", { class: "anchor " + a.state },
+      external ? name : el("button", { class: "link", onclick: () => openAnchor(a), title: a.target }, name),
+      " ", el("span", { class: "anchor-state" }, ANCHOR_STATE[a.state]));
+  }
+
+  // Returns one intent's parts: its claim, a flag when it is unbacked, its why, alternative and note, and its anchors.
+  // Every part is the description's text, shown with inline code as code and nothing else interpreted.
+  function intentItem(i) {
+    const box = el("div", { class: "intent" + (i.unbacked ? " unbacked" : "") }, el("p", { class: "intent-claim" }, ...richText(i.claim)));
+    if (i.unbacked) box.append(el("p", { class: "intent-flag" }, "Names nothing this change touches."));
+    if (i.why) box.append(el("p", {}, el("span", { class: "intent-label" }, "Why "), ...richText(i.why)));
+    if (i.alternative) box.append(el("p", {}, el("span", { class: "intent-label" }, "Instead of "), ...richText(i.alternative)));
+    if (i.note) for (const line of i.note.split("\n")) box.append(el("p", { class: "intent-note" }, ...richText(line)));
+    if (i.anchors.length) box.append(el("ul", { class: "anchors" }, ...i.anchors.map(anchorItem)));
+    return box;
+  }
+
+  // Returns the details panel's section for the intents that name an edge or a block, labeled as the author's, or
+  // null when none does. It stands apart from Claude's narrative and is never merged into it.
+  function intentBlock(list) {
+    if (!list.length) return null;
+    return el("section", { class: "intents" }, el("h3", {}, "Author's intent", help(HELP.intent)), ...list.map(intentItem),
+      el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
+  }
+
+  // Returns the counts of the discrepancies between the stated intent and the change: unbacked intents and unknown anchors.
+  function intentDiscrepancies() {
+    return { unbacked: INTENTS.filter((i) => i.unbacked).length, unknown: INTENTS.flatMap((i) => i.anchors).filter((a) => a.state === "unknown").length };
+  }
+
+  // Shows the line under the top bar that counts the description's intents and their discrepancies, and opens the
+  // Intent list. A changeset with no intents shows nothing, since a change with no intent section is not missing one.
+  function renderIntentLine() {
+    const box = $("#intents");
+    if (!INTENTS.length) { box.hidden = true; return; }
+    const d = intentDiscrepancies();
+    const parts = [`${plural(INTENTS.length, "intent", "intents")} from the description`,
+      d.unbacked ? `${d.unbacked} ${d.unbacked === 1 ? "names" : "name"} nothing changed` : "",
+      d.unknown ? `${plural(d.unknown, "anchor names", "anchors name")} nothing` : ""].filter(Boolean);
+    box.replaceChildren(el("span", { class: "summary-label" }, "Intent"), el("span", {}, parts.join(" · ")),
+      d.unbacked || d.unknown ? el("span", { class: "intent-flag" }, "check these") : null,
+      el("button", { class: "link", onclick: () => { state.intentList = !state.intentList; renderDetails(); } }, state.intentList ? "Hide the list" : "Show the list"));
+    box.hidden = false;
+  }
+
+  // Returns the details panel's Intent list: every intent of the description in order, with its parts.
+  function intentListPanel() {
+    return el("section", { class: "decision-panel intent-list" },
+      el("div", { class: "decision-panel-head" }, el("h2", {}, "Intent", help(HELP.intentList)),
+        el("button", { class: "link", onclick: () => { state.intentList = false; renderDetails(); renderIntentLine(); } }, "Close")),
+      ...INTENTS.map(intentItem), el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
+  }
+
+  // Records an intents event, which follows an edit of the description, and shows the intents anew.
+  function intentsEvent(e) {
+    if (e.run !== META.run) return;
+    INTENTS = e.intents || [];
+    if (!INTENTS.length) state.intentList = false;
+    renderIntentLine();
+    renderDetails();
   }
 
   // Shows an edge's narrative, or its counts until the narrative arrives, in a tooltip that follows the pointer.
@@ -4189,6 +4321,8 @@
       const e = JSON.parse(m.data);
       if (e.type === "narrative" || e.type === "narratives") { narrativeEvent(e); return; }
       const fresh = e.seq >= META.events;
+      // The intents resolved before the page loaded are already in the changeset.
+      if (e.type === "intents") { if (fresh) intentsEvent(e); return; }
       // The marks sent before the page loaded are already in META.reviewed.
       if (e.type === "reviewed") { if (fresh) applyMarks(e.marks); return; }
       // The snapshot and the places sent before the page loaded are already in META.
@@ -4293,6 +4427,7 @@
       $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
     }
     renderSummary();
+    renderIntentLine();
     renderPull();
     installTip();
     installTermTips();

@@ -749,6 +749,12 @@ as the differences:
   hold it, the types the change added or changed under it and the other types that
   hold it, each with its leaf, and the documentation summary of a type whose whole
   name is the term. New terms come first, then those with the most touched types.
+- **Intents**: the intents of the pull request's description, as
+  [intent.md](intent.md) section 4 resolves them, each with its claim, why,
+  alternative, note and anchors, and each anchor with its text, its kind, what it
+  resolved to and whether the change touches it. The description changes without a
+  commit, so a cached changeset has none, and the server sets them when it serves the
+  changeset and sends them anew when the description changes.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a

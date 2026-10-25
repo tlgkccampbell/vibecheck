@@ -295,7 +295,9 @@ The Conversation tab shows, oldest first:
 
 Bodies are rendered from GitHub's `bodyHTML`, so that Markdown, mentions, issue
 links, task lists and images look as they do on GitHub, without a Markdown renderer
-in the viewer. Section 11 covers how the page treats that HTML.
+in the viewer. Section 11 covers how the page treats that HTML. The pull request
+query also fetches the description's Markdown, `body`, which the review reads for its
+`Intent` section, as [intent.md](intent.md) section 3.3 describes.
 
 The checks sit at the top of the tab (section 9). A box at the bottom adds a comment
 to the conversation.

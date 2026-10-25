@@ -123,6 +123,22 @@
   .narrative .cites { margin: 2px 0 6px; }
   .narrative-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
   .summary code, .narrative code, .tip code { font-family: var(--mono); font-size: .92em; }
+  /* Stated intent, which the pull request's author writes: the line under the summary, the section above a narrative,
+     and the Intent list. It is marked apart from Claude's narratives, and its flags take the warning color. */
+  .intent-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; border-left-color: var(--warn); }
+  .intents { border-left: 3px solid var(--warn); padding: 2px 0 2px 10px; margin: 10px 0; }
+  .intents h3 { margin-top: 0; }
+  .intent { margin: 6px 0 10px; }
+  .intent p { margin: 2px 0; }
+  .intent-claim { font-weight: 600; }
+  .intent-label { color: var(--muted); }
+  .intent-note { color: var(--muted); }
+  .intent-flag { color: var(--warn); font-size: 12.5px; }
+  .intent code, .intent-line code { font-family: var(--mono); font-size: .92em; }
+  .anchors { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12.5px; }
+  .anchors li { margin: 1px 0; overflow-wrap: anywhere; }
+  .anchor-state { color: var(--muted); }
+  .anchor.touched .anchor-state { color: var(--modified); }
   .tip { position: absolute; z-index: 5; max-width: 360px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface);
     box-shadow: 0 4px 14px rgb(0 0 0 / .14); font-size: 12.5px; pointer-events: none; }
   .tip p { margin: 4px 0; }
@@ -683,6 +699,7 @@
 <div class="reviewbox" id="reviewbox" hidden></div>
 <div class="notice ready" id="pushnotice" role="status" hidden></div>
 <div class="summary" id="summary" aria-live="polite" hidden></div>
+<div class="summary intent-line" id="intents" aria-live="polite" hidden></div>
 
 <div class="main">
   <aside>

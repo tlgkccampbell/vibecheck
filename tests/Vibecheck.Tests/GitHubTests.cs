@@ -54,6 +54,8 @@ public class GitHubTests
         var discussion = pull.Discussion!;
         Assert.Equal(("description", pull.Author), (discussion.Timeline[0].Kind, discussion.Timeline[0].Author));
         Assert.StartsWith("<h3", discussion.Timeline[0].BodyHtml);
+        // The description's Markdown comes too, for its intent section.
+        Assert.StartsWith("### Description\r\n", pull.Body);
         var kinds = discussion.Timeline.GroupBy(i => i.Kind).ToDictionary(g => g.Key, g => g.Count());
         Assert.Equal(new Dictionary<string, int> { ["description"] = 1, ["review"] = 3, ["force-push"] = 7, ["commit"] = 23, ["merged"] = 1, ["closed"] = 1 }, kinds);
         var review = discussion.Timeline.First(i => i.Kind == "review");
