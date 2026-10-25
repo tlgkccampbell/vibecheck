@@ -932,11 +932,29 @@
   }
 
   // The advance of one character of the monospaced text in a block and in a level's frame: 0.6 em, plus any letter spacing.
-  const MONO = { meta: 10.5 * 0.6, title: 12 * 0.6 + 12 * 0.08, badge: 9 * 0.6 + 9 * 0.08, frameTitle: 12 * 0.6 + 12 * 0.12, frameMeta: 10.5 * 0.6 + 10.5 * 0.06 };
+  const MONO = { meta: 10.5 * 0.6, title: 12 * 0.6 + 12 * 0.08, smallTitle: 10 * 0.6 + 10 * 0.08, badge: 9 * 0.6 + 9 * 0.08, frameTitle: 12 * 0.6 + 12 * 0.12, frameMeta: 10.5 * 0.6 + 10.5 * 0.06 };
   // Returns text cut to fit a width in the monospaced font, ending in an ellipsis when it was cut.
   const fitText = (str, width, advance) => truncate(str, Math.max(1, Math.floor(width / advance)));
 
   const truncate = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+  // Returns the lines of a block's title for a header band of a width, whether they are set in the small size, and
+  // whether the title was cut short. A title too long for one line at the full size is set small, and one too long for
+  // that wraps onto a second line after a space or a hyphen. The second line ends in an ellipsis when the title needs
+  // more than two.
+  function fitTitle(str, width) {
+    if (str.length * MONO.title <= width) return { small: false, cut: false, lines: [str] };
+    const n = Math.max(1, Math.floor(width / MONO.smallTitle));
+    if (str.length <= n) return { small: true, cut: false, lines: [str] };
+    let first = "";
+    for (const piece of str.split(/(?<=[ -])/)) {
+      if ((first + piece).trimEnd().length > n) break;
+      first += piece;
+    }
+    // A first word too long for the line is broken where the line ends.
+    if (!first) first = str.slice(0, n);
+    const rest = str.slice(first.length);
+    return { small: true, cut: rest.length > n, lines: [first.trimEnd(), truncate(rest, n)] };
+  }
   // Returns a labeled list of names that fits a width, such as "Components: Emit, Editor features". The names that do
   // not fit are counted, as in "Components: Emit + 2 more". When even the first name does not fit whole, the line
   // counts them all, as in "3 components", and a single name too long for the width is truncated.
@@ -1148,7 +1166,14 @@
       if (cat) g.append(categoryChip(cat, r.x + 7, r.y + 6, 16));
       // The title runs from after the icon chip to before the cycle mark and the open glyph.
       const titleX = r.x + (cat ? 30 : 10);
-      g.append(text(titleX, r.y + 19, fitText(nameOf(c.id).toUpperCase(), r.x + r.w - 32 - titleX, MONO.title), { class: "title" }));
+      // A title of two lines starts below the status pill on the top edge, and one cut short shows its whole name on hover.
+      const name = nameOf(c.id).toUpperCase(), title = fitTitle(name, r.x + r.w - 32 - titleX);
+      const titleY = title.lines.length > 1 ? [r.y + 16, r.y + 26] : [r.y + (title.small ? 18 : 19)];
+      title.lines.forEach((line, i) => {
+        const t = text(titleX, titleY[i], line, { class: "title" + (title.small ? " small" : "") });
+        if (title.cut) t.append(svg("title", {}, name));
+        g.append(t);
+      });
       const m = metricsOf(c.key), content = c.kind === "group" ? groupContent(c) : contentOf(c.key);
       const changedFiles = content.added + content.removed + content.modified;
       // The status pill on the block's top edge says what happened to it, with the count of changed files when there is
