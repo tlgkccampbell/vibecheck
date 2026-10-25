@@ -86,6 +86,7 @@
   .notice.busy { border-color: var(--accent); }
   .notice.ready { border-color: var(--added); background: var(--added-bg); }
   .notice.error { border-color: var(--removed); background: var(--removed-bg); }
+  .notice .note-preview { margin: 6px 0 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .notice .close { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 4px; }
   .spin { display: inline-block; vertical-align: -1px; width: 12px; height: 12px; flex: none; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: notice-spin 0.9s linear infinite; }
   @keyframes notice-spin { to { transform: rotate(360deg); } }

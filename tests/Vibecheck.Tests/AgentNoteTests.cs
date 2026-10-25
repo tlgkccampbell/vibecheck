@@ -25,7 +25,8 @@ public class AgentNoteTests
     {
         using var temp = new TempDirectory();
         Assert.False(AgentNote.IsPresent(temp.Path));
-        Assert.True(AgentNote.AddTo(temp.Path, "vibecheck.json"));
+        Assert.Equal("CLAUDE.md", AgentNote.Target(temp.Path));
+        Assert.True(AgentNote.AddTo(temp.Path, "CLAUDE.md", "vibecheck.json"));
         Assert.Equal(AgentNote.Text("vibecheck.json"), File.ReadAllText(Path.Combine(temp.Path, "CLAUDE.md")));
         Assert.True(AgentNote.IsPresent(temp.Path));
     }
@@ -37,13 +38,39 @@ public class AgentNoteTests
         var path = Path.Combine(temp.Path, "CLAUDE.md");
         File.WriteAllText(path, "# Project\r\n\r\nBuild with make.");
 
-        Assert.True(AgentNote.AddTo(temp.Path, "vibecheck.json"));
+        Assert.True(AgentNote.AddTo(temp.Path, "CLAUDE.md", "vibecheck.json"));
         var text = File.ReadAllText(path);
         Assert.StartsWith("# Project\r\n\r\nBuild with make.\r\n\r\n## Architecture map\r\n", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\n", text.Replace("\r\n", "", StringComparison.Ordinal), StringComparison.Ordinal);
 
         // A file that already sends agents to the guide is left alone.
-        Assert.False(AgentNote.AddTo(temp.Path, "vibecheck.json"));
+        Assert.False(AgentNote.AddTo(temp.Path, "CLAUDE.md", "vibecheck.json"));
         Assert.Equal(text, File.ReadAllText(path));
+    }
+
+    [Theory]
+    [InlineData("@AGENTS.md\n", true, "AGENTS.md")]
+    [InlineData("# Claude\n\n  @./AGENTS.md  \n\nUse tabs.\n", true, "AGENTS.md")]
+    [InlineData("See @AGENTS.md for the rest.\n", true, "CLAUDE.md")]
+    [InlineData("# Claude\n", true, "CLAUDE.md")]
+    [InlineData(null, true, "AGENTS.md")]
+    [InlineData(null, false, "CLAUDE.md")]
+    public void TheNoteGoesWhereTheRepositorysInstructionsLive(string? claude, bool agents, string expected)
+    {
+        using var temp = new TempDirectory();
+        if (claude is not null) File.WriteAllText(Path.Combine(temp.Path, "CLAUDE.md"), claude);
+        if (agents) File.WriteAllText(Path.Combine(temp.Path, "AGENTS.md"), "# Agents\n");
+        Assert.Equal(expected, AgentNote.Target(temp.Path));
+    }
+
+    [Fact]
+    public void TheNoteInEitherFileCountsAsPresent()
+    {
+        using var temp = new TempDirectory();
+        File.WriteAllText(Path.Combine(temp.Path, "CLAUDE.md"), "# Claude\n");
+        File.WriteAllText(Path.Combine(temp.Path, "AGENTS.md"), "Run `vibecheck guide` first.\n");
+        Assert.True(AgentNote.IsPresent(temp.Path));
+        Assert.False(AgentNote.AddTo(temp.Path, "CLAUDE.md", "vibecheck.json"));
+        Assert.Equal("# Claude\n", File.ReadAllText(Path.Combine(temp.Path, "CLAUDE.md")));
     }
 }

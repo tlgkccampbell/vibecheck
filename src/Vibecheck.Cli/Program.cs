@@ -166,7 +166,7 @@ public static class Program
         if (!mapInRoot.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(mapInRoot))
         {
             Console.WriteLine();
-            Console.WriteLine($"To have coding agents keep the map in sync, add this to the repository's {AgentNote.FileName} or AGENTS.md:");
+            Console.WriteLine($"To have coding agents keep the map in sync, add this to the repository's {AgentNote.Claude} or {AgentNote.Agents}:");
             Console.WriteLine();
             Console.Write(AgentNote.Text(mapInRoot.Replace(Path.DirectorySeparatorChar, '/')));
         }

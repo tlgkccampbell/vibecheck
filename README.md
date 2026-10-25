@@ -239,9 +239,12 @@ references, run `vibecheck guide` and follow it to keep the map in sync.
 ```
 
 `vibecheck init` prints this note, with the map's path, after writing a map inside the
-repository. In the viewer, **Save to repository** offers **Add a note to CLAUDE.md**
-when the `CLAUDE.md` at the repository's top does not already mention `vibecheck guide`.
-It appends the note, or creates the file, and changes nothing else; commit it with the map.
+repository. In the viewer, **Save to repository** offers to add the note when neither
+`CLAUDE.md` nor `AGENTS.md` at the repository's top mentions `vibecheck guide`. The note
+goes in `AGENTS.md` when `CLAUDE.md` imports it with an `@AGENTS.md` line or is missing
+while `AGENTS.md` exists, and in `CLAUDE.md` otherwise. The viewer shows the note and the
+file it goes in before writing anything. It appends the note, or creates the file, and
+changes nothing else; commit it with the map.
 
 ## Viewer
 
