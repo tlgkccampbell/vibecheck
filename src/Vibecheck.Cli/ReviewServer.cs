@@ -577,13 +577,34 @@ public sealed class ReviewServer : IAsyncDisposable
     {
         var result = review.Result;
         if (result is null || result.Info.MapKind != "generated") return Results.BadRequest(new { message = "Only a generated map can be saved." });
-        var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
-        var relative = result.Target.Root == "." ? MapLocator.FileName : result.Target.Root + "/" + MapLocator.FileName;
+        var (top, relative) = MapFile(result);
         var path = Path.Combine(top, relative);
         if (File.Exists(path)) return Results.Conflict(new { message = $"{relative} already exists. Delete it, or compare it with the generated map, before saving." });
         File.WriteAllText(path, Format.MapWriter.Write(result.Changeset.Map));
         options.Log?.Invoke($"  {review.Id} saved the generated map to {relative}");
-        return Results.Json(new { message = $"Saved {relative}. Commit it to make it the repository's map." }, FactsJson.Options);
+        var note = new { file = AgentNote.FileName, present = AgentNote.IsPresent(top) };
+        return Results.Json(new { message = $"Saved {relative}. Commit it to make it the repository's map.", note }, FactsJson.Options);
+    }
+
+    /// <summary>
+    /// Adds the note that names the saved map, and the guide for keeping it in sync, to the <c>CLAUDE.md</c> at the
+    /// repository's top, as <see cref="AgentNote"/> describes. The map must be saved first.
+    /// </summary>
+    private IResult AddNote(Review review)
+    {
+        if (review.Result is not { } result) return Results.NotFound();
+        var (top, relative) = MapFile(result);
+        if (!File.Exists(Path.Combine(top, relative))) return Results.BadRequest(new { message = $"Save {relative} before adding the note about it." });
+        if (!AgentNote.AddTo(top, relative)) return Results.Json(new { message = $"{AgentNote.FileName} already tells agents about the map." }, FactsJson.Options);
+        options.Log?.Invoke($"  {review.Id} added the map's note to {AgentNote.FileName}");
+        return Results.Json(new { message = $"Added the note to {AgentNote.FileName}. Commit it with the map." }, FactsJson.Options);
+    }
+
+    /// <summary>Returns the repository's top and the path, relative to it, at which a review's map is saved.</summary>
+    private (string Top, string Relative) MapFile(ReviewResult result)
+    {
+        var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
+        return (top, result.Target.Root == "." ? MapLocator.FileName : result.Target.Root + "/" + MapLocator.FileName);
     }
 
     /// <summary>
@@ -718,8 +739,10 @@ public sealed class ReviewServer : IAsyncDisposable
                     return Results.Accepted();
                 case "save":
                     return SaveMap(review);
+                case "note":
+                    return AddNote(review);
                 default:
-                    return Results.BadRequest(new { message = "the action must be switch or save" });
+                    return Results.BadRequest(new { message = "the action must be switch, save or note" });
             }
         });
 

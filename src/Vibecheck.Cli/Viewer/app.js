@@ -4047,9 +4047,18 @@
       show("busy", "switch", spinner(), el("span", {}, "Switching to the concept map…"));
       post("switch");
     }
+    // A saved map is offered a note in the repository's CLAUDE.md, which tells coding agents to keep it in sync.
     async function save() {
       const r = await post("save");
-      show(r.ok ? "info" : "error", "save", el("span", {}, r.body.message || "The map could not be saved."));
+      const offer = r.ok && r.body.note && !r.body.note.present;
+      show(r.ok ? "info" : "error", "save", el("span", {}, r.body.message || "The map could not be saved."),
+        ...(offer ? [el("button", { class: "btn", onclick: addNote,
+          title: `Adds a short section to ${r.body.note.file} that tells coding agents to run "vibecheck guide" and keep the map in sync with their changes.` },
+          `Add a note to ${r.body.note.file}`)] : []));
+    }
+    async function addNote() {
+      const r = await post("note");
+      show(r.ok ? "info" : "error", "note", el("span", {}, r.body.message || "The note could not be added."));
     }
     // Shows what the page has when no job has news: the generated map's version and the save action, or nothing.
     function settle() {

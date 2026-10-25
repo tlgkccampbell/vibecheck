@@ -526,10 +526,20 @@ public class ReviewServerTests
         Assert.Contains("\"mapVersion\":1", script, StringComparison.Ordinal);
         Assert.Equal("claude-opus-5-5", Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("map.schema.json")).Model);
 
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync(api + "/map", new { action = "note" })).StatusCode);
         var saved = await client.PostAsJsonAsync(api + "/map", new { action = "save" });
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
         Assert.Contains("\"shared\"", File.ReadAllText(Path.Combine(repo.Path, "app", "vibecheck.json")), StringComparison.Ordinal);
+        Assert.Contains("\"note\":{\"file\":\"CLAUDE.md\",\"present\":false}", await saved.Content.ReadAsStringAsync(), StringComparison.Ordinal);
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(api + "/map", new { action = "save" })).StatusCode);
+
+        // The note goes in the CLAUDE.md at the repository's top and names the map's path there, once.
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(api + "/map", new { action = "note" })).StatusCode);
+        var note = File.ReadAllText(Path.Combine(repo.Path, "CLAUDE.md"));
+        Assert.Contains("`app/vibecheck.json`", note, StringComparison.Ordinal);
+        var again = await client.PostAsJsonAsync(api + "/map", new { action = "note" });
+        Assert.Contains("already", await again.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Equal(note, File.ReadAllText(Path.Combine(repo.Path, "CLAUDE.md")));
     }
 
     [Fact]
