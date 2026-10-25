@@ -428,6 +428,40 @@
     return nameOf(loc.level);
   }
   function viewsAt(level) { return Object.keys(VIEWS).filter((v) => VIEWS[v].level === level); }
+  // Returns the view that says which group a block at a level belongs to, which is the first view of the level or of
+  // its nearest ancestor that has one, or null when no view covers the level.
+  function coveringView(level) {
+    for (let x = level; x; x = parentOf(x)) { const v = viewsAt(x)[0]; if (v) return v; }
+    return null;
+  }
+  // Returns the word for one group of a view, taken from a name such as "By concern", or "Group" for any other name.
+  function groupWord(view) {
+    const m = /^by\s+(.+)$/i.exec(VIEWS[view].name);
+    return m ? m[1][0].toUpperCase() + m[1].slice(1) : "Group";
+  }
+  // Returns what a block shows about the other grouping, or null for a block outside the map. The result holds a label
+  // and the names to list after it, or a whole line, and a longer explanation. In the tree, the names are the groups of
+  // the covering view that hold the block's leaves. In a view, they are the components that own the leaves, so that
+  // each mode shows where its blocks sit in the other.
+  function otherGroupingOf(loc, c) {
+    if (c.kind === "unsorted" || isOther(c.id)) return null;
+    const label = (word, names) => word + (names.length === 1 ? "" : "s");
+    if (loc.view) {
+      const level = VIEWS[loc.view].level;
+      if (loc.group) {
+        const path = ancestors(c.id).filter((a) => a !== c.id && !isUnder(level, a)).map(nameOf);
+        return path.length
+          ? { label: "Component", names: [path.join(" › ")], title: `This block's code lives in ${path.join(" › ")}. Switch to By component to see it there.` }
+          : { line: "Its own component", title: "This block is a component of its own. Switch to By component to see it there." };
+      }
+      const owners = childrenOf(level).filter((k) => c.leaves.some((l) => isUnder(l, k))).map(nameOf);
+      return owners.length ? { label: label("Component", owners), names: owners, title: `This group gathers blocks whose code lives in ${owners.join(", ")}.` } : null;
+    }
+    const v = coveringView(loc.level);
+    if (!v) return null;
+    const groups = Object.keys(VIEWS[v].groups).filter((g) => VIEWS[v].groups[g].leaves.some((l) => c.leaves.includes(l))).map((g) => VIEWS[v].groups[g].name);
+    return groups.length ? { label: label(groupWord(v), groups), names: groups, title: `In ${VIEWS[v].name}, this block's code is grouped under ${groups.join(", ")}.` } : null;
+  }
 
   // The children a location draws, each with the leaves it stands for. A view's groups partition the map's leaves, so
   // a view of the top level also draws the blocks that stand outside the map, unsorted and Other files, as the tree does.
@@ -903,6 +937,17 @@
   const fitText = (str, width, advance) => truncate(str, Math.max(1, Math.floor(width / advance)));
 
   const truncate = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+  // Returns a labeled list of names that fits a width, such as "Components: Emit, Editor features". The names that do
+  // not fit are counted, as in "Components: Emit + 2 more". When even the first name does not fit whole, the line
+  // counts them all, as in "3 components", and a single name too long for the width is truncated.
+  function fitList(label, names, width, advance) {
+    const n = Math.max(1, Math.floor(width / advance));
+    for (let k = names.length; k >= 1; k--) {
+      const s = `${label}: ${names.slice(0, k).join(", ")}${k < names.length ? ` + ${names.length - k} more` : ""}`;
+      if (s.length <= n) return s;
+    }
+    return names.length > 1 ? truncate(`${names.length} ${label.toLowerCase()}`, n) : truncate(`${label}: ${names[0]}`, n);
+  }
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const fmtDelta = (b, h) => h === b ? "" : (h > b ? "+" : "−") + Math.abs(h - b);
   const statusClass = (st) => st === "unchanged" ? "" : " st-" + st;
@@ -964,7 +1009,10 @@
   }
 
   // Returns the area inside a block that holds its preview.
-  const previewBox = (box) => ({ x: box.x + 10, y: box.y + 54, w: box.w - 20, h: box.h - 62 });
+  // A map with views gives every block a second line of text, which names its place in the other grouping, so the
+  // preview starts lower.
+  const PREVIEW_TOP = Object.keys(VIEWS).length ? 66 : 54;
+  const previewBox = (box) => ({ x: box.x + 10, y: box.y + PREVIEW_TOP, w: box.w - 20, h: box.h - PREVIEW_TOP - 8 });
 
   // Returns the cached layout of the level a child opens, or null for a leaf or a level not yet laid out.
   function subLayoutOf(child) {
@@ -1145,6 +1193,13 @@
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
       g.append(text(r.x + 10, r.y + 43, fitText(meta, r.w - 20, MONO.meta), { class: "meta" }));
+      const other = otherGroupingOf(level.loc, c);
+      if (other) {
+        const line = other.line ? fitText(other.line, r.w - 20, MONO.meta) : fitList(other.label, other.names, r.w - 20, MONO.meta);
+        const t = text(r.x + 10, r.y + 57, line, { class: "meta grouping" });
+        t.append(svg("title", {}, other.title));
+        g.append(t);
+      }
       g.append(svg("circle", { cx: r.x + r.w - 26, cy: r.y + 14, r: 3, class: "cycle-mark" }));
       const glyph = text(r.x + r.w - 9, r.y + 19, leaf ? "≡" : "⤵", { class: "enter-glyph", "text-anchor": "end",
         onclick: (ev) => { ev.stopPropagation(); enter(c); } });
@@ -1997,12 +2052,14 @@
     const seg = $("#viewseg");
     const l = loc();
     const views = l.leaf ? [] : viewsAt(l.level);
-    seg.hidden = views.length === 0;
+    const sw = $("#viewswitch");
+    sw.hidden = views.length === 0;
+    if (!sw.querySelector(".help")) sw.append(help(HELP.groupings));
     seg.replaceChildren();
     if (views.length) {
       // The views come first, since the page opens on the first of them, and the map's own hierarchy follows.
-      for (const v of views) seg.append(el("button", { class: l.view === v ? "on" : "", onclick: () => switchView(v), title: VIEWS[v].purpose || VIEWS[v].name }, VIEWS[v].name));
-      seg.append(el("button", { class: !l.view ? "on" : "", onclick: () => switchView(null), title: "The map's own hierarchy: each component and the parts it owns." }, "By component"));
+      for (const v of views) seg.append(el("button", { class: l.view === v ? "on" : "", onclick: () => switchView(v), title: VIEWS[v].purpose || GROUPING.view }, VIEWS[v].name));
+      seg.append(el("button", { class: !l.view ? "on" : "", onclick: () => switchView(null), title: GROUPING.tree }, "By component"));
     }
   }
 
@@ -2545,6 +2602,18 @@
     threads: "These review threads on files in this block are not resolved yet. Click one to go to its lines.",
     problems: "The pull request's checks reported these problems on lines in this block's files. Click one to go to its line.",
     checks: "These are the pull request's checks on its latest commit. A failing check lists the problems it found and can show its log.",
+    groupings: "Both modes draw the same code and the same references, arranged two ways. By component shows where each piece of code lives, " +
+      "in a hierarchy that follows the code's dependencies, so a cycle between components usually means a type sits on the wrong side of a boundary. " +
+      "By concern regroups the same blocks by what they are for, so one group can gather blocks from several components. " +
+      "Its groups are not drawn along dependencies, so references and cycles between them are common. The second line of each block names its place in the other mode.",
+  };
+  // The explanations of the two kinds of grouping, which the mode switch shows on hover and the details panel shows
+  // under the level's title.
+  const GROUPING = {
+    tree: "By component shows where each piece of code lives: the components and the parts each one owns. " +
+      "It follows the code's dependencies, so a cycle here usually means a type sits on the wrong side of a boundary.",
+    view: "By concern regroups the same blocks by what they are for, so a group can gather blocks from several components. " +
+      "Groups are not drawn along dependencies, so references and cycles between them are common and do not by themselves mean a type is misplaced.",
   };
   // Returns a question mark that shows an explanation of a section of the page on hover or focus, in the tooltip that
   // installHelpTips draws.
@@ -2671,6 +2740,7 @@
     if (!sel) {
       const id = l.group ? `g:${l.view}/${l.group}` : l.level;
       box.append(el("h2", {}, locName(l)), el("p", { class: "ident" }, locKey(l)), el("p", { class: "purpose" }, l.view && !l.group ? VIEWS[l.view].purpose || "" : purposeOf(id)));
+      if (l.view || viewsAt(l.level).length) box.append(el("p", { class: "hint" }, l.view ? GROUPING.view : GROUPING.tree));
       if (!l.view && id !== ROOT && contentOf(id).status !== "unchanged") box.append(narrativeBlock(NARR.items.get("node:" + id), "node:" + id) || "");
       if (id !== ROOT) box.append(glossarySection(id) || "");
       const bar = reviewedBar(id);
