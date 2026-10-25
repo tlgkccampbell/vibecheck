@@ -166,12 +166,12 @@
   // The patterns the change touches, by identifier: each pattern found at base with the instances the change added or
   // changed, and every other instance at head. See docs/patterns.md.
   const PATTERNS = new Map((CS.patterns || []).map((p) => [p.id, p]));
-  // The patterns that report each added or changed instance, by the instance's type name.
+  // The patterns that report each added or changed instance, with the instance, by the instance's type name.
   const PATTERNS_OF = new Map();
   for (const p of PATTERNS.values()) {
     for (const i of p.instances) {
       if (!PATTERNS_OF.has(i.type)) PATTERNS_OF.set(i.type, []);
-      PATTERNS_OF.get(i.type).push(p);
+      PATTERNS_OF.get(i.type).push({ pattern: p, instance: i });
     }
   }
 
@@ -1644,22 +1644,65 @@
       if (i) line.append(" · ");
       line.append(el("code", { title: t.name }, shortName(t.name)));
       if (t.status !== "unchanged") line.append(" ", el("span", { class: "chip chip-" + t.status, title: t.status === "moved" ? `from ${t.leafBase} to ${t.leafHead}` : "" }, t.status));
-      for (const p of PATTERNS_OF.get(t.name) || []) line.append(" ", patternChip(p, t.name));
+      for (const x of PATTERNS_OF.get(t.name) || []) line.append(" ", patternChip(x.pattern, x.instance));
     });
     return line;
   }
 
-  // Returns the chip that marks a type as an instance of a pattern, which shows the pattern in the details panel.
-  function patternChip(p, type) {
-    const on = !!state.pattern && state.pattern.id === p.id && state.pattern.type === type;
-    return el("button", { class: "chip chip-pattern" + (on ? " on" : ""), onclick: () => showPattern(on ? null : { id: p.id, type }),
-      title: `An instance of the pattern ${p.name}, which ${plural(p.count, "type", "types")} played before this change. Click to show the pattern.` }, p.name);
+  // Returns the chip that marks a type as an instance of a pattern, with the number of the pattern's norms the change
+  // makes it depart from, which shows the pattern in the details panel.
+  function patternChip(p, instance) {
+    const on = !!state.pattern && state.pattern.id === p.id && state.pattern.type === instance.type;
+    const n = instance.departures.length;
+    return el("button", { class: "chip chip-pattern" + (n ? " departs" : "") + (on ? " on" : ""), onclick: () => showPattern(on ? null : { id: p.id, type: instance.type }),
+      title: `An instance of the pattern ${p.name}, which ${plural(p.count, "type", "types")} played before this change` +
+        (n ? `. It departs from ${plural(n, "norm", "norms")}: ${departureText(p, instance)}.` : ".") + " Click to show the pattern." },
+      p.name + (n ? ` · ${plural(n, "departure", "departures")}` : ""));
   }
+
+  // Returns the words for an instance's departures from its pattern's norms, such as "no IUnitOfWork, no test".
+  const departureText = (p, instance) => instance.departures.map((f) => (p.norms.find((n) => n.feature === f) || { absence: f }).absence).join(", ");
 
   // Shows a pattern in the details panel, given as its identifier and the type it is opened from, or closes it for null.
   function showPattern(selection) {
     state.pattern = selection;
     redraw();
+  }
+
+  // Returns the norms of a pattern as a table, each with its share and a check or a cross for an instance, the
+  // departures first, then the norms the instance lacked before the change, then those it has. A companion norm names
+  // the instance's companion when it has one. The instance's unusual traits follow in a line of their own.
+  function normsBlock(p, instance) {
+    const box = el("div", { class: "pattern-norms" });
+    if (!p.norms.length) {
+      box.append(el("p", { class: "hint" }, p.count < 5 ? `No norms: a pattern needs five instances before what they share counts as usual.`
+        : "No norms: no feature is shared by four in five instances."));
+    } else {
+      const rank = (n) => instance.departures.includes(n.feature) ? 0 : instance.lacks.includes(n.feature) ? 1 : 2;
+      const table = el("table", { class: "norms" });
+      for (const n of p.norms.slice().sort((a, b) => rank(a) - rank(b))) {
+        const r = rank(n);
+        const companion = n.feature.startsWith("companion:") ? instance.companions[n.feature.slice("companion:".length)] : null;
+        table.append(el("tr", { class: ["departure", "lacked", "kept"][r], title: ["The change makes this instance depart from the norm.",
+          "This instance lacked the norm before the change, so it is not a departure.", "This instance has the norm."][r] },
+          el("td", { class: "mark" }, r === 2 ? "✓" : "✗"),
+          el("td", {}, n.text, companion ? el("span", { class: "row-meta" }, " · " + shortName(companion)) : ""),
+          el("td", { class: "share" }, `${n.share} of ${p.count}`)));
+      }
+      box.append(el("h3", {}, instance.departures.length ? `Norms: ${plural(instance.departures.length, "departure", "departures")}` : "Norms"), table);
+    }
+    if (instance.unusual.length) {
+      box.append(el("p", { class: "unusual" }, el("span", { class: "k" }, "Only this instance "),
+        ...instance.unusual.flatMap((k, i) => [i ? ", " : "", el("code", { title: k }, traitName(k))])));
+    }
+    return box;
+  }
+
+  // Returns the short name of a trait given as a key: the type's last segment, and an attribute in brackets without its
+  // Attribute suffix, as [Obsolete].
+  function traitName(key) {
+    const name = key.slice(key.indexOf(":") + 1).split(".").pop();
+    return key.startsWith("attribute:") ? `[${name.replace(/(.)Attribute$/, "$1")}]` : name;
   }
 
   // Opens the leaf view that holds a type, at its first changed file when it has one.
@@ -1670,14 +1713,17 @@
     return changed ? openFile(changed) : openLeaf(t.leafHead || t.leafBase);
   }
 
-  // Returns the details panel's section for the selected pattern: its name, purpose and keys, its added and changed
-  // instances, and every other instance grouped by the block that holds it, each block collapsed to a count until opened.
+  // Returns the details panel's section for the selected pattern: its name, purpose and keys, its norms with a check or a
+  // cross for the instance it was opened from, that instance's unusual traits, its added and changed instances, and
+  // every other instance grouped by the block that holds it, each block collapsed to a count until opened.
   function patternPanel(p, type) {
     const box = el("section", { class: "decision-panel pattern-panel" });
     box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Pattern", help(HELP.pattern)), el("button", { class: "link", onclick: () => showPattern(null) }, "Close")));
     box.append(el("p", { class: "pattern-name" }, p.name), el("p", { class: "purpose" }, p.purpose || (p.by === "key" ? "Named from its first key." : "")));
     box.append(kv(p.keys.length === 1 ? "Key" : "Keys", el("span", {}, ...p.keys.flatMap((k, i) => [i ? ", " : "", el("code", {}, k)]))));
     box.append(kv("Before", plural(p.count, "instance", "instances")));
+    const instance = p.instances.find((i) => i.type === type);
+    if (instance) box.append(normsBlock(p, instance));
     const row = (name, status) => {
       const t = CS.types.find((x) => x.name === name);
       return el("li", {}, el("button", { class: "row" + (name === type ? " current" : ""), onclick: () => openType(name), title: name },
@@ -1903,6 +1949,11 @@
     state.step = s.id;
     if (state.tab !== "map") showTab("map");
     if (s.kind === "node") return showInContext(s.target);
+    if (s.kind === "pattern") {
+      // A pattern step opens its instance's file with the pattern in the details panel.
+      state.pattern = { id: s.pattern, type: s.target };
+      return openType(s.target);
+    }
     if (s.kind === "decision") {
       const d = DECISIONS.get(s.target);
       return d ? openDecision(d) : undefined;
@@ -2288,7 +2339,8 @@
     map: "This list shows the blocks and views that were added, removed or changed in the map, and the types that moved to a different block.",
     decision: "This section shows the selected decision's declarations and the hunks that follow from it, grouped by block. Click a hunk to open it.",
     pattern: "A pattern is a role that several types play, found from what they declare about themselves: a base class, an interface or an attribute they share. " +
-      "The patterns come from the code before this change, and a type joins one when it carries every key. Click an instance to open its type.",
+      "The patterns come from the code before this change, and a type joins one when it carries every key. A norm is what four in five of five or more instances share. " +
+      "A departure is a norm that a new instance lacks, or that a changed instance had and no longer has. A departure is a difference to read, not a fault. Click an instance to open its type.",
     narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
     terms: "These are the names this block introduces. The Glossary lists the names from the whole change.",
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +

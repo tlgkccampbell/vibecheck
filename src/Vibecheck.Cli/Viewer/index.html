@@ -441,6 +441,16 @@
   .file-types code { color: var(--fg); }
   .chip.chip-pattern { font-family: var(--mono); text-transform: none; letter-spacing: 0; background: var(--surface); color: var(--accent); border-color: var(--accent); cursor: pointer; }
   .chip.chip-pattern.on { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+  .chip.chip-pattern.departs { color: var(--warn); border-color: var(--warn); }
+  table.norms { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 6px; }
+  table.norms td { padding: 3px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  table.norms td.mark { width: 14px; text-align: center; }
+  table.norms td.share { text-align: right; white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+  table.norms tr.departure td.mark, table.norms tr.departure td:nth-child(2) { color: var(--warn); }
+  table.norms tr.lacked { color: var(--muted); }
+  table.norms tr.kept td.mark { color: var(--added); }
+  .unusual { font-size: 12px; margin: 4px 0 8px; }
+  .unusual .k { color: var(--muted); }
   .file-path { overflow-wrap: anywhere; }
   .file-head input { margin: 0; flex: none; cursor: pointer; }
   .file-note { white-space: nowrap; }

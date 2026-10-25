@@ -69,7 +69,17 @@ public sealed record TypeFact(string Name, string Assembly, string Leaf, string 
 /// <param name="By">What named the pattern: <see cref="PatternDiscovery.ByMap"/> or <see cref="PatternDiscovery.ByKey"/>.</param>
 /// <param name="Keys">The keys every instance carries, ordered by kind as <see cref="PatternKeys.Kinds"/> lists them and then by value.</param>
 /// <param name="Instances">The names of the types that carry every key, ordered by name.</param>
-public sealed record PatternFact(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, IReadOnlyList<string> Instances);
+public sealed record PatternFact(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, IReadOnlyList<string> Instances)
+{
+    /// <summary>Gets the pattern's norms, most shared first, as <see cref="PatternFeatures.Norms"/> finds them.</summary>
+    public List<NormFact> Norms { get; init; } = [];
+
+    /// <summary>Gets the mean number of norms the pattern's own instances lack, which says whether the norm thresholds suit it.</summary>
+    public double MeanDepartures { get; init; }
+}
+
+/// <summary>A norm of a pattern: a feature, as <see cref="PatternFeatures"/> names features, and how many of the pattern's instances have it.</summary>
+public sealed record NormFact(string Feature, int Share);
 
 /// <summary>
 /// A source document, its content hash, and the leaves its types bind to. A generated document names its generator. A

@@ -8,7 +8,8 @@ reviewer can compare it with them. It builds on the map and facts of
 [attention.md](attention.md), and the test subjects of [tests.md](tests.md), and it
 lists, in section 11, the changes it makes to those documents.
 
-Phase 1 of section 13, traits and discovery, is built. The other phases are not.
+Phases 1 and 2 of section 13, traits and discovery, and norms and departures, are
+built. The other phases are not.
 
 The design rests on one principle. A pattern is evidence about the code, not part of
 the architecture. Controllers sit in every feature, and a pattern cuts across the
@@ -219,9 +220,8 @@ could match nothing that discovery found.
 
 `vibecheck check` reports the patterns it found, each with its instance count, its
 number of norms, and the mean number of norms its own instances depart from, as
-"consumer: 14 instances, 4 norms, 0.3 departures each". Phase 1 reports the name, the
-instances and the keys, as "pattern implements IConsumer<>: 14 instances
-(implements:MassTransit.IConsumer<>)". The last figure is the measure
+"pattern consumer: 14 instances, 4 norms, 0.3 departures each
+(implements:MassTransit.IConsumer<>)". The departures figure is the measure
 of section 12: a pattern whose existing instances depart from more than about one
 norm each would fill the path with departures, and says that the thresholds of
 section 5.2 are too low for it. The check also warns for an entry whose keys no type carries.
@@ -248,7 +248,9 @@ A **feature** of an instance is one of:
 
 - A trait other than the pattern's own keys: another interface, base or attribute.
 - An injected type, in open form.
-- A use, in open form.
+- A use, in open form, unless the instance already carries or injects the type, so
+  that one fact is not counted twice. A use of a type of the solution is named as the
+  facts name the type, without its type parameters.
 - **Tested**: the instance is the subject of a test type, by tests.md section 4.
 - **Documented**: the type has a documentation summary.
 - **Companion**: the instance has a companion in another pattern, by section 5.4.
@@ -292,7 +294,9 @@ of 31 handlers have a validator; `CreateOrderHandler` does not". The companion
 pattern is named by its own name, so the wording follows the names of section 8.
 
 Type arguments of the core library, such as `string` or `Guid`, never link instances,
-since they would link every handler that returns an identifier.
+since they would link every handler that returns an identifier. Only a type argument
+that is a type of the system links instances, which keeps out the core library and
+every other referenced assembly with it.
 
 ### 5.5 Unusual traits
 
@@ -352,9 +356,12 @@ instance:
 `others` lists every instance at head that the pattern does not report as added or
 changed, with its leaf, so that the details panel and the map can show them. A changed
 instance that a more specific pattern reports is among the others of the broader one.
-An instance is changed when one of its files changed or it binds to another leaf. Phase
-1 carries the identifier, name, purpose, `by`, keys, count, the instances with their
-status, and the others. `sources` holds the text of each
+An instance is changed when one of its files changed or it binds to another leaf. Each
+norm carries the words that say an instance has it and lacks it, and each instance
+carries `lacks`, every norm it lacks at head, so that the details panel can mark a norm
+an instance lacked before the change apart from a departure, and `companions`, its
+companion in each other pattern that has one. Phases 1 and 2 carry everything above
+except `memberNorms`, `memberDepartures`, `examples` and `sources`. `sources` holds the text of each
 example at head, as section 7.3 needs it.
 
 The changeset also gains `NewPatterns`, the patterns of section 4.5, each with its
@@ -480,7 +487,7 @@ states each share, says what such a sentence would.
 
 The facts gain `traits` on each type and aggregate `externalRefs` by referenced type,
 as section 3.3 describes, and list the patterns found among their types as
-`patterns`, so that the check and the changeset read them from one place, and their declarations gain `attributes`, as section 3.4
+`patterns`, each with its norms and the mean number of norms its own instances lack, so that the check and the changeset read them from one place, and their declarations gain `attributes`, as section 3.4
 does. The map schema gains `patterns`. The changeset gains `Patterns` and
 `NewPatterns`, the path gains pattern steps, and a changeset published as an artifact
 carries all of it, since none of it needs the server.
@@ -531,8 +538,9 @@ suite references no framework it does not already use. The tests state:
 
 The `Sample` suite checks traits and discovery on the sample solution once per run,
 where the compilation is already paid for. The sample has five consumers of payment
-events, four of which take the outbox, so that it has a pattern with norms. Phase 2
-adds three handlers with validators for their commands, so that it has companions.
+events, four of which take the outbox, so that it has a pattern with norms.
+Companions are tested on snippets, since a companion norm needs five handlers and the
+sample gains nothing from them that the snippets do not show.
 
 ## 11. Changes to other documents
 

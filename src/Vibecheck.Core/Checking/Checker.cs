@@ -81,7 +81,7 @@ public static class Checker
         var types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, leafOf[t.Name], boundBy[t.Name], t.Files, t.Generator, t.Traits)).ToList();
         var generated = analysis.Files.Where(f => f.Generator is not null).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
         var patterns = PatternDiscovery.Discover(map, types, generated, warnings);
-        return new Facts
+        var facts = new Facts
         {
             Commit = options.Commit,
             Map = map,
@@ -103,6 +103,7 @@ public static class Checker
             Tests = tests,
             Patterns = patterns,
         };
+        return facts with { Patterns = PatternFeatures.WithNorms(facts) };
     }
 
     /// <summary>

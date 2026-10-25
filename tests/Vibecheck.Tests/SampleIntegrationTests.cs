@@ -138,6 +138,10 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Equal(("implements:Orchard.Shared.Messaging.IConsumer<>", "implements IConsumer<>"), (pattern.Id, pattern.Name));
         Assert.Equal(5, pattern.Instances.Count);
         Assert.All(pattern.Instances, i => Assert.StartsWith("Orchard.Notifications.Consumers.", i));
+        // Every consumer is documented and handles payment events by kind, and four of five take the outbox.
+        Assert.Equal(["documented:5", "uses:Orchard.Notifications.Dispatch.PaymentEvent:5", "uses:Orchard.Notifications.Dispatch.PaymentEventKind:5",
+            "injects:Orchard.Notifications.Dispatch.Outbox:4"], pattern.Norms.Select(n => $"{n.Feature}:{n.Share}"));
+        Assert.Equal(0.2, pattern.MeanDepartures);
     }
 
     [Fact]

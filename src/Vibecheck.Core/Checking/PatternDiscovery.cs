@@ -104,9 +104,13 @@ public static class PatternDiscovery
         return patterns.Where((_, i) => !sets.Where((_, j) => j != i).Any(s => s.IsProperSubsetOf(sets[i]))).ToList();
     }
 
-    /// <summary>Returns a line for each pattern that names it, its keys and its number of instances, as <c>vibecheck check</c> reports them.</summary>
+    /// <summary>
+    /// Returns a line for each pattern, as <c>vibecheck check</c> reports them, that names it and gives its number of
+    /// instances, its number of norms, the mean number of norms its own instances lack, and its keys.
+    /// </summary>
     public static IEnumerable<string> Report(IEnumerable<PatternFact> patterns) =>
-        patterns.Select(p => $"pattern {p.Name}: {p.Instances.Count} instance{(p.Instances.Count == 1 ? "" : "s")} ({string.Join(", ", p.Keys)})");
+        patterns.Select(p => $"pattern {p.Name}: {p.Instances.Count} instance{(p.Instances.Count == 1 ? "" : "s")}, {p.Norms.Count} norm{(p.Norms.Count == 1 ? "" : "s")}, "
+            + $"{p.MeanDepartures.ToString("0.0#", System.Globalization.CultureInfo.InvariantCulture)} departures each ({string.Join(", ", p.Keys)})");
 
     private static List<string> Ordered(IEnumerable<string> keys) =>
         keys.Distinct(StringComparer.Ordinal).OrderBy(PatternKeys.Rank).ThenBy(k => k, StringComparer.Ordinal).ToList();

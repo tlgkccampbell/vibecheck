@@ -278,6 +278,11 @@ The same changeset always gives the same path.
   widest reach first, and last one step that gathers every other test signal, as
   [tests.md](tests.md) section 7.2 describes. A leaf's step in the next tier counts
   the signals of its test files.
+- After the test steps, a step for each new or changed instance of a pattern that
+  departs from the pattern's norms, most departures first, as
+  [patterns.md](patterns.md) section 7.4 describes. A leaf's step in the next tier
+  counts the new and changed instances it holds, and pattern steps are dropped after
+  test steps and before decision steps when the path is full.
 
 **Then** holds every other changed leaf, largest change first within each level, and
 under each the decisions and the files with edits of their own that the first tier

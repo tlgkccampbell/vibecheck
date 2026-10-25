@@ -188,7 +188,7 @@ public class PatternTests
         var facts = Snippets.Facts(Consumers(4));
         var p = Assert.Single(facts.Patterns);
         Assert.Equal(["A.C1", "A.C2", "A.C3", "A.C4"], p.Instances);
-        Assert.Equal(["pattern implements IConsumer<>: 4 instances (implements:A.IConsumer<>)"], PatternDiscovery.Report(facts.Patterns));
+        Assert.Equal(["pattern implements IConsumer<>: 4 instances, 0 norms, 0.0 departures each (implements:A.IConsumer<>)"], PatternDiscovery.Report(facts.Patterns));
     }
 
     [Fact]
@@ -207,8 +207,8 @@ public class PatternTests
         var retrying = cs.Patterns.Single(p => p.Id == Retry);
         Assert.Equal((4, 3), (consumer.Count, retrying.Count));
         // The added consumer retries, so it is reported under the types that retry, and the consumers list it among the others.
-        Assert.Equal([new PatternInstance("A.C5", "added")], retrying.Instances);
-        Assert.Equal([new PatternInstance("A.C4", "changed")], consumer.Instances);
+        Assert.Equal([("A.C5", "added")], retrying.Instances.Select(i => (i.Type, i.Status)));
+        Assert.Equal([("A.C4", "changed")], consumer.Instances.Select(i => (i.Type, i.Status)));
         Assert.Equal(["A.C1", "A.C2", "A.C3", "A.C5"], consumer.Others.Select(o => o.Type));
         Assert.Equal(["A.C1", "A.C2", "A.C3"], retrying.Others.Select(o => o.Type));
         Assert.All(consumer.Others, o => Assert.Equal("a", o.Leaf));

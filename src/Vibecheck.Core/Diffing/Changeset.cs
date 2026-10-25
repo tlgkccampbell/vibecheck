@@ -68,10 +68,40 @@ public sealed record Changeset
 /// <param name="Count">The number of instances at base.</param>
 /// <param name="Instances">The added and changed instances at head that the pattern reports, ordered by name.</param>
 /// <param name="Others">Every other instance at head, ordered by name.</param>
-public sealed record PatternChange(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, int Count, List<PatternInstance> Instances, List<PatternOther> Others);
+public sealed record PatternChange(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, int Count, List<PatternInstance> Instances, List<PatternOther> Others)
+{
+    /// <summary>Gets the pattern's norms at base, most shared first.</summary>
+    public List<NormChange> Norms { get; init; } = [];
+}
 
-/// <summary>An instance of a pattern at head that the change added or changed. The status is <c>added</c> or <c>changed</c>.</summary>
-public sealed record PatternInstance(string Type, string Status);
+/// <summary>
+/// A norm of a pattern, as <see cref="NormFact"/> describes it, with the words that say an instance has it and the
+/// words that say an instance lacks it, as <see cref="PatternFeatures.Text"/> and <see cref="PatternFeatures.Absence"/>
+/// give them.
+/// </summary>
+public sealed record NormChange(string Feature, int Share, string Text, string Absence);
+
+/// <summary>
+/// An instance of a pattern at head that the change added or changed. The status is <c>added</c> or <c>changed</c>.
+/// See <c>docs/patterns.md</c> sections 5.3 to 5.5.
+/// </summary>
+public sealed record PatternInstance(string Type, string Status)
+{
+    /// <summary>
+    /// Gets the norms the change is responsible for the instance lacking: every norm an added instance lacks, and every
+    /// norm a changed instance had at base and lacks at head, in the order of the pattern's norms.
+    /// </summary>
+    public List<string> Departures { get; init; } = [];
+
+    /// <summary>Gets every norm the instance lacks at head, including those it lacked before the change, in the order of the pattern's norms.</summary>
+    public List<string> Lacks { get; init; } = [];
+
+    /// <summary>Gets the traits of the instance, as keys, that no other instance of the pattern has.</summary>
+    public List<string> Unusual { get; init; } = [];
+
+    /// <summary>Gets the instance's companion in each other pattern that has one, by that pattern's identifier.</summary>
+    public SortedDictionary<string, string> Companions { get; init; } = new(StringComparer.Ordinal);
+}
 
 /// <summary>An instance of a pattern at head that the pattern does not report as added or changed, with the leaf it binds to at head.</summary>
 public sealed record PatternOther(string Type, string Leaf);

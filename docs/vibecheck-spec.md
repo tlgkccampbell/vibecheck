@@ -423,9 +423,11 @@ complete before a change merges.
 `check` also reports how the test types were placed, as "55 test types: 40 by name,
 12 by references, 3 infrastructure", so that the rules of [tests.md](tests.md)
 section 4 can be judged against real repositories. It reports each pattern it found
-with its keys and its number of instances, as "pattern implements IConsumer<>: 14
-instances (implements:MassTransit.IConsumer<>)", so that the sizes of patterns are
-known from the first check.
+with its number of instances, its number of norms, the mean number of norms its own
+instances lack, and its keys, as "pattern implements IConsumer<>: 14 instances, 4
+norms, 0.3 departures each (implements:MassTransit.IConsumer<>)", so that the
+thresholds of [patterns.md](patterns.md) section 5.2 can be judged against real
+repositories.
 
 ### 4.1 Metrics
 
@@ -603,7 +605,8 @@ viewer consumes two of these and never reads the code or the map directly.
   "levels": { "root": { "edges": [ { "from": "billing", "to": "auth", "count": 17 } ], "cycles": [] } },
   "views": { "by-concern": { "groups": { "payments": { "types": 31, "internal": 180, "crossing": 20, "attributed": 0 } }, "edges": [ { "from": "edges", "to": "payments", "count": 12 } ], "cycles": [] } },
   "patterns": [ { "id": "consumer", "name": "Consumer", "purpose": "Handles one message from the bus.", "by": "map",
-    "keys": ["implements:MassTransit.IConsumer<>"], "instances": ["Example.Billing.Consumers.OrderPlacedConsumer", "…"] } ],
+    "keys": ["implements:MassTransit.IConsumer<>"], "instances": ["Example.Billing.Consumers.OrderPlacedConsumer", "…"],
+    "norms": [ { "feature": "injects:Example.Billing.IUnitOfWork", "share": 13 } ], "meanDepartures": 0.3 } ],
   "violations": [ { "rule": "well-formedness", "message": "…" } ],
   "warnings": [ "3 types are unsorted" ]
 }
@@ -627,8 +630,8 @@ leaves, since that is what every drawing starts from. External references are
 aggregated per type and referenced type, with the first kind, symbol, file and line
 and a count, and a reader that counts references per assembly sums them. Each type
 carries its traits, when it has any, and `patterns` lists the patterns among the types,
-with the keys and the instances of each, as [patterns.md](patterns.md) section 4
-finds them.
+with the keys, the instances and the norms of each, as [patterns.md](patterns.md)
+sections 4 and 5 find them.
 The facts also carry the declarations and sites of section 3.1 for the types the map
 holds. The document is written without indentation. On a solution of a thousand
 types with seventy thousand dependencies it is roughly twenty megabytes, before the
@@ -723,11 +726,13 @@ as the differences:
   section 6 plans it: the surprises first, each with the signal that put it there,
   then the other changed leaves with the decisions, files and test files under them,
   and last what is set aside. The first tier ends with a step for each test type whose
-  signals touch changed code and one step for every other test signal. Each step names what it opens and the changed files it covers.
+  signals touch changed code and one step for every other test signal, and then a
+  step for each new or changed instance of a pattern that departs from its norms. Each step names what it opens and the changed files it covers.
 - **Patterns**: each pattern found at base that has an instance at head that the
-  change added or changed, with its keys, its number of instances at base, those
-  instances with their status, and every other instance at head with its leaf, as
-  [patterns.md](patterns.md) section 5.7 describes. A type is an instance at head when
+  change added or changed, with its keys, its number of instances at base, its
+  norms, those instances with their status, their departures from the norms, the
+  norms they lack, their unusual traits and their companions, and every other
+  instance at head with its leaf, as [patterns.md](patterns.md) section 5.7 describes. A type is an instance at head when
   it carries every key of the pattern, and it is reported under the most specific of
   the patterns it is an instance of.
 - **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
