@@ -17,6 +17,8 @@ Directing the reviewer's attention, with decisions and their consequences, seman
 triviality, a reading path, new concepts and a glossary, is designed in
 [docs/attention.md](docs/attention.md); its first four phases, decisions and their
 consequences, semantic triviality, the reading path and the glossary, are built.
+Tests in a review are designed in [docs/tests.md](docs/tests.md); all three of its
+phases, test types, tests on decisions and test signals, are built.
 
 ## Layout
 
@@ -199,7 +201,7 @@ behind one edge.
 ## Bootstrapping a map
 
 1. `vibecheck init --solution <sln>` writes a skeleton map from namespaces, with
-   `System.**` and every test project excluded.
+   `System.**` excluded and every test project listed under `tests`.
 2. `vibecheck units --out units.txt` writes the listing a language model reads: every
    type folded into units with its documentation summary and heaviest references.
 3. The model writes the map: a tree of concepts with a purpose line each, leaves
@@ -282,6 +284,38 @@ in code a model wrote is worth a look; when Claude is available it writes a one-
 definition in its place, checked to cite the declaring file and marked as Claude's. A
 block's details panel lists its own terms. In every diff, an introduced name carries a
 dotted underline, hovering it shows its entry, and clicking it opens the Glossary.
+
+Tests are never drawn on the map. The map's `tests` list names the test types, which
+bind to no block and create no edges, and each is placed by its **subject**, the type
+it tests: by its name less a suffix such as `Tests`, or else by the type its references
+reach most. A test type with no test methods, or that neither rule places, is test
+infrastructure. A block's changed test files are listed in a collapsed **Tests** section
+of its leaf view, after its own files, and the bar counts them apart, as "24 of 30
+files reviewed · 3 of 9 test files". The **Tests** face of the Changes panel lists the
+changed test types by block, with the test methods each change added, removed or
+changed, and test infrastructure last; while it is open, each block carries a badge
+with the number of its changed test files. A change of tests alone opens there.
+`vibecheck check` reports how the test types were placed, and warns about an `exclude`
+pattern that names only test projects, which belongs in `tests`.
+
+A decision's header says which tests reference it, as "referenced by 6 tests directly
+and 31 through helpers: 1 added, 2 changed", and names the changed test methods, or
+says "no test references it" for a public decision that none does. A test reaches a
+declaration through a helper when a member of a test type that it calls, such as a
+builder, references it; calls are followed through test code and never into the
+system. Each count opens the list of the methods in the details panel, where hovering
+one names its helper. A hunk in a test file can follow from a decision, as an updated
+call site does, and the decision counts its consequences in tests apart. In the Tests
+face, each changed test method names the changed declarations it references, each
+opening its decision.
+
+A change to a test also gives **test signals**, stated as facts and never as a
+judgment of the test: a test method removed or skipped, an assertion removed, or an
+assertion changed, worded "expected value changed" when only its literals differ. A
+test file's header shows its signals as chips. A test type whose signals touch code
+the change also changed, such as an assertion removed from a test of a rewritten
+method, has a step of its own in the path's first tier after the decisions, and the
+other signals share one closing step.
 
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a

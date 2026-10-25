@@ -148,6 +148,9 @@ hunks of each changed file that no type binds. The viewer draws those files as a
 each top-level folder that holds such files, and one for files at the repository
 root, each opening in the leaf view like any leaf. When every such file is in one of
 those places, the block is that leaf itself. These blocks have no types and no edges.
+A test file is not one of these files: it is listed in the Tests section of the leaf
+its subject binds to, or under test infrastructure, as [tests.md](tests.md) section
+7.1 describes.
 This applies to every review, not only to pull requests, since a range has such files
 as well. The split is a first guess, to be revised as the tool is used on real
 reviews.
@@ -241,7 +244,9 @@ A reviewed file's edges keep their status. An edge is a dependency, read at the 
 of the map, and setting a file aside does not change what the code depends on.
 
 The bar shows the progress, such as "14 of 40 files reviewed", in every review, not
-only in a pull request. The toggle "Mute trivial edits" becomes "Mute reviewed
+only in a pull request. Test files count apart, as "14 of 40 files reviewed · 3 of 9
+test files", so that a change with a large volume of tests does not hide how much of
+the system's change is read. The toggle "Mute trivial edits" becomes "Mute reviewed
 files". Turned off, it draws every file as its real status but keeps the marks.
 
 ### 5.2 What a mark is attached to

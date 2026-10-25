@@ -161,7 +161,7 @@ public static class Program
         var (map, _, root, _) = LoadMap(options);
         var analysis = await AnalyzeAsync(root, map.Solution);
         var errors = new List<string>();
-        var (included, _) = Exclusion.Parse(map.Exclude, errors).Apply(analysis);
+        var (included, _) = Exclusion.Parse(map, errors).Apply(analysis);
         if (errors.Count > 0) throw new MapFormatException(errors);
         var listing = Units.Listing(Units.Build(included), included.Types.Count);
         if (options.TryGetValue("out", out var outPath)) { File.WriteAllText(outPath, listing); Console.Error.WriteLine($"wrote {outPath}"); }
@@ -178,7 +178,7 @@ public static class Program
         return Report(facts, options.ContainsKey("strict"));
     }
 
-    /// <summary>Prints the warnings, the cycles per level and view, and a summary line. Returns the exit code.</summary>
+    /// <summary>Prints the warnings, the cycles per level and view, a summary line, and how the test types were placed. Returns the exit code.</summary>
     private static int Report(Facts facts, bool strict)
     {
         foreach (var w in facts.Warnings) Console.Error.WriteLine("warning: " + w);
@@ -201,6 +201,7 @@ public static class Program
         var excluded = facts.Excluded.Types > 0 ? $", {facts.Excluded.Types} excluded" : "";
         var unsortedText = unsorted > 0 ? $", {unsorted} unsorted" : "";
         Console.WriteLine($"ok: {facts.Types.Count} types in {leaves} leaves{unsortedText}{excluded}; {facts.Dependencies.Count} dependencies, {facts.LeafEdges.Count} leaf edges, {facts.Warnings.Count} warning(s)");
+        if (facts.Tests.Types.Count > 0) Console.WriteLine("tests: " + TestTypes.Placement(facts.Tests));
         if (strict && facts.Warnings.Count > 0) { Console.WriteLine("strict: warnings are failures"); return 1; }
         return 0;
     }

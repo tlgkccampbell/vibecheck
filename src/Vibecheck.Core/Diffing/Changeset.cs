@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Vibecheck.Checking;
 using Vibecheck.Model;
@@ -47,6 +48,9 @@ public sealed record Changeset
 
     /// <summary>Gets the names the changeset introduces, grouped by block and ordered by use, as <see cref="Diffing.Glossary"/> lists them.</summary>
     public List<Term> Glossary { get; init; } = [];
+
+    /// <summary>Gets the test types with a changed file, ordered by name, as <see cref="TestChanges"/> lists them.</summary>
+    public List<TestTypeChange> Tests { get; init; } = [];
 }
 
 public sealed record StructuralDiff
@@ -79,18 +83,28 @@ public sealed record TypeChange(string Name, string? LeafBase, string? LeafHead,
 /// File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>,
 /// <c>modified</c>, <c>children</c> or <c>unchanged</c>. A renamed file counts as modified under a node that holds one of
 /// its leaves at both ends, as removed under one that holds only its leaves at base, and as added under one that holds
-/// only its leaves at head.
+/// only its leaves at head. Test files count apart: the tests count is the number of changed test files whose subjects
+/// bind to a leaf under the node, and at the top level the number of every changed test file.
 /// </summary>
-public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status);
+public sealed record NodeContent(int Files, int Added, int Removed, int Modified, string Status, int Tests = 0);
 
 /// <summary>
 /// A file's change status and the leaves its types bound to at base and at head. The status is <c>added</c>,
 /// <c>removed</c>, <c>modified</c>, <c>renamed</c> or <c>unchanged</c>. The path is the file's path at head, or at base
 /// for a removed file, and a renamed file also has its path at base. A changed file that no type binds has no leaves at
 /// either end. The blobs are git's object identifiers of the file at each end, when git reports the file as changed.
+/// A test file, which declares test types and no type of the system, has no leaves either, and is marked as one with
+/// its test types' subject leaf, as <see cref="FileFact"/> marks it.
 /// </summary>
 public sealed record FileChange(string Path, string Status, IReadOnlyList<string> LeavesBase, IReadOnlyList<string> LeavesHead)
 {
+    /// <summary>Gets a value indicating whether the file is a test file at either end.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Test { get; init; }
+
+    /// <summary>Gets the leaf of a test file's subject at head, or at base when the file was removed, or <see langword="null"/> for test infrastructure and any file that is not a test file.</summary>
+    public string? Subject { get; init; }
+
     /// <summary>Gets the path of a renamed file at base, or <see langword="null"/> for any other file.</summary>
     public string? PreviousPath { get; init; }
 
@@ -155,6 +169,9 @@ public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Tri
     /// </summary>
     public List<string>? Follows { get; init; }
 
+    /// <summary>Gets the test signals the hunk shows, as <see cref="TestSignals"/> finds them, or <see langword="null"/> when it shows none.</summary>
+    public List<TestSignal>? Signals { get; init; }
+
     /// <summary>Reads the base and head line ranges of the hunk's header, such as <c>@@ -12,7 +12,9 @@</c>, as zero-based first lines and counts.</summary>
     public bool TryRanges(out (int Start, int Count) old, out (int Start, int Count) now)
     {
@@ -185,6 +202,12 @@ public sealed record Decision(string Id, string File, int Hunk, bool Public, Lis
     /// left out.
     /// </summary>
     public List<string> Marks { get; init; } = [];
+
+    /// <summary>
+    /// Gets the test methods that reference the decision's declarations, with their statuses and ways, the removed
+    /// first, then the added, the changed and the unchanged, as <see cref="TestChanges"/> finds them.
+    /// </summary>
+    public List<DecisionTest> Tests { get; init; } = [];
 }
 
 /// <summary>

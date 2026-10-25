@@ -69,7 +69,8 @@ records added and removed, never as text.
 {
   "version": 0,
   "solution": "src/Example.sln",
-  "exclude": ["System.**", "Example.Tests::**"],
+  "exclude": ["System.**"],
+  "tests": ["Example.Tests::**"],
   "nodes": {
     "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "category": "domain", "bind": ["Example.Auth.**"] },
     "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger.", "category": "domain" },
@@ -193,7 +194,7 @@ longer describe it is visible as a number.
 
 ### 2.4 Binding precedence
 
-A type the map excludes binds to nothing. Otherwise it binds to the leaf named by
+A type the map excludes, or a test type of section 2.7.1, binds to nothing. Otherwise it binds to the leaf named by
 its `[Vibecheck]` attribute; otherwise to the leaf whose pattern matches it most
 specifically; otherwise to the automatic leaf `unsorted`. Explicit beats pattern,
 and pattern beats the fallback.
@@ -232,17 +233,30 @@ changes appear in no changeset. Exclusion is decided before binding, so a type t
 an exclusion matches is excluded whatever `bind` patterns or `[Vibecheck]` attribute
 say. An attribute on an excluded type earns a warning.
 
-Two uses motivate it. Code the repository compiles but does not own lands in
-namespaces it does not own: the regex source generator emits its matchers into
-`System.Text.RegularExpressions.Generated`, and a polyfill declares
+The use that motivates it is code the repository compiles but does not own, which
+lands in namespaces it does not own: the regex source generator emits its matchers
+into `System.Text.RegularExpressions.Generated`, and a polyfill declares
 `System.Runtime.CompilerServices.IsExternalInit`. `System.**` removes all of it.
-Test projects consume every component and add no structure of their own, and in a
-solution of twelve hundred types they can account for most of the edges at the
-root. `Example.Tests::**` removes a whole project by its assembly.
+Test projects are not excluded but listed as test types, as section 2.7.1 says.
 
 What the map excludes is still in the code diff, and nothing in the map claims to
 be exhaustive. The facts record how many types and files were excluded so that the
 number can be checked against expectations.
+
+#### 2.7.1 Test types
+
+The `tests` list holds type patterns in the same syntax, naming the test types. A
+**test type** is a type that a `tests` pattern matches and no `exclude` pattern
+does, so a type both lists match is excluded. Test projects consume every component
+and add no structure of their own, and in a solution of twelve hundred types they
+can account for most of the edges at the root, so a test type binds to nothing, no
+leaf holds it, and a reference from it or to it creates no edge, as for an excluded
+type. Unlike an excluded type, a test type stays in the analysis as evidence about
+the system: the facts list it with its test methods and the references it makes
+into the system, and place it by the system type it tests, as
+[tests.md](tests.md) sections 3 and 4 describe. `Example.Tests::**` lists a whole
+project by its assembly. An `[Vibecheck]` attribute on a test type earns a warning.
+The canonical form writes the list only when it holds a pattern.
 
 ### 2.8 Views
 
@@ -361,18 +375,24 @@ changeset is better served by a picture with an `unsorted` box than by no pictur
 
 **Failures.** The file is valid against the schema. Every node's parent exists.
 Every container has a child. No identifier is both a node and an external, and no
-node is named `unsorted`. Every pattern in a `bind` or `exclude` list is
+node is named `unsorted`. Every pattern in a `bind`, `exclude` or `tests` list is
 well-formed. Every view names `root` or a container, and its groups partition the
 leaves under it.
 
 **Warnings.** The file is not in canonical form. A type binds to `unsorted`. A type
 is claimed equally by two leaves. An `[Vibecheck]` attribute names no leaf, sits on a
-nested type, or sits on an excluded type. A referenced assembly is bound by no
+nested type, or sits on an excluded type or a test type. An `exclude` pattern matches
+only types of test projects, by the rule of section 5.1, and could move to `tests`.
+A referenced assembly is bound by no
 external. The layout file mentions an identifier the map does not define. The
 analysis itself reported something, such as a project that did not compile.
 
 `check --strict` turns warnings into failures, for a repository that wants its map
 complete before a change merges.
+
+`check` also reports how the test types were placed, as "55 test types: 40 by name,
+12 by references, 3 infrastructure", so that the rules of [tests.md](tests.md)
+section 4 can be judged against real repositories.
 
 ### 4.1 Metrics
 
@@ -400,10 +420,11 @@ segment beyond the project's root namespace, nested as the namespaces nest. The
 result leaves `unsorted` empty by construction.
 
 Before any node is derived, the skeleton writes `System.**` into `exclude`, and
-`Assembly::**` for every project whose types reference a test framework, meaning an
-assembly named `xunit*`, `nunit.framework`,
+`Assembly::**` into `tests` for every project whose types reference a test framework,
+meaning an assembly named `xunit*`, `nunit.framework`,
 `Microsoft.VisualStudio.TestPlatform.TestFramework` or `TUnit.Core`. Excluded types
-take no part in the derivation. Curation brings a project back by deleting its line.
+and test types take no part in the derivation. Curation brings a project back by
+deleting its line.
 
 Every referenced assembly is bound, so that no port is unbound: framework
 assemblies, meaning `System.*`, `Microsoft.Win32.*`, `netstandard` and `mscorlib`,
@@ -533,6 +554,16 @@ viewer consumes two of these and never reads the code or the map directly.
   "leafEdges": [ { "from": "billing.core", "to": "auth", "count": 17 } ],
   "externalRefs": [ { "from": "Example.Billing.Core.Charge", "assembly": "Stripe", "symbol": "Stripe.ChargeService.Create", "file": "…", "line": 30, "count": 4, "external": "stripe" } ],
   "unresolvable": [ { "from": "…", "symbol": "…", "reason": "…", "file": "…", "line": 1 } ],
+  "tests": {
+    "types": [ { "name": "Example.Auth.Tests.SessionTests", "assembly": "Example.Auth.Tests", "files": ["tests/Auth/SessionTests.cs"],
+      "subject": { "type": "Example.Auth.Session", "leaf": "auth", "by": "name" },
+      "methods": [ { "symbol": "Example.Auth.Tests.SessionTests.Require_Succeeds", "file": "tests/Auth/SessionTests.cs", "first": 18, "last": 31,
+        "skipped": false, "assertions": [ { "first": 24, "last": 24 } ] } ] } ],
+    "exercises": [ { "from": "Example.Auth.Tests.SessionTests", "method": "Example.Auth.Tests.SessionTests.Require_Succeeds",
+      "symbol": "Example.Auth.Session.Require", "file": "tests/Auth/SessionTests.cs", "line": 24 } ],
+    "calls": [ { "from": "Example.Auth.Tests.SessionTests.Require_Fails_WhenExpired", "to": "Example.Auth.Tests.SessionBuilder.Expired",
+      "file": "tests/Auth/SessionTests.cs", "line": 40 } ]
+  },
   "nodes": { "billing": { "types": 40, "internal": 212, "crossing": 9, "attributed": 1 } },
   "levels": { "root": { "edges": [ { "from": "billing", "to": "auth", "count": 17 } ], "cycles": [] } },
   "views": { "by-concern": { "groups": { "payments": { "types": 31, "internal": 180, "crossing": 20, "attributed": 0 } }, "edges": [ { "from": "edges", "to": "payments", "count": 12 } ], "cycles": [] } },
@@ -544,7 +575,16 @@ viewer consumes two of these and never reads the code or the map directly.
 Types are listed with every file that declares them, and files with every leaf
 their types bind to, so that the viewer can descend from a leaf to its types to
 their files to the diff. Excluded types and the files that declare nothing else are
-absent, and `excluded` counts them. Dependencies are listed per reference, since
+absent, and `excluded` counts them. Test types are absent from `types`, from the
+dependencies and from the declarations, and are not counted in `excluded`. The
+`tests` member lists them instead, each with its files, its test methods and its
+subject, with the references they make into the system as `exercises` and the
+references among their own members as `calls`, as [tests.md](tests.md) section 3.2
+describes. Each test method says whether it is skipped and gives the lines of its
+assertion calls, and `tests.declarations` keeps the test types' declarations so that a
+renamed test method is not taken for a removed one. A file that declares test types and no
+system type is listed in `files` with no leaves, `test` set, and the leaf of its
+test types' subject as `subject`. Dependencies are listed per reference, since
 each one is evidence the viewer can show, and once more aggregated per pair of
 leaves, since that is what every drawing starts from. External references are
 aggregated per type and assembly, with the first symbol, file and line and a count.
@@ -567,12 +607,22 @@ as the differences:
   `unchanged`), its leaves at base and at head, and git's blob identifiers at each
   end when git reports it. A renamed file is one entry under its head path, with its
   base path as `previousPath`. A changed file that no type binds has no leaves at
-  either end, and the viewer draws it under an **Other files** block.
+  either end, and the viewer draws it under an **Other files** block. A test file
+  has no leaves either, and carries `test` and its `subject` leaf from the facts. The
+  viewer lists it in its subject leaf's Tests section, or under test infrastructure
+  when it has no subject, and never in Other files.
 - **Content**: for every node, the files under it that were added, removed or
   modified, as counts, rolled up through the hierarchy. A file counts under every
   leaf whose types it declares. A renamed file counts as modified under a node that
   holds one of its leaves at both ends, as removed under one that holds only its
-  leaves at base, and as added under one that holds only its leaves at head.
+  leaves at base, and as added under one that holds only its leaves at head. Changed
+  test files count apart as `tests`, under every node that holds their subject leaf,
+  and all of them at the top level.
+- **Tests**: every test type with a changed file at either end, with its status, its
+  subject, its changed files, and its test methods that the change added, removed or
+  changed, where a method is changed when a hunk changes one of its lines. Each such
+  method names the changed declarations it references, rewritten ones among them.
+  The viewer's Tests switch lists them, as [tests.md](tests.md) section 7.3 describes.
 - **Types**: every type at either end with the leaf it binds to at base and at head,
   the files that declare it, and whether it was added, removed, moved or unchanged.
   This is how the viewer descends from a leaf to its types to their files.
@@ -615,11 +665,24 @@ as the differences:
   own end, is a consequence: its `follows` lists the decisions, the one with the most
   sites in it first, and each decision lists its consequences with the number of
   lines each explains. A decision's `marks` are the files whose every hunk is trivial
-  or explained by that decision alone.
+  or explained by that decision alone. A hunk in a test file follows from a decision
+  by the same rule, read against the exercises of the test types, and a decision's
+  site counts leave the tests out. Each decision lists as `tests` the test methods
+  that reference its declarations, directly or through a helper, with the way, the
+  helper, and the method's status in the change, as [tests.md](tests.md) section 5.1
+  describes.
+- **Test signals**: each hunk of a test file carries as `signals` the facts it shows
+  about a test method: removed, skipped, an assertion removed, or an assertion
+  changed, worded "expected value changed" when every changed assertion line differs
+  from its pair only in literals. Each signal names its method and the changed
+  declarations the method references, and touches changed code when there are any,
+  as [tests.md](tests.md) section 6 describes. Each changed test method in the
+  changeset's tests lists its signals.
 - **Path**: the order in which to read the changeset, as [attention.md](attention.md)
   section 6 plans it: the surprises first, each with the signal that put it there,
-  then the other changed leaves with the decisions and files under them, and last
-  what is set aside. Each step names what it opens and the changed files it covers.
+  then the other changed leaves with the decisions, files and test files under them,
+  and last what is set aside. The first tier ends with a step for each test type whose
+  signals touch changed code and one step for every other test signal. Each step names what it opens and the changed files it covers.
 - **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
   section 8 lists them: added types and members, renamed declarations, nodes, views
   and externals added to the map, and assemblies referenced at head and not at base.

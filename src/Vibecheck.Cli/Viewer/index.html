@@ -234,6 +234,32 @@
   /* The decision badge on a block counts the decisions its files hold. */
   svg#stage .decision-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
   svg#stage .decision-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--accent); }
+  /* While the Tests switch is on, the tests badge on a block counts the changed test files of the types it holds. */
+  svg#stage .tests-bg { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+  svg#stage .tests-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--muted); }
+  /* A leaf's Tests section, and the test methods under a test type in the Tests switch. */
+  .tests-section { margin: 12px 0; }
+  .tests-section > summary { font-weight: 600; }
+  .tests-section > .typecard { margin-top: 8px; }
+  .test-methods { list-style: none; margin: 0 0 4px; padding: 0 0 0 26px; font-size: 12px; }
+  .test-methods li { display: flex; gap: 6px; align-items: baseline; color: var(--muted); }
+  .test-methods code { font-family: var(--mono); font-size: 11.5px; color: var(--fg); }
+  .test-methods .st-added .row-change { color: var(--added); }
+  .test-methods .st-removed .row-change { color: var(--removed); }
+  .test-methods .st-modified .row-change { color: var(--modified); }
+  .test-methods li { flex-wrap: wrap; }
+  .test-methods .tested { flex-basis: 100%; padding-left: 12px; font-size: 11.5px; }
+  .test-methods .tested .link { font-size: 11.5px; }
+  /* A test signal's chip, stronger when the signal touches changed code, and the closing step's list of methods. */
+  .chip.chip-signal { background: var(--surface); color: var(--muted); border: 1px solid var(--line); text-transform: none; letter-spacing: 0; }
+  .chip.chip-signal.touches { color: var(--warn); border-color: var(--warn); }
+  .step-members { margin: 4px 0 4px 26px; padding: 0; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  /* A decision's line on its tests, and the lists of its tests in the details panel. */
+  .tests-line { color: var(--muted); font-size: 12.5px; }
+  .tests-line.none { text-decoration: underline dotted; cursor: help; }
+  .tests-line code { font-family: var(--mono); font-size: 11.5px; color: var(--fg); }
+  .decision-tests-box { margin: 10px 0; }
+  .decision-tests h3 { margin: 8px 0 4px; }
   /* A decision's row in the Changes panel carries a diamond where a block's row carries its status square. */
   .dot.decision-dot { width: 7px; height: 7px; background: var(--accent); border-radius: 1px; transform: rotate(45deg); margin: 0 1px; }
   .dot.decision-dot.public { background: transparent; border: 1.5px solid var(--warn); }
@@ -257,7 +283,7 @@
   .step-kind.edge, .step-kind.cycle { color: var(--added); }
   .step-kind.cycle { color: var(--warn); }
   .step-kind.aside, .step-kind.more { color: var(--muted); }
-  .step-text { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.35; }
+  .step-text { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.35; overflow-wrap: anywhere; }
   .step-text .step-why { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
   .row.step.read { opacity: .55; }
   .row.step.read .step-text { text-decoration: line-through; text-decoration-color: var(--line-strong); }
@@ -517,7 +543,7 @@
   .thread > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px; color: var(--fg); font-family: var(--mono); font-size: 12px; }
   .thread.resolved > summary { color: var(--muted); }
   .thread.pending { border-color: var(--modified); }
-  .thread.flash { animation: thread-flash 1.6s ease-out; }
+  .thread.flash, [data-hunk].flash { animation: thread-flash 1.6s ease-out; }
   .row.flash { animation: row-flash 1.6s ease-out; }
   @keyframes row-flash { from { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); } }
   @keyframes thread-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }

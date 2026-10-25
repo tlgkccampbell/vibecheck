@@ -36,6 +36,10 @@ public static class Checker
         var (included, excluded) = exclusion.Apply(analysis);
         foreach (var type in analysis.Types.Where(t => t.Attribute is not null && exclusion.Excludes(t)))
             warnings.Add($"{type.Name} carries [Vibecheck(\"{type.Attribute}\")] but the map excludes it");
+        foreach (var type in analysis.Types.Where(t => t.Attribute is not null && exclusion.IsTest(t)))
+            warnings.Add($"{type.Name} carries [Vibecheck(\"{type.Attribute}\")] but the map lists it as a test type");
+        warnings.AddRange(MovableExclusions(map, analysis));
+        var whole = analysis;
         analysis = included;
         if (violations.Count > 0)
         {
@@ -73,13 +77,15 @@ public static class Checker
 
         var leavesOfFile = LeavesOfFiles(analysis, leafOf);
         var nodes = NodeMetrics(map, analysis, leafEdges, leafOf, boundBy);
+        var (tests, testFiles) = TestTypes.Build(whole, exclusion, analysis, leafOf);
         return new Facts
         {
             Commit = options.Commit,
             Map = map,
             Excluded = excluded,
             Types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, leafOf[t.Name], boundBy[t.Name], t.Files, t.Generator)).ToList(),
-            Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, leavesOfFile.GetValueOrDefault(f.Path, []), f.Generator)).ToList(),
+            Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, leavesOfFile.GetValueOrDefault(f.Path, []), f.Generator))
+                .Concat(testFiles).OrderBy(f => f.Path, StringComparer.Ordinal).ToList(),
             Dependencies = dependencies,
             LeafEdges = leafEdges,
             ExternalRefs = externalRefs,
@@ -91,7 +97,25 @@ public static class Checker
             Warnings = warnings,
             Declarations = analysis.Declarations.Where(d => known.Contains(d.Type)).ToList(),
             Sites = analysis.Sites.Where(s => known.Contains(s.FromType) && known.Contains(s.ToType)).ToList(),
+            Tests = tests,
         };
+    }
+
+    /// <summary>
+    /// Returns a warning for each exclude pattern that matches types of test projects alone, as
+    /// <see cref="TestFrameworks.TestAssemblies"/> finds them, and that the tests list could therefore hold instead.
+    /// </summary>
+    private static IEnumerable<string> MovableExclusions(ArchitectureMap map, AnalysisResult analysis)
+    {
+        var testAssemblies = TestFrameworks.TestAssemblies(analysis);
+        if (testAssemblies.Count == 0) yield break;
+        foreach (var text in map.Exclude)
+        {
+            if (!TypePattern.TryParse(text, out var pattern, out _)) continue;
+            var matched = analysis.Types.Where(t => pattern!.Matches(t.PlainName, t.Assembly)).ToList();
+            if (matched.Count > 0 && matched.All(t => testAssemblies.Contains(t.Assembly)))
+                yield return $"exclude pattern \"{text}\" matches only test projects; move it to \"tests\" so that reviews show what changes do to their tests";
+        }
     }
 
     // ---------- Well-formedness ----------
@@ -169,7 +193,7 @@ public static class Checker
     private static Exclusion ParseExclusion(ArchitectureMap map, List<ViolationFact> violations)
     {
         var errors = new List<string>();
-        var exclusion = Exclusion.Parse(map.Exclude, errors);
+        var exclusion = Exclusion.Parse(map, errors);
         foreach (var error in errors) violations.Add(new ViolationFact("well-formedness", error));
         return exclusion;
     }

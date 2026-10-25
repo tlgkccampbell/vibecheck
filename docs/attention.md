@@ -151,7 +151,11 @@ consequences under the blocks that hold them.
 
 In the leaf view, a decision's hunk is drawn with a header: the kind of change, the
 declaration, the public mark where it applies, and "n consequences in m files,
-across k blocks". Consequences are collapsed to one line each, with "follows from"
+across k blocks", with its consequences in test files counted apart as ", and 4 in
+tests". The header also says which test methods reference the decision, directly and
+through helpers, and names the changed ones, or says "no test references it" for a
+public decision that none does, as [tests.md](tests.md) section 5.1 describes; the
+counts open the lists of the methods in the details panel. Consequences are collapsed to one line each, with "follows from"
 and the decision's declaration as a link, and open on a click like a reviewed file's
 diff. A file whose hunks are all consequences sorts after files with decisions and
 before reviewed files, and its chip says `consequence`.
@@ -266,11 +270,19 @@ The same changeset always gives the same path.
 - A changed block with the highest fan-in at head, meaning the sum of references into
   it from other blocks of its level, since decisions in it reach the most.
 - A new concept of section 7, whether or not the reviewer has decided on it.
+- After the decisions, a step for each test type with a test signal that touches
+  changed code, such as an assertion removed from a test of a rewritten method, the
+  widest reach first, and last one step that gathers every other test signal, as
+  [tests.md](tests.md) section 7.2 describes. A leaf's step in the next tier counts
+  the signals of its test files.
 
 **Then** holds every other changed leaf, largest change first within each level, and
 under each the decisions and the files with edits of their own that the first tier
-did not take. A leaf whose changed files are all set aside is not a step, since the
-third tier accounts for it. A changed file that no type binds comes last, on its own.
+did not take, and after them the changed test files whose subject the leaf holds, as
+[tests.md](tests.md) section 7.2 describes. A leaf whose changed files are all set
+aside is not a step, since the third tier accounts for it. A changed test file that
+no leaf's step lists, such as one of test infrastructure, comes last on its own, and
+a changed file that no type binds comes after it.
 
 **Set aside** holds the consequences, the trivial and generated files and the files
 already reviewed, as counts with the blocks they are in. A file that is both trivial

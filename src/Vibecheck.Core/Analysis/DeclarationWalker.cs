@@ -38,7 +38,7 @@ internal sealed class DeclarationWalker : CSharpSyntaxWalker
         Add(node, node, "type", node.Identifier, []);
 
     public override void VisitMethodDeclaration(MethodDeclarationSyntax node) =>
-        Add(node, node, "method", node.Identifier, Bodies(node.Body, node.ExpressionBody));
+        Add(node, node, "method", node.Identifier, Bodies(node.Body, node.ExpressionBody), test: true);
 
     public override void VisitConstructorDeclaration(ConstructorDeclarationSyntax node) =>
         Add(node, node, "constructor", node.Identifier, Bodies(node.Initializer, node.Body, node.ExpressionBody));
@@ -101,7 +101,8 @@ internal sealed class DeclarationWalker : CSharpSyntaxWalker
     /// <param name="bodies">The spans whose tokens make the body.</param>
     /// <param name="excluded">The spans whose tokens belong to neither the shape nor the body.</param>
     /// <param name="bodyLine">The line the body begins on, when it is not the first line of the first body span.</param>
-    private void Add(SyntaxNode syntax, SyntaxNode declarator, string kind, SyntaxToken name, List<TextSpan> bodies, List<TextSpan>? excluded = null, int? bodyLine = null)
+    /// <param name="test">Whether the declaration can be a test method, whose test framework attribute is recorded.</param>
+    private void Add(SyntaxNode syntax, SyntaxNode declarator, string kind, SyntaxToken name, List<TextSpan> bodies, List<TextSpan>? excluded = null, int? bodyLine = null, bool test = false)
     {
         if (model.GetDeclaredSymbol(declarator) is not { } symbol) return;
         var top = symbol as INamedTypeSymbol ?? symbol.ContainingType;
@@ -133,7 +134,53 @@ internal sealed class DeclarationWalker : CSharpSyntaxWalker
             file, first, last, bodyLine,
             Hash(shape.ToString()),
             bodies.Count == 0 ? null : Hash(body.ToString()),
-            DocSummary.FirstSentence(symbol.GetDocumentationCommentXml())));
+            DocSummary.FirstSentence(symbol.GetDocumentationCommentXml()),
+            test ? TestAttributeOf(symbol) : null));
+        if (test && Declarations[^1].Test is not null)
+            Declarations[^1] = Declarations[^1] with { Skipped = IsSkipped(symbol), Assertions = AssertionsIn(syntax) };
+    }
+
+    /// <summary>Returns a value indicating whether a test method carries an attribute that skips it, as <see cref="TestFrameworks.Skips"/> says.</summary>
+    private static bool IsSkipped(ISymbol symbol) => symbol.GetAttributes().Any(a => a.AttributeClass is { ContainingAssembly: { } assembly } type
+        && TestFrameworks.Skips(assembly.Name, type.Name, a.NamedArguments.Where(n => n.Value.Value is string { Length: > 0 }).Select(n => n.Key)));
+
+    /// <summary>
+    /// Returns the lines of each assertion in a method: each call into an assertion library that no other such call holds
+    /// within the same function, so that a chain such as <c>x.Should().Be(3)</c> or a constraint such as
+    /// <c>Is.EqualTo(3)</c> inside <c>Assert.That</c> counts once, and each assertion in a lambda counts on its own.
+    /// </summary>
+    private List<LineRange> AssertionsIn(SyntaxNode method)
+    {
+        bool IsAssertion(InvocationExpressionSyntax call) => model.GetSymbolInfo(call).Symbol is IMethodSymbol m
+            && m.ContainingAssembly is { } assembly && TestFrameworks.IsAssertion(assembly.Name, m.ContainingType.Name);
+        var result = new List<LineRange>();
+        foreach (var call in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (!IsAssertion(call)) continue;
+            var held = call.Ancestors().TakeWhile(n => n != method && n is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax)
+                .OfType<InvocationExpressionSyntax>().Any(IsAssertion);
+            if (!held) result.Add(new LineRange(LineOf(call.SpanStart), LineOf(Math.Max(call.SpanStart, call.Span.End - 1))));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the name of the test framework attribute that a method carries, without its <c>Attribute</c> suffix, or
+    /// <see langword="null"/> when it carries none. An attribute counts when its type, or a type it derives from, is one
+    /// of <see cref="TestFrameworks.TestAttributes"/> declared in a test framework assembly, so that an attribute such as
+    /// <c>SkippableFact</c>, which derives from xUnit's <c>Fact</c>, counts too.
+    /// </summary>
+    private static string? TestAttributeOf(ISymbol symbol)
+    {
+        foreach (var attribute in symbol.GetAttributes())
+        {
+            for (var type = attribute.AttributeClass; type is not null; type = type.BaseType)
+            {
+                if (TestFrameworks.TestAttributes.Contains(type.Name) && type.ContainingAssembly is { } assembly && TestFrameworks.IsFramework(assembly.Name))
+                    return attribute.AttributeClass!.Name.EndsWith("Attribute", StringComparison.Ordinal) ? attribute.AttributeClass.Name[..^"Attribute".Length] : attribute.AttributeClass.Name;
+            }
+        }
+        return null;
     }
 
     /// <summary>

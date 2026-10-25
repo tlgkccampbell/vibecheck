@@ -28,7 +28,7 @@ public static class TypePlacer
         var facts = Checker.Run(map, analysis);
         var unsorted = facts.Types.Where(t => t.Leaf == ArchitectureMap.Unsorted).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         if (unsorted.Count == 0) return null;
-        var (included, _) = Exclusion.Parse(map.Exclude, []).Apply(analysis);
+        var (included, _) = Exclusion.Parse(map, []).Apply(analysis);
         var units = Units.Build(included).Where(u => u.Members.Any(unsorted.Contains)).ToList();
 
         progress?.Report($"placing {unsorted.Count} unsorted type(s)");

@@ -5,4 +5,7 @@
     <Project Path="src/Orchard.Notifications/Orchard.Notifications.csproj" />
     <Project Path="src/Orchard.Shared/Orchard.Shared.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Orchard.Tests/Orchard.Tests.csproj" />
+  </Folder>
 </Solution>

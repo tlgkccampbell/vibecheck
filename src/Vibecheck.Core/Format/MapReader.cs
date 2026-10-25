@@ -56,6 +56,7 @@ public static class MapReader
             var version = 0;
             string? solution = null;
             List<string>? exclude = null;
+            List<string>? tests = null;
             var nodes = new SortedDictionary<string, NodeSpec>(StringComparer.Ordinal);
             var views = new SortedDictionary<string, ViewSpec>(StringComparer.Ordinal);
             var externals = new SortedDictionary<string, ExternalSpec>(StringComparer.Ordinal);
@@ -72,6 +73,9 @@ public static class MapReader
                         break;
                     case "exclude":
                         exclude = ReadStringList(p.Value, "exclude", errors);
+                        break;
+                    case "tests":
+                        tests = ReadStringList(p.Value, "tests", errors);
                         break;
                     case "nodes":
                         ReadObjectMap(p.Value, "nodes", errors, (id, el) => nodes[id] = ReadNode(id, el, errors));
@@ -94,6 +98,7 @@ public static class MapReader
                 Version = version,
                 Solution = solution ?? "",
                 Exclude = exclude ?? [],
+                Tests = tests ?? [],
                 Nodes = nodes,
                 Views = views,
                 Externals = externals,

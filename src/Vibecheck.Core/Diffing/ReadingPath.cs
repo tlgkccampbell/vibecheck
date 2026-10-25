@@ -52,6 +52,7 @@ public static class ReadingPath
         var map = cs.Map;
         var changed = cs.Files.Where(f => f.Status != "unchanged").ToList();
         var changedPaths = changed.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var testPaths = changed.Where(f => f.Test).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
         var filesOfType = cs.Types.ToDictionary(t => t.Name, t => t.Files.Where(changedPaths.Contains).ToList(), StringComparer.Ordinal);
         var hunksOf = cs.Hunks.ToDictionary(h => h.Path, StringComparer.Ordinal);
         var decisionAt = cs.Decisions.ToDictionary(d => d.Id, StringComparer.Ordinal);
@@ -61,6 +62,8 @@ public static class ReadingPath
             : id.StartsWith("g:", StringComparison.Ordinal) && id.Split('/') is [var v, var g] && map.Views.TryGetValue(v[2..], out var view) && view.Groups.TryGetValue(g, out var group) ? group.Name
             : map.Nodes.TryGetValue(id, out var node) ? node.Name : id;
         List<string> FilesUnder(string id) => changed.Where(f => CountedLeaves(f).Any(l => Identifiers.IsUnder(l, id))).Select(f => f.Path).ToList();
+        // The changed test files whose subject is a leaf, which its step lists after its own files. See docs/tests.md section 7.2.
+        List<string> TestFilesOf(string leaf) => changed.Where(f => f.Test && f.Subject == leaf).Select(f => f.Path).ToList();
         List<string> EdgeFiles(DrawnEdge e)
         {
             var from = e.Evidence.SelectMany(p => filesOfType.GetValueOrDefault(p.From, [])).Distinct(StringComparer.Ordinal).ToList();
@@ -150,6 +153,30 @@ public static class ReadingPath
             named.Add(fanIn.Block);
         }
 
+        // Each test type with a signal that touches changed code is a step after the decisions, the widest reach of the
+        // decisions its signals touch first, and every other signal is gathered into one closing step of the tier. See
+        // docs/tests.md section 7.2.
+        var typeOf = cs.Tests.SelectMany(t => t.Methods.Select(m => (m.Symbol, Type: t))).DistinctBy(x => x.Symbol).ToDictionary(x => x.Symbol, x => x.Type, StringComparer.Ordinal);
+        var signals = cs.Hunks.SelectMany(f => f.Hunks.SelectMany(h => h.Signals ?? [])).Where(s => typeOf.ContainsKey(s.Method)).ToList();
+        var decisionOf = cs.Decisions.SelectMany(d => d.Declarations.Select(x => (x.Symbol, d))).DistinctBy(x => x.Symbol).ToDictionary(x => x.Symbol, x => x.d, StringComparer.Ordinal);
+        (int Blocks, int Files) SignalReach(TestSignal s) => s.Touches.Select(t => decisionOf.TryGetValue(t.Symbol, out var d) ? Reach(d) : (0, 0, 0))
+            .Select(r => (r.Item1, r.Item2)).DefaultIfEmpty((0, 0)).Max();
+        var testSteps = signals.Where(s => s.Touches.Count > 0).GroupBy(s => typeOf[s.Method].Name, StringComparer.Ordinal)
+            .Select(g => (Type: typeOf[g.First().Method], Signals: g.ToList(), Reach: g.Select(SignalReach).Max()))
+            .OrderByDescending(x => x.Reach.Blocks).ThenByDescending(x => x.Reach.Files).ThenBy(x => x.Type.Name, StringComparer.Ordinal)
+            .Select(x => new PathStep($"test:{x.Type.Name}", "first", "test", x.Type.Name, string.Join("; ", x.Signals.Select(SignalText)), x.Type.Files))
+            .ToList();
+        first.AddRange(testSteps);
+        var unexplained = signals.Where(s => s.Touches.Count == 0).ToList();
+        if (unexplained.Count > 0)
+        {
+            var methods = unexplained.GroupBy(s => s.Method, StringComparer.Ordinal).ToList();
+            first.Add(new PathStep("tests:other", "first", "tests", "other",
+                $"{Plural(methods.Count, "test", "tests")} changed in ways no changed declaration {(methods.Count == 1 ? "it references explains" : "they reference explains")}",
+                methods.SelectMany(g => typeOf[g.Key].Files).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList())
+            { Members = methods.Select(g => $"{DeclarationDiff.ShortName(g.Key, "method")}: {string.Join(", ", g.Select(s => KindText(s.Kind)).Distinct())}").ToList() });
+        }
+
         // Set aside: files whose edits are trivial or generated, and files whose hunks are all consequences. They are
         // found first, so that the second tier lists neither them nor a block that holds nothing else.
         var trivial = changed.Where(f => hunksOf.GetValueOrDefault(f.Path)?.Reason is not null || (f.Status == "renamed" && f.BlobBase is not null && f.BlobBase == f.BlobHead)).Select(f => f.Path).ToList();
@@ -164,7 +191,7 @@ public static class ReadingPath
             foreach (var c in DrawnEdges.Children(cs, level))
             {
                 if (named.Contains(c) || map.IsContainer(c)) continue;
-                var files = FilesUnder(c);
+                var files = FilesUnder(c).Concat(TestFilesOf(c)).ToList();
                 if (files.Count > 0 && !files.All(setAside.Contains)) leaves.Add((c, level, files.Count));
             }
         }
@@ -172,18 +199,25 @@ public static class ReadingPath
         var listedDecisionFiles = new HashSet<string>(StringComparer.Ordinal);
         if (widest is not null) { decided.Add(widest.Id); listedDecisionFiles.Add(widest.File); }
         var leafSteps = new List<PathStep>();
+        var listedTests = new HashSet<string>(StringComparer.Ordinal);
         var decisionSteps = new List<PathStep>();
         var fileSteps = new List<PathStep>();
         foreach (var (leaf, level, _) in leaves.OrderBy(l => levels.IndexOf(l.Level)).ThenByDescending(l => l.Size).ThenBy(l => l.Leaf, StringComparer.Ordinal))
         {
             var files = FilesUnder(leaf);
+            var tests = TestFilesOf(leaf);
             var decisions = ranked.Select(x => x.Decision).Concat(cs.Decisions.Where(d => d.Consequences.Count == 0))
                 .Where(d => !decided.Contains(d.Id) && files.Contains(d.File)).ToList();
             var own = files.Where(p => !setAside.Contains(p) && !listedDecisionFiles.Contains(p) && !decisions.Any(d => d.File == p) && OwnEdits(hunksOf.GetValueOrDefault(p), decisionAt) > 0).ToList();
-            var parts = new List<string> { Plural(files.Count, "file changed", "files changed") };
+            var parts = new List<string>();
+            if (files.Count > 0) parts.Add(Plural(files.Count, "file changed", "files changed"));
             if (decisions.Count > 0) parts.Add(Plural(decisions.Count, "decision", "decisions"));
             if (own.Count > 0) parts.Add($"{Plural(own.Count, "file", "files")} with edits on their own");
-            var step = new PathStep($"node:{leaf}", "then", "node", leaf, $"{Name(leaf)}: {string.Join(" · ", parts)}", files) { Under = level == Identifiers.Root ? null : level };
+            if (tests.Count > 0) parts.Add(Plural(tests.Count, "test file", "test files"));
+            var testSignals = tests.Sum(p => hunksOf.GetValueOrDefault(p)?.Hunks.Sum(h => h.Signals?.Count ?? 0) ?? 0);
+            if (testSignals > 0) parts.Add(Plural(testSignals, "test signal", "test signals"));
+            listedTests.UnionWith(tests);
+            var step = new PathStep($"node:{leaf}", "then", "node", leaf, $"{Name(leaf)}: {string.Join(" · ", parts)}", [.. files, .. tests]) { Under = level == Identifiers.Root ? null : level };
             leafSteps.Add(step);
             then.Add(step);
             foreach (var d in decisions)
@@ -204,10 +238,15 @@ public static class ReadingPath
                 then.Add(fs);
             }
         }
-        // Changed files that no type binds, such as project files and documents, come last.
-        foreach (var f in changed.Where(f => CountedLeaves(f).Count == 0 && hunksOf.GetValueOrDefault(f.Path)?.Reason is null).OrderBy(f => f.Path, StringComparer.Ordinal))
+        // Changed test files that no leaf's step lists, test infrastructure among them, and then the changed files that no
+        // type binds, such as project files and documents, come last.
+        var rest = changed.Where(f => f.Test && !listedTests.Contains(f.Path) && !setAside.Contains(f.Path)).OrderBy(f => f.Subject is null).ThenBy(f => f.Path, StringComparer.Ordinal)
+            .Select(f => (File: f, Where: f.Subject is null ? "test infrastructure" : $"tests of {Name(f.Subject)}"))
+            .Concat(changed.Where(f => !f.Test && CountedLeaves(f).Count == 0 && hunksOf.GetValueOrDefault(f.Path)?.Reason is null).OrderBy(f => f.Path, StringComparer.Ordinal)
+                .Select(f => (File: f, Where: "outside the map")));
+        foreach (var (f, where) in rest)
         {
-            var fs = new PathStep($"file:{f.Path}", "then", "file", f.Path, $"{FileName(f.Path)}: {f.Status}, outside the map", [f.Path]);
+            var fs = new PathStep($"file:{f.Path}", "then", "file", f.Path, $"{FileName(f.Path)}: {f.Status}, {where}", [f.Path]);
             fileSteps.Add(fs);
             then.Add(fs);
         }
@@ -215,13 +254,14 @@ public static class ReadingPath
         // The path holds at most forty steps in its first two tiers. Files go first, then decisions, then whole blocks,
         // which are kept as one count so that their files still count toward the progress.
         var dropped = new List<PathStep>();
-        foreach (var pool in new[] { fileSteps, decisionSteps, leafSteps })
+        foreach (var pool in new[] { fileSteps, testSteps, decisionSteps, leafSteps })
         {
             while (first.Count + then.Count > MostSteps && pool.Count > 0)
             {
                 var last = pool[^1];
                 pool.RemoveAt(pool.Count - 1);
                 then.Remove(last);
+                first.Remove(last);
                 if (last.Kind == "node") dropped.Add(last);
             }
         }
@@ -232,9 +272,18 @@ public static class ReadingPath
         }
 
         var aside = new List<PathStep>();
-        int Blocks(List<string> paths) => paths.SelectMany(p => CountedLeaves(changed.First(f => f.Path == p))).Distinct(StringComparer.Ordinal).Count();
-        if (consequences.Count > 0) aside.Add(new PathStep("aside:consequences", "aside", "aside", "consequences", $"{Plural(consequences.Count, "file", "files")} of consequences in {Plural(Blocks(consequences), "block", "blocks")}", consequences));
-        if (trivial.Count > 0) aside.Add(new PathStep("aside:trivial", "aside", "aside", "trivial", $"{Plural(trivial.Count, "trivial or generated file", "trivial or generated files")} in {Plural(Blocks(trivial), "block", "blocks")}", trivial));
+        // Says how many of the files are in the system and in how many blocks, with the test files, which count under no
+        // block, apart.
+        string Where(List<string> paths, string one, string many)
+        {
+            var system = paths.Where(p => !testPaths.Contains(p)).ToList();
+            var tests = paths.Count - system.Count;
+            var blocks = system.SelectMany(p => CountedLeaves(changed.First(f => f.Path == p))).Distinct(StringComparer.Ordinal).Count();
+            var text = system.Count > 0 ? $"{Plural(system.Count, one, many)} in {Plural(blocks, "block", "blocks")}" : "";
+            return tests == 0 ? text : text.Length == 0 ? $"{Plural(tests, "test " + one, "test " + many)}" : $"{text}, and {tests} in tests";
+        }
+        if (consequences.Count > 0) aside.Add(new PathStep("aside:consequences", "aside", "aside", "consequences", Where(consequences, "file of consequences", "files of consequences"), consequences));
+        if (trivial.Count > 0) aside.Add(new PathStep("aside:trivial", "aside", "aside", "trivial", Where(trivial, "trivial or generated file", "trivial or generated files"), trivial));
 
         return first.Concat(then).Concat(aside).ToList();
 
@@ -245,15 +294,21 @@ public static class ReadingPath
             var what = lead.Change == "reshaped" ? $"signature of {Short(lead)} changed" : $"{ChangeText.GetValueOrDefault(lead.Change, lead.Change)} {Short(lead)}";
             var others = d.Declarations.Count - 1;
             var signal = what + (others > 0 ? $" and {Plural(others, "other", "others")}" : "") + (d.Public ? ", public" : "") + ": "
-                + (d.Consequences.Count == 0 ? "no consequences" : $"{Plural(d.Consequences.Count, "consequence", "consequences")} in {Plural(reach.Files, "file", "files")} across {Plural(reach.Blocks, "block", "blocks")}");
+                + (d.Consequences.Count == 0 ? "no consequences"
+                    : reach.Files == 0 ? $"{Plural(reach.Tests, "consequence", "consequences")} in tests"
+                    : $"{Plural(d.Consequences.Count - reach.Tests, "consequence", "consequences")} in {Plural(reach.Files, "file", "files")} across {Plural(reach.Blocks, "block", "blocks")}"
+                        + (reach.Tests > 0 ? $", and {reach.Tests} in tests" : ""));
             return new PathStep($"decision:{d.Id}", tier, "decision", d.Id, signal, [d.File]);
         }
 
-        (int Blocks, int Files) Reach(Decision d)
+        // A decision's reach counts the blocks and files of the system its consequences are in. Its consequences in test
+        // files count apart, so that tests do not rank a decision above one that reaches further into the system.
+        (int Blocks, int Files, int Tests) Reach(Decision d)
         {
-            var files = d.Consequences.Select(c => c.File).Distinct(StringComparer.Ordinal).ToList();
+            var tests = d.Consequences.Count(c => testPaths.Contains(c.File));
+            var files = d.Consequences.Select(c => c.File).Where(p => !testPaths.Contains(p)).Distinct(StringComparer.Ordinal).ToList();
             var blocks = files.Select(p => changed.FirstOrDefault(f => f.Path == p)).OfType<FileChange>().SelectMany(CountedLeaves).Distinct(StringComparer.Ordinal).Count();
-            return (blocks, files.Count);
+            return (blocks, files.Count, tests);
         }
     }
 
@@ -282,6 +337,39 @@ public static class ReadingPath
         x.Previous is not null ? $"{DeclarationDiff.ShortName(x.Previous, x.Kind)} → {DeclarationDiff.ShortName(x.Symbol, x.Kind)}" : DeclarationDiff.ShortName(x.Symbol, x.Kind);
 
     private static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
+
+    /// <summary>Returns the words for a kind of <see cref="TestSignal"/>.</summary>
+    private static string KindText(string kind) => kind switch
+    {
+        TestSignal.Removed => "removed",
+        TestSignal.Skipped => "skipped",
+        TestSignal.AssertionRemoved => "assertion removed",
+        TestSignal.ExpectedChanged => "expected value changed",
+        _ => "assertion changed",
+    };
+
+    /// <summary>
+    /// Returns a test signal as a fact, naming its method and, when it touches changed code, the first changed declaration
+    /// the method references, such as "assertion removed from SessionTests.Require_Succeeds, which references
+    /// Session.Require, rewritten".
+    /// </summary>
+    private static string SignalText(TestSignal s)
+    {
+        var method = DeclarationDiff.ShortName(s.Method, "method");
+        var what = s.Kind switch
+        {
+            TestSignal.Removed => $"{method} removed",
+            TestSignal.Skipped => $"{method} skipped",
+            TestSignal.AssertionRemoved => $"assertion removed from {method}",
+            TestSignal.ExpectedChanged => $"expected value changed in {method}",
+            _ => $"assertion changed in {method}",
+        };
+        if (s.Touches.Count == 0) return what;
+        var lead = s.Touches[0];
+        var change = lead.Change == "reshaped" ? "signature changed" : lead.Change;
+        var others = s.Touches.Count - 1;
+        return $"{what}, which references {DeclarationDiff.ShortName(lead.Symbol, lead.Kind)}, {change}" + (others > 0 ? $", and {Plural(others, "other changed declaration", "other changed declarations")}" : "");
+    }
 
     /// <summary>Returns the last segment of a path.</summary>
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
