@@ -8,6 +8,11 @@ reviewer can compare it with them. It builds on the map and facts of
 [attention.md](attention.md), and the test subjects of [tests.md](tests.md), and it
 lists, in section 11, the changes it makes to those documents.
 
+Phases 1 to 4 of section 13, traits and discovery, norms and departures, examples and
+the compare view, and the Patterns switch with Claude's names, are built. Phase 5,
+member norms, is not. The new concepts notice that section 7.6 mentions is not built
+either, since attention.md section 7 is not; placement receives its hint without it.
+
 The design rests on one principle. A pattern is evidence about the code, not part of
 the architecture. Controllers sit in every feature, and a pattern cuts across the
 leaves of the map the way tests do, so a pattern is never a node, a view or an edge.
@@ -83,9 +88,9 @@ Traits are recorded whether the referenced type is in the solution's source or i
 referenced assembly. This matters because most patterns are defined by a framework.
 Today a reference to a symbol with no source becomes an external reference with no
 kind, aggregated per type and assembly, so the fact that a type implements
-`IConsumer<>` is not kept anywhere. The dependency walker already knows the kind of
-every reference it visits, so traits cost no new pass: the walker records the traits
-of each type it walks, and external references gain their kind.
+`IConsumer<>` is not kept anywhere. The analysis reads the traits from each type's
+symbol, which it already holds, so traits cost no new pass, and the dependency walker
+gives each external reference the kind it already knows.
 
 References to the core library are not recorded as dependencies, since every type
 would carry them. Traits are an exception for base types and attributes, since a type
@@ -111,7 +116,6 @@ Each type in the facts gains `traits`:
 { "name": "Orchard.Billing.Consumers.OrderPlacedConsumer", "leaf": "billing.consumers", "by": "pattern",
   "files": ["src/Billing/Consumers/OrderPlacedConsumer.cs"],
   "traits": {
-    "base": null,
     "interfaces": [ { "type": "MassTransit.IConsumer<>", "arguments": ["Orchard.Billing.Events.OrderPlaced"] } ],
     "attributes": [],
     "injects": ["Orchard.Billing.IUnitOfWork", "Microsoft.Extensions.Logging.ILogger<>"]
@@ -122,8 +126,10 @@ Each type in the facts gains `traits`:
 referenced type. This is a change to the facts format, and every reader of external
 references aggregates by assembly itself when it needs to.
 
-Test types have no traits, since a test type is never an instance of a pattern, as
-section 4.3 says.
+A base class is written as an interface is, with its arguments when it is generic, and
+is absent when the type inherits `Object`. A type with no traits at all has no
+`traits`. Test types have no traits in the facts, since a test type is never an
+instance of a pattern, as section 4.3 says.
 
 ### 3.4 Member attributes
 
@@ -161,11 +167,15 @@ Patterns are discovered at base, in the system as it was before the change, sinc
 change is judged against the code it joins. Discovery is a pure function of the facts:
 
 1. Group the types the map holds by each key they carry.
-2. Keep each group with at least **three** instances.
-3. Merge groups with exactly the same instances into one pattern whose keys are all of
+2. Drop a group whose key the map ignores, as section 4.4 describes. This comes before
+   the merge, so that a marker interface that every consumer also carries does not
+   take the consumers with it.
+3. Keep each group with at least **three** instances.
+4. Merge groups with exactly the same instances into one pattern whose keys are all of
    theirs, so that a controller that inherits `ControllerBase` and carries
-   `[ApiController]` is one pattern with two keys, not two patterns.
-4. Drop a group whose key the map ignores, as section 4.4 describes.
+   `[ApiController]` is one pattern with two keys, not two patterns. The keys are
+   ordered by kind, inherits before implements before attribute, and the first names
+   the pattern.
 
 A type that carries the keys of several patterns is an instance of each. When one
 pattern's instances are all instances of another, as consumers deriving from a shared
@@ -197,8 +207,10 @@ The map gains an optional `patterns` list beside `tests`:
 ]
 ```
 
-An entry with `keys` names a pattern. When discovery finds a pattern with the same
-keys, the entry gives it its identifier, name and purpose. When it does not, the entry
+An entry with `keys` names a pattern. When discovery finds a pattern whose instances
+are exactly the types that carry the entry's keys, and whose keys include them, the
+entry gives it its identifier, name and purpose, and the pattern keeps every key that
+step 4 merged into it. When it does not, the entry
 declares the pattern, which then needs no minimum number of instances. An entry with
 `ignore` drops every discovered group whose keys include that key, such as a marker
 interface that every message carries.
@@ -210,7 +222,8 @@ could match nothing that discovery found.
 
 `vibecheck check` reports the patterns it found, each with its instance count, its
 number of norms, and the mean number of norms its own instances depart from, as
-"consumer: 14 instances, 4 norms, 0.3 departures each". The last figure is the measure
+"pattern consumer: 14 instances, 4 norms, 0.3 departures each
+(implements:MassTransit.IConsumer<>)". The departures figure is the measure
 of section 12: a pattern whose existing instances depart from more than about one
 norm each would fill the path with departures, and says that the thresholds of
 section 5.2 are too low for it. The check also warns for an entry whose keys no type carries.
@@ -237,7 +250,9 @@ A **feature** of an instance is one of:
 
 - A trait other than the pattern's own keys: another interface, base or attribute.
 - An injected type, in open form.
-- A use, in open form.
+- A use, in open form, unless the instance already carries or injects the type, so
+  that one fact is not counted twice. A use of a type of the solution is named as the
+  facts name the type, without its type parameters.
 - **Tested**: the instance is the subject of a test type, by tests.md section 4.
 - **Documented**: the type has a documentation summary.
 - **Companion**: the instance has a companion in another pattern, by section 5.4.
@@ -281,7 +296,9 @@ of 31 handlers have a validator; `CreateOrderHandler` does not". The companion
 pattern is named by its own name, so the wording follows the names of section 8.
 
 Type arguments of the core library, such as `string` or `Guid`, never link instances,
-since they would link every handler that returns an identifier.
+since they would link every handler that returns an identifier. Only a type argument
+that is a type of the system links instances, which keeps out the core library and
+every other referenced assembly with it.
 
 ### 5.5 Unusual traits
 
@@ -338,9 +355,19 @@ instance:
   "sources": { "Orchard.Billing.Consumers.OrderPlacedConsumer": { "file": "…", "first": 8, "lines": ["…"] } } }
 ```
 
-`others` lists every instance at head that the change did not touch, with its leaf,
-so that the details panel and the map can show them. `sources` holds the text of each
-example at head, as section 7.3 needs it.
+`others` lists every instance at head that the pattern does not report as added or
+changed, with its leaf, so that the details panel and the map can show them. A changed
+instance that a more specific pattern reports is among the others of the broader one.
+An instance is changed when one of its files changed or it binds to another leaf. Each
+norm carries the words that say an instance has it and lacks it, and each instance
+carries `lacks`, every norm it lacks at head, so that the details panel can mark a norm
+an instance lacked before the change apart from a departure, and `companions`, its
+companion in each other pattern that has one. Each instance also carries
+`compare`, the rows of section 7.3 that align it with each other type whose source the
+pattern carries, by that type's name, and `sources` holds the text of the reported
+instances as well as their examples, since the left column of the compare view needs
+the instance's whole type and not only its hunks. Phases 1 to 3 carry everything
+above except `memberNorms` and `memberDepartures`.
 
 The changeset also gains `NewPatterns`, the patterns of section 4.5, each with its
 keys, its name from its first key, and its instances with their leaves.
@@ -351,16 +378,17 @@ Each new or changed instance gets two examples from the pattern's other instance
 
 - The **nearest**: the instance with the most features in common with it, measured as
   the share of their combined features that both have. Ties go to an instance in the
-  same leaf, then to the one whose key type arguments share the longest namespace tail
-  with the instance's, so a consumer of a billing event is compared with another
-  consumer of a billing event.
+  same leaf, then to the one whose key type arguments share the most leading namespace
+  segments with the instance's, so a consumer of a billing event is compared with
+  another consumer of a billing event, then to the first by name.
 - The **typical**: the instance with the highest total of that measure against all
   the others, which is the instance most like the pattern as a whole. It is the same
   for every instance of the pattern.
 
-When the two are the same type, the typical one is the one after it in the order. The
-examples are computed at head, so that an example is code that exists after the change,
-but never from the change's own new instances.
+When the two are the same type, the typical one is the one after it in the order, and
+so it is when the typical is the instance itself. The examples are computed at head, so
+that an example is code that exists after the change, but never from the change's own
+new instances. A changed instance can be an example, as it was code before the change.
 
 Each example's source at head is carried in the changeset, up to 300 lines, so that a
 changeset published as an artifact can show it without the server. A longer type is
@@ -408,10 +436,13 @@ there rather than opening in the panel.
   constructor, then members paired by name, then the remaining members paired by
   shape, which spec section 3.1 defines without the name, so that two controller
   actions with the same signature and attributes pair however they are named. A member
-  with no counterpart has a row to itself.
+  with no counterpart has a row to itself, which follows the row of the member before
+  it on its own side. The tool aligns the rows when it builds the changeset, so that
+  the alignment is tested with the rest, and the viewer only draws them.
 - A departure is marked on the row that shows it, such as the constructor row for an
   injected type that is missing, or an action's row for an attribute its member norm
-  expects. An unusual trait is marked on the declaration's row.
+  expects. An unusual trait, and a departure that no member shows, such as a missing
+  test, is marked on the declaration's row.
 - A picker above the right column switches between the nearest, the typical and any
   other instance whose source the changeset carries.
 
@@ -432,8 +463,11 @@ The Changes panel's title gains **Patterns** beside Path, Changes, Glossary and 
 It lists the patterns of the changeset, most departures first, each with its new and
 changed instances, their departures and their leaves. Hovering a pattern outlines the
 blocks that hold its instances, new and changed ones apart from the rest, since a
-pattern is not a block and the map has no other way to show it. While the switch is
-on, each block carries a badge counting the new and changed instances it holds.
+pattern is not a block and the map has no other way to show it: a block with a new or
+changed instance has a solid outline, and a block with only other instances a dashed
+one. While the switch is on, each block carries a badge, ◇ and a count, of the new and
+changed instances it holds, those of patterns new in this change among them. A pattern
+step on the path, a chip and the details panel name a pattern as the switch does.
 
 After them, under **New in this change**, the switch lists the patterns of section
 4.5, each named from its first key with its instances and their leaves. Hovering one
@@ -443,18 +477,30 @@ a review.
 
 ### 7.6 Elsewhere
 
-- In the glossary, an added type that is an instance of a pattern names it.
+- In the glossary, an added type that is an instance of a pattern names it, and
+  opens it in the details panel. One that is an instance of a pattern new in this
+  change names that pattern too, and opens the Patterns switch.
 - In the new concepts notice, an `unsorted` type that is an instance of a pattern
   names the leaf of its nearest example, and placement receives that leaf as a hint.
+  The hint names the pattern the type would be reported under, and its nearest
+  instance among those a leaf holds, chosen as section 6 chooses examples.
 
 ## 8. Claude's part
 
 Claude names each discovered pattern and writes its purpose in one sentence, given its
-keys and the source of three instances. The request is keyed `pattern:<keys>`, made
-once per base commit through the narrative pipeline, and cached with it. An answer
-that cites a file other than the three is discarded, and the pattern is named from its
-first key, as "implements `IConsumer<>`", which is also the name while the answer is
-pending. A map entry's name and purpose win over Claude's.
+keys and the source of three instances. The three are the pattern's **samples**: its
+most typical instances at base, by the order of section 6, carried in the changeset
+as `samples`, with their source read at base and cut at 80 lines. The request is
+keyed `pattern:<keys>` and made through the narrative pipeline right after the
+summary, since the name shows on every chip. Its prompt depends on the base alone, so
+the narrative cache, which keys a request by its prompt, makes it once per base
+commit. An answer that cites a file other than the three, or none, or gives a name
+longer than 40 characters, is discarded, and the pattern is named from its first key,
+as "implements `IConsumer<>`", which is also the name while the answer is pending. A
+map entry's name and purpose each win over Claude's, and a pattern whose entry gives
+both is not asked about. A pattern new in this change is not named by Claude, since
+its keys are all the review knows of it. The details panel marks what Claude wrote,
+with the **regenerate** action of any narrative.
 
 Claude does not judge departures or say whether an instance is a good one. A sentence
 that a departure is harmless invites the reviewer to accept a difference they have not
@@ -464,10 +510,13 @@ states each share, says what such a sentence would.
 ## 9. The API and the viewer
 
 The facts gain `traits` on each type and aggregate `externalRefs` by referenced type,
-as section 3.3 describes, and their declarations gain `attributes`, as section 3.4
+as section 3.3 describes, and list the patterns found among their types as
+`patterns`, each with its norms and the mean number of norms its own instances lack, so that the check and the changeset read them from one place, and their declarations gain `attributes`, as section 3.4
 does. The map schema gains `patterns`. The changeset gains `Patterns` and
-`NewPatterns`, the path gains pattern steps, and a changeset published as an artifact
-carries all of it, since none of it needs the server.
+`NewPatterns`, the path gains pattern steps, the glossary's terms gain `patterns`, and
+a changeset published as an artifact carries all of it, since none of it needs the
+server. Claude's names arrive as narrative events, which carry a `name` for a
+pattern, so a published changeset names its patterns from their first keys.
 
 No endpoint is added or changed.
 
@@ -514,9 +563,10 @@ suite references no framework it does not already use. The tests state:
   a row of its own.
 
 The `Sample` suite checks traits and discovery on the sample solution once per run,
-where the compilation is already paid for. The sample gains five consumers, so that it
-has a pattern with norms, and three handlers with validators for their commands, so
-that it has companions.
+where the compilation is already paid for. The sample has five consumers of payment
+events, four of which take the outbox, so that it has a pattern with norms.
+Companions are tested on snippets, since a companion norm needs five handlers and the
+sample gains nothing from them that the snippets do not show.
 
 ## 11. Changes to other documents
 

@@ -5,12 +5,13 @@ namespace Vibecheck.Assist;
 
 /// <summary>
 /// Represents one request for narratives: the changed edges and nodes of one level or one view, or of part of one
-/// when it has more than a batch holds, the terms of one block that have no documentation summary, or the summary
-/// of the whole changeset. See <c>docs/review-workflow.md</c> section 6.2 and <c>docs/attention.md</c> section 8.3.
+/// when it has more than a batch holds, the terms of one block that have no documentation summary, the name and
+/// purpose of one pattern, or the summary of the whole changeset. See <c>docs/review-workflow.md</c> section 6.2,
+/// <c>docs/attention.md</c> section 8.3 and <c>docs/patterns.md</c> section 8.
 /// </summary>
-/// <param name="Id">Identifies the batch within its plan, such as <c>summary</c>, <c>level:root/1</c>, <c>view:by-concern/1</c> or <c>term:billing.core/1</c>.</param>
-/// <param name="Kind">One of <c>summary</c>, <c>level</c>, <c>view</c> and <c>term</c>.</param>
-/// <param name="Location">The level or view whose blocks the batch explains, the block whose terms it defines, or <see cref="Identifiers.Root"/> for the summary.</param>
+/// <param name="Id">Identifies the batch within its plan, such as <c>summary</c>, <c>level:root/1</c>, <c>view:by-concern/1</c>, <c>term:billing.core/1</c> or <c>pattern:consumer</c>.</param>
+/// <param name="Kind">One of <c>summary</c>, <c>level</c>, <c>view</c>, <c>term</c> and <c>pattern</c>.</param>
+/// <param name="Location">The level or view whose blocks the batch explains, the block whose terms it defines, the pattern it names, or <see cref="Identifiers.Root"/> for the summary.</param>
 /// <param name="Edges">The changed edges the batch explains.</param>
 /// <param name="Nodes">The changed nodes the batch explains, each a child of the level.</param>
 public sealed record NarrativeBatch(string Id, string Kind, string Location, IReadOnlyList<DrawnEdge> Edges, IReadOnlyList<string> Nodes)
@@ -18,11 +19,15 @@ public sealed record NarrativeBatch(string Id, string Kind, string Location, IRe
     /// <summary>Gets the terms the batch defines, each a declaration of the block without a documentation summary.</summary>
     public IReadOnlyList<Term> Terms { get; init; } = [];
 
+    /// <summary>Gets the pattern the batch names, or <see langword="null"/> for a batch of any other kind.</summary>
+    public PatternChange? Pattern { get; init; }
+
     /// <summary>Gets the keys of the narratives the batch asks for.</summary>
     public IEnumerable<string> Keys => Kind switch
     {
         "summary" => [Narrative.SummaryKey],
         "term" => Terms.Select(t => t.Key),
+        "pattern" => [Narrative.PatternKey(Pattern!.Keys)],
         _ => Edges.Select(e => e.Key).Concat(Nodes.Select(Narrative.NodeKey)),
     };
 }
@@ -39,10 +44,11 @@ public static class NarrativePlanner
     public const int BatchSize = 24;
 
     /// <summary>
-    /// Returns the batches of a changeset in the order they are requested: the summary, then the location the viewer
-    /// opens on, which is the top level's first view or else the top level, then the other levels and views
-    /// breadth first, larger changes first within each depth, and last the glossary's terms without a documentation
-    /// summary, by block. Locations with no changed edge or node are left out.
+    /// Returns the batches of a changeset in the order they are requested: the summary, then the name and purpose of
+    /// each pattern whose map entry does not give both, then the location the viewer opens on, which is the top level's
+    /// first view or else the top level, then the other levels and views breadth first, larger changes first within
+    /// each depth, and last the glossary's terms without a documentation summary, by block. Locations with no changed
+    /// edge or node are left out, and so is a pattern with no instance at base to name it from.
     /// </summary>
     public static List<NarrativeBatch> Plan(Changeset changeset, int batchSize = BatchSize)
     {
@@ -74,6 +80,12 @@ public static class NarrativePlanner
             .ThenBy(l => l.Kind, StringComparer.Ordinal).ThenBy(l => l.Id, StringComparer.Ordinal);
 
         var batches = new List<NarrativeBatch> { new(Narrative.SummaryKey, "summary", Identifiers.Root, [], []) };
+        // A pattern's name shows on every chip of its instances, so it is asked for early, and its request is cheap.
+        foreach (var p in changeset.Patterns.Where(p => p.Samples.Count > 0))
+        {
+            var entry = map.Patterns.FirstOrDefault(e => e.Id == p.Id);
+            if (entry?.Name is null || entry.Purpose is null) batches.Add(new NarrativeBatch("pattern:" + p.Id, "pattern", p.Id, [], []) { Pattern = p });
+        }
         foreach (var l in ordered)
         {
             var items = l.Edges.Select(e => (Edge: (DrawnEdge?)e, Node: (string?)null)).Concat(l.Nodes.Select(n => (Edge: (DrawnEdge?)null, Node: (string?)n))).ToList();

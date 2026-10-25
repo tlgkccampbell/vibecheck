@@ -17,7 +17,7 @@ public class ExclusionTests
         extraTypes: [new TypeInfo(Regex, "Example.A", [RegexFile], Generator: "RegexGenerator")],
         extraFiles: [new SourceFile(RegexFile, "h9", "A", "RegexGenerator")],
         extraDependencies: [new RawDependency(TestData.Thing, Regex, "calls", Regex + ".IsWordChar", TestData.X1, 30)],
-        extraExternals: [new ExternalReference(Regex, "System.Runtime.Intrinsics", "System.Runtime.Intrinsics.Vector128", RegexFile, 5)]);
+        extraExternals: [new ExternalReference(Regex, "System.Runtime.Intrinsics", "System.Runtime.Intrinsics.Vector128", "references", "System.Runtime.Intrinsics.Vector128", RegexFile, 5)]);
 
     private static ArchitectureMap Excluding(params string[] patterns)
     {
@@ -104,7 +104,7 @@ public class ExclusionTests
         var analysis = TestData.Analysis(
             extraTypes: [new TypeInfo("Example.Tests.ThingTests", "Example.Tests", ["tests/ThingTests.cs"])],
             extraFiles: [new SourceFile("tests/ThingTests.cs", "h8", "Example.Tests")],
-            extraExternals: [new ExternalReference("Example.Tests.ThingTests", "xunit.v3.assert", "Xunit.Assert", "tests/ThingTests.cs", 1)]);
+            extraExternals: [new ExternalReference("Example.Tests.ThingTests", "xunit.v3.assert", "Xunit.Assert", "references", "Xunit.Assert", "tests/ThingTests.cs", 1)]);
         analysis = analysis with { Projects = [.. analysis.Projects, new ProjectInfo("Example.Tests", "Example.Tests", "tests")] };
         var map = Skeleton.Build(analysis, "Example.sln");
         Assert.Equal(["System.**"], map.Exclude);

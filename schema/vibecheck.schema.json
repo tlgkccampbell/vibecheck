@@ -11,6 +11,7 @@
     "solution": { "type": "string", "description": "The solution file, relative to the repository root." },
     "exclude": { "type": "array", "items": { "type": "string" }, "description": "Type patterns naming the types that are not part of the system. An excluded type is not partitioned and creates no edges." },
     "tests": { "type": "array", "items": { "type": "string" }, "description": "Type patterns naming the test types. A test type binds to nothing and creates no edges, but the analysis keeps it as evidence about the system. A type that exclude also matches is excluded. See docs/tests.md section 3.1." },
+    "patterns": { "type": "array", "items": { "$ref": "#/$defs/pattern" }, "description": "Entries that name, declare or ignore the patterns a review finds among the types. See docs/patterns.md section 4.4." },
     "nodes": {
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/identifier" },
@@ -41,6 +42,28 @@
         "note": { "type": "string" },
         "bind": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Patterns over fully qualified type names, with * (no dots) and ** (any) wildcards and an optional Assembly:: qualifier. Present on leaves only." }
       }
+    },
+    "key": { "type": "string", "pattern": "^(inherits|implements|attribute|suffix):.*\\S", "description": "A trait that types share: inherits:, implements: or attribute: and the open name of a type, such as implements:MassTransit.IConsumer<>, or suffix: and the text a type's name ends with." },
+    "pattern": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "keys"],
+          "properties": {
+            "id": { "$ref": "#/$defs/segment" },
+            "name": { "type": "string" },
+            "purpose": { "type": "string" },
+            "keys": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/key" }, "description": "The keys every instance carries. The entry names the pattern discovery finds with these keys, or declares it." }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ignore"],
+          "properties": { "ignore": { "$ref": "#/$defs/key", "description": "A key whose group discovery drops, such as a marker interface every message carries." } }
+        }
+      ]
     },
     "view": {
       "type": "object",

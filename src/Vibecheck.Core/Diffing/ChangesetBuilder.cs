@@ -17,18 +17,20 @@ public static class ChangesetBuilder
         var changes = GitHunks.Changes(repo, baseRev, headRev);
         if (renames is not null) changes = GitHunks.Reconcile(changes, renames);
         var texts = GitHunks.Texts(repo, changes);
-        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changes, mark: false), changes, texts);
+        return Build(baseFacts, headFacts, GitHunks.Collect(repo, baseRev, headRev, changes, mark: false), changes, texts, paths => GitHunks.TextsAt(repo, headRev, paths));
     }
 
     /// <summary>
     /// Combines a base and a head facts document into a changeset document, attaching the hunks given, if any. The git
     /// changes, when given, pair renamed files and add the changed files that neither analysis lists. When the files'
     /// texts are given, the hunks are marked trivial by every rule of <see cref="TrivialEdits"/> first; otherwise they
-    /// are taken as marked.
+    /// are taken as marked. The patterns carry the source of their instances and examples when <paramref name="read"/>
+    /// reads the texts of files at head, and otherwise only that of files whose texts are given.
     /// </summary>
     public static Changeset Build(Facts baseFacts, Facts headFacts, List<FileHunks>? hunks = null, IReadOnlyList<GitChange>? changes = null,
-        IReadOnlyDictionary<string, (string? Base, string? Head)>? texts = null)
+        IReadOnlyDictionary<string, (string? Base, string? Head)>? texts = null, Func<IReadOnlyCollection<string>, IReadOnlyDictionary<string, string>>? read = null)
     {
+        read ??= paths => paths.Where(p => texts?.GetValueOrDefault(p).Head is not null).ToDictionary(p => p, p => texts![p].Head!, StringComparer.Ordinal);
         var files = DiffFiles(baseFacts, headFacts, changes ?? []);
         var declarations = DeclarationDiff.Diff(baseFacts.Declarations, headFacts.Declarations);
         var marked = texts is null ? hunks ?? [] : TrivialEdits.Mark(hunks ?? [], texts, baseFacts, headFacts, declarations, files);
@@ -50,6 +52,8 @@ public static class ChangesetBuilder
             Hunks = signalled,
             Decisions = tested,
             Tests = tests,
+            Patterns = PatternChanges.Build(baseFacts, headFacts, files, read),
+            NewPatterns = PatternChanges.New(baseFacts, headFacts),
         };
         return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views), Glossary = Glossary.Build(changeset, baseFacts, headFacts, declarations) };
     }

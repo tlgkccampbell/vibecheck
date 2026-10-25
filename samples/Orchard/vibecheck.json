@@ -17,7 +17,8 @@
     "billing.integrations.stripe": { "name": "Stripe", "purpose": "Stand-in for the Stripe SDK, with its generated serializer context.", "bind": ["Orchard.Billing.Integrations.Stripe.**"] },
     "billing.ledger": { "name": "Ledger", "purpose": "Double-entry ledger, including the invoice record.", "bind": ["Orchard.Billing.Ledger.**"] },
     "notifications": { "name": "Notifications", "purpose": "Outbound messages raised by events.", "category": "integration" },
-    "notifications.dispatch": { "name": "Dispatch", "purpose": "Routes events to the bus.", "bind": ["Orchard.Notifications.Dispatch.**"] },
+    "notifications.consumers": { "name": "Consumers", "purpose": "Handlers of payment events from the bus.", "bind": ["Orchard.Notifications.Consumers.**"] },
+    "notifications.dispatch": { "name": "Dispatch", "purpose": "Routes events to the bus and holds the outbox.", "bind": ["Orchard.Notifications.Dispatch.**"] },
     "notifications.templates": { "name": "Templates", "purpose": "Message templates per event.", "bind": ["Orchard.Notifications.Templates.**"] },
     "shared": { "name": "Shared", "purpose": "Primitives with no business meaning.", "category": "foundation" },
     "shared.kernel": { "name": "Kernel", "purpose": "Result type, identifiers and the map attribute.", "bind": ["Vibecheck.VibecheckAttribute", "Orchard.Shared.Kernel.**"] },
@@ -26,7 +27,7 @@
   "views": {
     "by-concern": { "name": "By concern", "purpose": "The same leaves grouped by what they are for rather than by who owns them.", "level": "root", "groups": {
       "money": { "name": "Money", "purpose": "Everything that moves or records money.", "leaves": ["billing.core.invoices", "billing.core.payments", "billing.core.self", "billing.integrations.stripe", "billing.ledger"] },
-      "plumbing": { "name": "Plumbing", "purpose": "Primitives, messaging and outbound notifications.", "leaves": ["notifications.dispatch", "notifications.templates", "shared.kernel", "shared.messaging"] },
+      "plumbing": { "name": "Plumbing", "purpose": "Primitives, messaging and outbound notifications.", "leaves": ["notifications.consumers", "notifications.dispatch", "notifications.templates", "shared.kernel", "shared.messaging"] },
       "requests": { "name": "Requests", "purpose": "Where requests arrive and identities are checked.", "leaves": ["auth.sessions", "auth.tokens", "billing.api"] }
     } }
   },

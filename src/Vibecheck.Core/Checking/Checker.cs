@@ -78,12 +78,15 @@ public static class Checker
         var leavesOfFile = LeavesOfFiles(analysis, leafOf);
         var nodes = NodeMetrics(map, analysis, leafEdges, leafOf, boundBy);
         var (tests, testFiles) = TestTypes.Build(whole, exclusion, analysis, leafOf);
-        return new Facts
+        var types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, leafOf[t.Name], boundBy[t.Name], t.Files, t.Generator, t.Traits)).ToList();
+        var generated = analysis.Files.Where(f => f.Generator is not null).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var patterns = PatternDiscovery.Discover(map, types, generated, warnings);
+        var facts = new Facts
         {
             Commit = options.Commit,
             Map = map,
             Excluded = excluded,
-            Types = analysis.Types.Select(t => new TypeFact(t.Name, t.Assembly, leafOf[t.Name], boundBy[t.Name], t.Files, t.Generator)).ToList(),
+            Types = types,
             Files = analysis.Files.Select(f => new FileFact(f.Path, f.Hash, leavesOfFile.GetValueOrDefault(f.Path, []), f.Generator))
                 .Concat(testFiles).OrderBy(f => f.Path, StringComparer.Ordinal).ToList(),
             Dependencies = dependencies,
@@ -98,7 +101,9 @@ public static class Checker
             Declarations = analysis.Declarations.Where(d => known.Contains(d.Type)).ToList(),
             Sites = analysis.Sites.Where(s => known.Contains(s.FromType) && known.Contains(s.ToType)).ToList(),
             Tests = tests,
+            Patterns = patterns,
         };
+        return facts with { Patterns = PatternFeatures.WithNorms(facts) };
     }
 
     /// <summary>
@@ -278,7 +283,7 @@ public static class Checker
 
     /// <summary>
     /// Resolves each external reference to the external whose pattern matches its
-    /// assembly, aggregated per type and assembly. When several patterns match, the
+    /// assembly, aggregated per type and referenced type. When several patterns match, the
     /// one with the longest literal part wins, so that <c>System.Text.Json</c> beats
     /// <c>System.*</c>. An assembly no external binds is warned about once.
     /// </summary>
@@ -290,23 +295,23 @@ public static class Checker
             .ToList();
         var cache = new Dictionary<string, string?>(StringComparer.Ordinal);
         var result = new List<ExternalRefFact>();
-        foreach (var group in analysis.ExternalReferences.GroupBy(e => (e.FromType, e.Assembly)))
+        foreach (var group in analysis.ExternalReferences.GroupBy(e => (e.FromType, e.Assembly, e.Type)))
         {
-            var (fromType, assembly) = group.Key;
+            var (fromType, assembly, type) = group.Key;
             if (!cache.TryGetValue(assembly, out var external))
             {
                 external = patterns.FirstOrDefault(p => p.Regex.IsMatch(assembly)).Id;
                 cache[assembly] = external;
             }
             var first = group.First();
-            result.Add(new ExternalRefFact(fromType, assembly, first.Symbol, first.File, first.Line, group.Count(), external));
+            result.Add(new ExternalRefFact(fromType, assembly, type, first.Kind, first.Symbol, first.File, first.Line, group.Count(), external));
         }
         foreach (var assembly in cache.Where(kv => kv.Value is null).Select(kv => kv.Key).OrderBy(a => a, StringComparer.Ordinal))
         {
             var count = result.Where(e => e.Assembly == assembly).Sum(e => e.Count);
             warnings.Add($"assembly {assembly} is referenced {count} time(s) but no external binds it");
         }
-        return result.OrderBy(e => e.From, StringComparer.Ordinal).ThenBy(e => e.Assembly, StringComparer.Ordinal).ToList();
+        return result.OrderBy(e => e.From, StringComparer.Ordinal).ThenBy(e => e.Assembly, StringComparer.Ordinal).ThenBy(e => e.Type, StringComparer.Ordinal).ToList();
     }
 
     private static Regex AssemblyPattern(string pattern) =>

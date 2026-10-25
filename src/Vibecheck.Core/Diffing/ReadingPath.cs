@@ -7,9 +7,10 @@ namespace Vibecheck.Diffing;
 /// <summary>
 /// One step of the reading path, as <c>docs/attention.md</c> section 6 describes it. The tier is <c>first</c> for a
 /// surprise, <c>then</c> for the rest of the change, or <c>aside</c> for what the reviewer need not read. The kind is
-/// <c>edge</c>, <c>cycle</c>, <c>node</c>, <c>decision</c>, <c>file</c>, <c>more</c> for blocks the path had no room
-/// for, or <c>aside</c>. The target names what the step opens: an edge or a cycle's closing edge as
-/// <c>from→to</c> between the blocks of its location, a block, a decision or a file. The signal says in plain words
+/// <c>edge</c>, <c>cycle</c>, <c>node</c>, <c>decision</c>, <c>test</c>, <c>tests</c>, <c>pattern</c>, <c>file</c>,
+/// <c>more</c> for blocks the path had no room for, or <c>aside</c>. The target names what the step opens: an edge or a
+/// cycle's closing edge as <c>from→to</c> between the blocks of its location, a block, a decision, a test type, the
+/// instance of a pattern, or a file. The signal says in plain words
 /// why the step is where it is, and the files are the changed files the step names, which make it read when they are
 /// all reviewed.
 /// </summary>
@@ -23,6 +24,9 @@ public sealed record PathStep(string Id, string Tier, string Kind, string Target
 
     /// <summary>Gets the members of a cycle step.</summary>
     public List<string>? Members { get; init; }
+
+    /// <summary>Gets the identifier of the pattern whose norms a pattern step's instance departs from.</summary>
+    public string? Pattern { get; init; }
 }
 
 /// <summary>
@@ -177,6 +181,17 @@ public static class ReadingPath
             { Members = methods.Select(g => $"{DeclarationDiff.ShortName(g.Key, "method")}: {string.Join(", ", g.Select(s => KindText(s.Kind)).Distinct())}").ToList() });
         }
 
+        // Each added or changed instance of a pattern that departs from the pattern's norms is a step after the tests,
+        // the most departures first, then the largest pattern. See docs/patterns.md section 7.4.
+        var patternSteps = cs.Patterns.SelectMany(p => p.Instances.Where(i => i.Departures.Count > 0).Select(i => (Pattern: p, Instance: i)))
+            .OrderByDescending(x => x.Instance.Departures.Count).ThenByDescending(x => x.Pattern.Count).ThenBy(x => x.Instance.Type, StringComparer.Ordinal)
+            .Select(x => new PathStep($"pattern:{x.Pattern.Id}:{x.Instance.Type}", "first", "pattern", x.Instance.Type,
+                $"{DeclarationDiff.ShortName(x.Instance.Type, "type")} departs from {x.Pattern.Name}: "
+                    + string.Join(", ", x.Instance.Departures.Select(f => x.Pattern.Norms.First(n => n.Feature == f).Absence)),
+                filesOfType.GetValueOrDefault(x.Instance.Type, [])) { Pattern = x.Pattern.Id })
+            .ToList();
+        first.AddRange(patternSteps);
+
         // Set aside: files whose edits are trivial or generated, and files whose hunks are all consequences. They are
         // found first, so that the second tier lists neither them nor a block that holds nothing else.
         var trivial = changed.Where(f => hunksOf.GetValueOrDefault(f.Path)?.Reason is not null || (f.Status == "renamed" && f.BlobBase is not null && f.BlobBase == f.BlobHead)).Select(f => f.Path).ToList();
@@ -202,6 +217,7 @@ public static class ReadingPath
         var listedTests = new HashSet<string>(StringComparer.Ordinal);
         var decisionSteps = new List<PathStep>();
         var fileSteps = new List<PathStep>();
+        var leafOfType = cs.Types.ToDictionary(t => t.Name, t => t.LeafHead, StringComparer.Ordinal);
         foreach (var (leaf, level, _) in leaves.OrderBy(l => levels.IndexOf(l.Level)).ThenByDescending(l => l.Size).ThenBy(l => l.Leaf, StringComparer.Ordinal))
         {
             var files = FilesUnder(leaf);
@@ -216,6 +232,16 @@ public static class ReadingPath
             if (tests.Count > 0) parts.Add(Plural(tests.Count, "test file", "test files"));
             var testSignals = tests.Sum(p => hunksOf.GetValueOrDefault(p)?.Hunks.Sum(h => h.Signals?.Count ?? 0) ?? 0);
             if (testSignals > 0) parts.Add(Plural(testSignals, "test signal", "test signals"));
+            // The instances of patterns in the leaf are counted on its step, whether or not they have steps of their own.
+            foreach (var p in cs.Patterns)
+            {
+                var mine = p.Instances.Where(i => leafOfType.GetValueOrDefault(i.Type) == leaf).ToList();
+                foreach (var (status, word) in new[] { ("added", "new"), ("changed", "changed") })
+                {
+                    var n = mine.Count(i => i.Status == status);
+                    if (n > 0) parts.Add($"{n} {word} {(n == 1 ? "instance" : "instances")} of {p.Name}");
+                }
+            }
             listedTests.UnionWith(tests);
             var step = new PathStep($"node:{leaf}", "then", "node", leaf, $"{Name(leaf)}: {string.Join(" · ", parts)}", [.. files, .. tests]) { Under = level == Identifiers.Root ? null : level };
             leafSteps.Add(step);
@@ -251,10 +277,11 @@ public static class ReadingPath
             then.Add(fs);
         }
 
-        // The path holds at most forty steps in its first two tiers. Files go first, then decisions, then whole blocks,
-        // which are kept as one count so that their files still count toward the progress.
+        // The path holds at most forty steps in its first two tiers. Files go first, then test steps, then the instances of
+        // patterns, which their leaves' steps still count, then decisions, then whole blocks, which are kept as one count so
+        // that their files still count toward the progress.
         var dropped = new List<PathStep>();
-        foreach (var pool in new[] { fileSteps, testSteps, decisionSteps, leafSteps })
+        foreach (var pool in new[] { fileSteps, testSteps, patternSteps, decisionSteps, leafSteps })
         {
             while (first.Count + then.Count > MostSteps && pool.Count > 0)
             {

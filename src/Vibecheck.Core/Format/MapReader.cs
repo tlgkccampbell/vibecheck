@@ -57,6 +57,7 @@ public static class MapReader
             string? solution = null;
             List<string>? exclude = null;
             List<string>? tests = null;
+            var patterns = new List<PatternSpec>();
             var nodes = new SortedDictionary<string, NodeSpec>(StringComparer.Ordinal);
             var views = new SortedDictionary<string, ViewSpec>(StringComparer.Ordinal);
             var externals = new SortedDictionary<string, ExternalSpec>(StringComparer.Ordinal);
@@ -76,6 +77,9 @@ public static class MapReader
                         break;
                     case "tests":
                         tests = ReadStringList(p.Value, "tests", errors);
+                        break;
+                    case "patterns":
+                        patterns = ReadPatterns(p.Value, errors);
                         break;
                     case "nodes":
                         ReadObjectMap(p.Value, "nodes", errors, (id, el) => nodes[id] = ReadNode(id, el, errors));
@@ -99,6 +103,7 @@ public static class MapReader
                 Solution = solution ?? "",
                 Exclude = exclude ?? [],
                 Tests = tests ?? [],
+                Patterns = patterns,
                 Nodes = nodes,
                 Views = views,
                 Externals = externals,
@@ -140,6 +145,44 @@ public static class MapReader
         if (name is null) errors.Add($"nodes.{id}.name is required");
         if (bind is { Count: 0 }) errors.Add($"nodes.{id}.bind must not be empty");
         return new NodeSpec { Name = name ?? id, Purpose = purpose, Category = category, Note = note, Bind = bind };
+    }
+
+    /// <summary>Reads the patterns list, with each entry's keys checked by <see cref="PatternKeys.Problem"/> and its identifier checked for uniqueness.</summary>
+    private static List<PatternSpec> ReadPatterns(JsonElement el, List<string> errors)
+    {
+        var list = new List<PatternSpec>();
+        if (el.ValueKind != JsonValueKind.Array) { errors.Add("patterns must be an array of objects"); return list; }
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var i = 0;
+        foreach (var item in el.EnumerateArray())
+        {
+            var path = $"patterns[{i++}]";
+            if (item.ValueKind != JsonValueKind.Object) { errors.Add($"{path} must be an object"); continue; }
+            string? id = null, name = null, purpose = null, ignore = null;
+            List<string>? keys = null;
+            foreach (var p in item.EnumerateObject())
+            {
+                switch (p.Name)
+                {
+                    case "id": id = ReadString(p.Value, path + ".id", errors); break;
+                    case "name": name = ReadString(p.Value, path + ".name", errors); break;
+                    case "purpose": purpose = ReadString(p.Value, path + ".purpose", errors); break;
+                    case "keys": keys = ReadStringList(p.Value, path + ".keys", errors); break;
+                    case "ignore": ignore = ReadString(p.Value, path + ".ignore", errors); break;
+                    default: errors.Add($"unknown property \"{p.Name}\" in {path}"); break;
+                }
+            }
+            if ((keys is null) == (ignore is null)) errors.Add($"{path} must have either keys or ignore");
+            if (keys is { Count: 0 }) errors.Add($"{path}.keys must not be empty");
+            foreach (var key in (keys ?? []).Append(ignore).OfType<string>())
+                if (PatternKeys.Problem(key) is { } problem) errors.Add($"{path}: {problem}");
+            if (keys is not null && id is null) errors.Add($"{path}.id is required with keys");
+            if (ignore is not null && (id ?? name ?? purpose) is not null) errors.Add($"{path}: an entry with ignore takes no id, name or purpose");
+            if (id is not null && (!Identifiers.IsValid(id) || id.Contains('.'))) errors.Add($"{path}.id \"{id}\" is not a single-segment identifier");
+            else if (id is not null && !ids.Add(id)) errors.Add($"{path}.id \"{id}\" is used by another pattern");
+            list.Add(new PatternSpec { Id = id, Name = name, Purpose = purpose, Keys = keys, Ignore = ignore });
+        }
+        return list;
     }
 
     private static ViewSpec ReadView(string id, JsonElement el, List<string> errors)

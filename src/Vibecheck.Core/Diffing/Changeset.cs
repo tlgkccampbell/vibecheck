@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Vibecheck.Analysis;
 using Vibecheck.Checking;
 using Vibecheck.Model;
 
@@ -51,7 +52,111 @@ public sealed record Changeset
 
     /// <summary>Gets the test types with a changed file, ordered by name, as <see cref="TestChanges"/> lists them.</summary>
     public List<TestTypeChange> Tests { get; init; } = [];
+
+    /// <summary>Gets the patterns found at base that have an added or changed instance, as <see cref="PatternChanges"/> lists them.</summary>
+    public List<PatternChange> Patterns { get; init; } = [];
+
+    /// <summary>Gets the patterns new in this change, as <see cref="PatternChanges.New"/> finds them.</summary>
+    public List<NewPattern> NewPatterns { get; init; } = [];
 }
+
+/// <summary>
+/// A pattern new in a change: one that discovery finds among the types the change added, by keys that nothing at base
+/// carries. It has no norms and no examples, since every instance is new. See <c>docs/patterns.md</c> section 4.5.
+/// </summary>
+/// <param name="Id">The pattern's identifier, its keys joined.</param>
+/// <param name="Name">The pattern's name, from its first key.</param>
+/// <param name="Keys">The keys every instance carries.</param>
+/// <param name="Instances">The instances at head, with their leaves, ordered by name.</param>
+public sealed record NewPattern(string Id, string Name, IReadOnlyList<string> Keys, List<PatternOther> Instances);
+
+/// <summary>
+/// A pattern found at base, as <see cref="PatternFact"/> describes it, with the instances at head that the change added
+/// or changed. See <c>docs/patterns.md</c> section 5.7.
+/// </summary>
+/// <param name="Id">The pattern's identifier.</param>
+/// <param name="Name">The pattern's name.</param>
+/// <param name="Purpose">The pattern's purpose, or <see langword="null"/>.</param>
+/// <param name="By">What named the pattern, as <see cref="PatternFact.By"/> says.</param>
+/// <param name="Keys">The keys every instance carries.</param>
+/// <param name="Count">The number of instances at base.</param>
+/// <param name="Instances">The added and changed instances at head that the pattern reports, ordered by name.</param>
+/// <param name="Others">Every other instance at head, ordered by name.</param>
+public sealed record PatternChange(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, int Count, List<PatternInstance> Instances, List<PatternOther> Others)
+{
+    /// <summary>Gets the pattern's norms at base, most shared first.</summary>
+    public List<NormChange> Norms { get; init; } = [];
+
+    /// <summary>
+    /// Gets the instances at base that Claude names the pattern from, the most typical first, as
+    /// <see cref="PatternExamples.Typical"/> orders them. They depend on the base alone, so that the request is the same
+    /// for every review of one base. See <c>docs/patterns.md</c> section 8.
+    /// </summary>
+    public List<string> Samples { get; init; } = [];
+
+    /// <summary>Gets the source at head of each instance the pattern reports and of each of their examples, by the type's name.</summary>
+    public SortedDictionary<string, TypeSource> Sources { get; init; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// The source of a type at head, from the file that declares most of it: the lines from its declaration's first line,
+/// at most <see cref="PatternExamples.MostLines"/> of them. A longer type is cut at its last whole member within the
+/// limit, and is marked as cut.
+/// </summary>
+public sealed record TypeSource(string File, int First, List<string> Lines, bool Cut);
+
+/// <summary>
+/// A row of the compare view, as <see cref="PatternExamples.Align"/> aligns two types: a member of the instance on the
+/// left and a member of the other type on the right, each with its name and its lines in the file of its
+/// <see cref="TypeSource"/>, either side empty when the member has no counterpart. The marks are the words for the
+/// instance's departures and unusual traits that the row shows.
+/// </summary>
+public sealed record CompareRow(string? Left, LineRange? LeftLines, string? Right, LineRange? RightLines)
+{
+    /// <summary>Gets the words for the departures and unusual traits the row shows, or <see langword="null"/> when it shows none.</summary>
+    public List<string>? Marks { get; init; }
+}
+
+/// <summary>The examples of an instance, as <see cref="PatternExamples.Choose"/> chooses them, either absent when the pattern has no other instance to give.</summary>
+public sealed record ExampleChoice(string? Nearest, string? Typical);
+
+/// <summary>
+/// A norm of a pattern, as <see cref="NormFact"/> describes it, with the words that say an instance has it and the
+/// words that say an instance lacks it, as <see cref="PatternFeatures.Text"/> and <see cref="PatternFeatures.Absence"/>
+/// give them.
+/// </summary>
+public sealed record NormChange(string Feature, int Share, string Text, string Absence);
+
+/// <summary>
+/// An instance of a pattern at head that the change added or changed. The status is <c>added</c> or <c>changed</c>.
+/// See <c>docs/patterns.md</c> sections 5.3 to 5.5.
+/// </summary>
+public sealed record PatternInstance(string Type, string Status)
+{
+    /// <summary>
+    /// Gets the norms the change is responsible for the instance lacking: every norm an added instance lacks, and every
+    /// norm a changed instance had at base and lacks at head, in the order of the pattern's norms.
+    /// </summary>
+    public List<string> Departures { get; init; } = [];
+
+    /// <summary>Gets every norm the instance lacks at head, including those it lacked before the change, in the order of the pattern's norms.</summary>
+    public List<string> Lacks { get; init; } = [];
+
+    /// <summary>Gets the traits of the instance, as keys, that no other instance of the pattern has.</summary>
+    public List<string> Unusual { get; init; } = [];
+
+    /// <summary>Gets the instance's companion in each other pattern that has one, by that pattern's identifier.</summary>
+    public SortedDictionary<string, string> Companions { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Gets the instance's nearest and typical examples.</summary>
+    public ExampleChoice Examples { get; init; } = new(null, null);
+
+    /// <summary>Gets the rows that align the instance with each other type whose source the pattern carries, by that type's name.</summary>
+    public SortedDictionary<string, List<CompareRow>> Compare { get; init; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>An instance of a pattern at head that the pattern does not report as added or changed, with the leaf it binds to at head.</summary>
+public sealed record PatternOther(string Type, string Leaf);
 
 public sealed record StructuralDiff
 {

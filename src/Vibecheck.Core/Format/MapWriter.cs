@@ -8,7 +8,8 @@ namespace Vibecheck.Format;
 /// <summary>
 /// Writes <c>vibecheck.json</c> in canonical form. Each node, external and group entry
 /// occupies one line, the exclude list occupies one line in the order written, and so
-/// does the tests list, which is written only when it holds a pattern. Nodes, views,
+/// does the tests list, which is written only when it holds a pattern. The patterns list
+/// is written only when it holds an entry, one entry per line in the order written. Nodes, views,
 /// groups and externals are sorted by identifier, and keys appear in the schema's order. The output uses two-space indentation, LF line endings and
 /// ends with a newline.
 /// </summary>
@@ -28,6 +29,17 @@ public static class MapWriter
         sb.Append("  \"solution\": ").Append(Str(map.Solution)).Append(",\n");
         sb.Append("  \"exclude\": ").Append(StrList(map.Exclude)).Append(",\n");
         if (map.Tests.Count > 0) sb.Append("  \"tests\": ").Append(StrList(map.Tests)).Append(",\n");
+        if (map.Patterns.Count > 0)
+        {
+            sb.Append("  \"patterns\": [");
+            AppendRecords(sb, "    ", map.Patterns.Select(p => Record(
+                ("id", OptStr(p.Id)),
+                ("name", OptStr(p.Name)),
+                ("purpose", OptStr(p.Purpose)),
+                ("keys", p.Keys is null ? null : StrList(p.Keys)),
+                ("ignore", OptStr(p.Ignore)))));
+            sb.Append("],\n");
+        }
 
         sb.Append("  \"nodes\": {");
         AppendRecords(sb, "    ", map.Nodes.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv =>

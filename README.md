@@ -21,7 +21,12 @@ Tests in a review are designed in [docs/tests.md](docs/tests.md); all three of i
 phases, test types, tests on decisions and test signals, are built.
 Patterns, the roles many types play, such as controllers, handlers and consumers, and the
 comparison of a new instance with the existing ones, are designed in
-[docs/patterns.md](docs/patterns.md); none of its phases is built.
+[docs/patterns.md](docs/patterns.md); its first four phases are built: traits, patterns found at base, the map's
+`patterns` list, norms and departures, the check's report of patterns, a chip on a changed type that names its
+pattern and counts its departures, the pattern's norms in the details panel, a step on the reading path for
+each instance that departs, a compare view that sets an instance beside its nearest or typical example, member
+by member, a Patterns switch that lists the patterns, outlines their blocks and lists the patterns new in a change,
+Claude's names and purposes for patterns, and patterns in the glossary and as hints for placing unsorted types.
 
 ## Layout
 

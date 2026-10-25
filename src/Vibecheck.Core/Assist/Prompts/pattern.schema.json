@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "text", "files"],
+  "properties": {
+    "name": { "type": "string" },
+    "text": { "type": "string" },
+    "files": { "type": "array", "items": { "type": "string" } }
+  }
+}

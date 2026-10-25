@@ -101,6 +101,16 @@ public static class GitHunks
     }
 
     /// <summary>
+    /// Returns the texts of files at a revision, by path, leaving out a path the revision does not hold. The paths are
+    /// relative to <paramref name="repo"/>, which may be any directory inside the repository.
+    /// </summary>
+    public static Dictionary<string, string> TextsAt(string repo, string rev, IReadOnlyCollection<string> paths)
+    {
+        var blobs = ReadBlobs(repo, paths.Select(p => $"{rev}:./{p}").ToList());
+        return paths.Where(p => blobs.ContainsKey($"{rev}:./{p}")).ToDictionary(p => p, p => blobs[$"{rev}:./{p}"], StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Returns the hunks of every file that changed between two revisions. The changes are those that
     /// <see cref="Changes"/> returns for the same revisions. The paths returned are relative to <paramref name="repo"/>,
     /// which may be any directory inside the repository, and each file's hunks are keyed by its path at head, or at base

@@ -8,6 +8,8 @@ These are the types to place, by full name:
 
 {{types}}
 
+A type that is an instance of a pattern, a role that several types play, such as a message consumer or a controller, names the pattern and the instance most like it, with the leaf that holds that instance. Types that play one role often sit with their peers, so that leaf is a strong hint, but it is not a rule: a type belongs where the concept it serves belongs.
+
 The listing below shows the units these types belong to, for context. A unit is a type together with the helpers that only it uses, so a type usually belongs with the rest of its unit. Under each `=== Namespace ===` header, a unit starts with its head type's name, and the type's full name is the header's namespace, a dot, and that name. The line starting with `+` names the unit's other types. The lines starting with `->` and `<-` name the units it references most and is referenced by most, with counts; most of those are already placed, and they say where the unit belongs.
 
 {{listing}}

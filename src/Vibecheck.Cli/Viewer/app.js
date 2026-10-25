@@ -163,6 +163,28 @@
     TYPES_BY_LEAF.get(leaf).push(t);
   }
   const typesOf = (leaf) => TYPES_BY_LEAF.get(leaf) || [];
+  // The patterns the change touches, by identifier: each pattern found at base with the instances the change added or
+  // changed, and every other instance at head. See docs/patterns.md.
+  const PATTERNS = new Map((CS.patterns || []).map((p) => [p.id, p]));
+  // The patterns that report each added or changed instance, with the instance, by the instance's type name.
+  const PATTERNS_OF = new Map();
+  for (const p of PATTERNS.values()) {
+    for (const i of p.instances) {
+      if (!PATTERNS_OF.has(i.type)) PATTERNS_OF.set(i.type, []);
+      PATTERNS_OF.get(i.type).push({ pattern: p, instance: i });
+    }
+  }
+  // The patterns new in this change, which three or more added types share by a key that nothing carried before. They
+  // have no norms and no examples. See docs/patterns.md section 4.5.
+  const NEW_PATTERNS = CS.newPatterns || [];
+  const TYPE_BY_NAME = new Map(CS.types.map((t) => [t.name, t]));
+  // Returns the leaf that holds a type at head, or at base for a removed type.
+  const leafOfType = (name) => { const t = TYPE_BY_NAME.get(name); return t ? t.leafHead || t.leafBase : null; };
+  // The leaf of every new or changed instance of a pattern, by its type name, from the patterns found before the change
+  // and the patterns new in it, which the Patterns switch counts on the blocks.
+  const PATTERN_TOUCHED = new Map();
+  for (const p of PATTERNS.values()) for (const i of p.instances) PATTERN_TOUCHED.set(i.type, leafOfType(i.type));
+  for (const p of NEW_PATTERNS) for (const i of p.instances) PATTERN_TOUCHED.set(i.type, i.leaf);
 
   // ---------- Reviewed files ----------
   // A changed file is reviewed when the reviewer has set it aside, or when the tool has and the reviewer has not
@@ -913,6 +935,13 @@
     testsOpen: new Set(),
     // The decision whose tests the details panel shows opened, or null.
     decisionTests: null,
+    // The pattern the details panel shows, as its identifier and the type it was opened from, or null.
+    pattern: null,
+    // The blocks whose instances the pattern's section in the details panel shows opened.
+    patternBlocks: new Set(),
+    // The comparison that replaces an instance's diffs, as the pattern's identifier, the instance's type and the type it
+    // is compared with, or null.
+    compare: null,
     // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
     glossaryBlock: null,
     term: null,
@@ -1074,7 +1103,8 @@
       const changedFiles = content.added + content.removed + content.modified;
       // The status pill on the block's top edge says what happened to it, with the count of changed files when there is
       // one. The pills on its bottom edge count what lies under it: the unresolved threads, the check problems, the
-      // decisions and, while the Tests switch is on, the changed test files. The two edges never share a pill.
+      // decisions, while the Tests switch is on, the changed test files, and while the Patterns switch is on, the new
+      // and changed instances of patterns. The two edges never share a pill.
       const badge = st === "added" ? "added" : st === "removed" ? "removed"
         : st === "modified" ? (changedFiles ? plural(changedFiles, "file changed", "files changed") : "modified")
         : st === "children" ? (changedFiles ? `${changedFiles} changed inside` : "changes inside")
@@ -1089,6 +1119,7 @@
       const talk = openThreadsUnder(c.key).length, problems = problemsUnder(c.key).length;
       const decisions = decisionsUnder(c.leaves);
       const tests = state.panel === "tests" ? TEST_FILES.filter((f) => f.subject && c.leaves.includes(f.subject)).length : 0;
+      const instances = state.panel === "patterns" ? [...PATTERN_TOUCHED.values()].filter((l) => c.leaves.includes(l)).length : 0;
       const pills = [];
       if (talk) pills.push({ cls: "talk", label: String(talk), w: String(talk).length * MONO.badge + 26,
         title: `${plural(talk, "unresolved review thread", "unresolved review threads")} on files under ${nameOf(c.id)}` });
@@ -1096,6 +1127,7 @@
         title: `${plural(problems, "check failure or warning", "check failures and warnings")} on files under ${nameOf(c.id)}` });
       if (decisions.length) pills.push({ cls: "decision", label: "◆ " + decisions.length, title: `${plural(decisions.length, "decision", "decisions")} in files under ${nameOf(c.id)}` });
       if (tests) pills.push({ cls: "tests", label: "✓ " + tests, title: `${plural(tests, "changed test file", "changed test files")} of types under ${nameOf(c.id)}` });
+      if (instances) pills.push({ cls: "patterns", label: "◇ " + instances, title: `${plural(instances, "new or changed instance", "new or changed instances")} of patterns under ${nameOf(c.id)}` });
       const bottom = r.y + r.h - 7;
       let left = r.x + 8;
       for (const p of pills) {
@@ -1600,6 +1632,8 @@
     const muted = done && state.opts.mute;
     const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
     if (types && types.length) block.append(declaresLine(types));
+    const cmp = compareFor(path);
+    if (cmp) { block.append(compareBlock(cmp.pattern, cmp.instance)); return block; }
     const diffs = el("div", { class: "file-diffs" });
     const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(hunkBlock(path, h, i, talk.lines, notes.lines))); };
     if (muted && !state.expanded.has(path)) diffs.hidden = true;
@@ -1620,15 +1654,218 @@
 
   // Returns the line under a file's header that names the types it declares in the leaf on screen. A type that was
   // added, removed or moved carries that status, since a file's diff does not show it. A type that only changed shows
-  // no status, since the changeset does not say which of a file's types its hunks touch.
+  // no status, since the changeset does not say which of a file's types its hunks touch. A type that the changeset
+  // reports as an instance of a pattern carries a chip for each such pattern, which is the only place the leaf view
+  // shows patterns.
   function declaresLine(types) {
     const line = el("div", { class: "file-types" }, "declares ");
     types.forEach((t, i) => {
       if (i) line.append(" · ");
       line.append(el("code", { title: t.name }, shortName(t.name)));
       if (t.status !== "unchanged") line.append(" ", el("span", { class: "chip chip-" + t.status, title: t.status === "moved" ? `from ${t.leafBase} to ${t.leafHead}` : "" }, t.status));
+      for (const x of PATTERNS_OF.get(t.name) || []) line.append(" ", patternChip(x.pattern, x.instance));
     });
     return line;
+  }
+
+  // Returns the chip that marks a type as an instance of a pattern, with the number of the pattern's norms the change
+  // makes it depart from, which shows the pattern in the details panel.
+  function patternChip(p, instance) {
+    const on = !!state.pattern && state.pattern.id === p.id && state.pattern.type === instance.type;
+    const n = instance.departures.length;
+    return el("button", { class: "chip chip-pattern" + (n ? " departs" : "") + (on ? " on" : ""), "data-pattern": p.id, "data-type": instance.type,
+      onclick: () => showPattern(on ? null : { id: p.id, type: instance.type }), title: chipTitle(p, instance) }, chipText(p, instance));
+  }
+  const chipText = (p, instance) => patternNaming(p).name + (instance.departures.length ? ` · ${plural(instance.departures.length, "departure", "departures")}` : "");
+  const chipTitle = (p, instance) => `An instance of the pattern ${patternNaming(p).name}, which ${plural(p.count, "type", "types")} played before this change` +
+    (instance.departures.length ? `. It departs from ${plural(instance.departures.length, "norm", "norms")}: ${departureText(p, instance)}.` : ".") + " Click to show the pattern.";
+  // Sets the text of every pattern chip on the page afresh, as Claude's names arrive, without drawing the leaf view again.
+  function refreshPatternChips() {
+    for (const chip of document.querySelectorAll(".chip-pattern[data-pattern]")) {
+      const p = PATTERNS.get(chip.dataset.pattern), instance = p && p.instances.find((i) => i.type === chip.dataset.type);
+      if (instance) { chip.textContent = chipText(p, instance); chip.title = chipTitle(p, instance); }
+    }
+  }
+
+  // Returns the key of Claude's name and purpose for a pattern, by its keys.
+  const patternKey = (p) => "pattern:" + p.keys.join(" + ");
+  // Returns the name and purpose a pattern shows, each with a value indicating whether Claude wrote it. The map entry's
+  // name and purpose win, then Claude's once they arrive, and then the pattern's own, which names it from its first key.
+  // See docs/patterns.md section 8.
+  function patternNaming(p) {
+    const entry = (CS.map.patterns || []).find((e) => e.id === p.id) || {};
+    const n = NARR.items.get(patternKey(p));
+    return {
+      name: entry.name || (n && n.name) || p.name, nameByClaude: !entry.name && !!n,
+      purpose: entry.purpose || (n && n.text) || p.purpose, purposeByClaude: !entry.purpose && !!n,
+    };
+  }
+
+  // Returns the words for an instance's departures from its pattern's norms, such as "no IUnitOfWork, no test".
+  const departureText = (p, instance) => instance.departures.map((f) => (p.norms.find((n) => n.feature === f) || { absence: f }).absence).join(", ");
+
+  // Shows a pattern in the details panel, given as its identifier and the type it is opened from, or closes it for null.
+  function showPattern(selection) {
+    state.pattern = selection;
+    redraw();
+  }
+
+  // Returns the comparison that replaces a file's diffs, as the pattern and the instance whose source the file holds, or
+  // null when the file shows its diffs.
+  function compareFor(path) {
+    const p = state.compare && PATTERNS.get(state.compare.id);
+    const instance = p && p.instances.find((i) => i.type === state.compare.type);
+    const source = instance && p.sources[instance.type];
+    return source && source.file === path && Object.keys(instance.compare).length ? { pattern: p, instance } : null;
+  }
+
+  // Compares an instance with another type of its pattern in place of the instance's diffs, opening its file.
+  function startCompare(id, type, other) {
+    state.compare = { id, type, other };
+    const p = PATTERNS.get(id);
+    return openFile(p.sources[type].file);
+  }
+
+  // Returns the head line numbers of a file's added lines, from its hunks.
+  function addedLines(path) {
+    const added = new Set();
+    for (const h of HUNKS.get(path) || []) {
+      let b = parseHeader(h.header).b;
+      for (const [op] of h.lines) {
+        if (op === "+") added.add(b);
+        if (op !== "-") b++;
+      }
+    }
+    return added;
+  }
+
+  // Returns the compare view: the instance at head on the left, with its added lines marked, and another type of its
+  // pattern on the right, as plain source, aligned member by member as the changeset aligns them. Each row of members
+  // is headed by their names and the departures and unusual traits it shows. A picker switches the type on the right.
+  // See docs/patterns.md section 7.3.
+  function compareBlock(p, instance) {
+    const others = Object.keys(instance.compare);
+    const other = others.includes(state.compare.other) ? state.compare.other : others[0];
+    const left = p.sources[instance.type], right = p.sources[other];
+    const added = addedLines(left.file), language = languageOf(left.file);
+    const lit = (src) => language ? highlightSide(src.lines.map((t) => [" ", t]), [" "], language) : src.lines.map(() => null);
+    const lh = lit(left), rh = lit(right);
+    const role = (n) => n === instance.examples.nearest ? "nearest" : n === instance.examples.typical ? "typical" : "instance";
+    const box = el("div", { class: "compare" });
+    box.append(el("div", { class: "compare-head" },
+      el("span", { class: "compare-side" }, `${shortName(instance.type)} at head`),
+      el("span", { class: "compare-side" }, el("select", { "aria-label": "Compare with", onchange: (ev) => { state.compare = { ...state.compare, other: ev.target.value }; redraw(); } },
+        ...others.map((n) => el("option", { value: n, selected: n === other }, `${shortName(n)} · ${role(n)}`))),
+        el("button", { class: "link", onclick: () => { state.compare = null; redraw(); } }, "Back to the diff"))));
+    const digits = String(Math.max(left.first + left.lines.length, right.first + right.lines.length)).length;
+    const col = () => el("col", { style: `width: calc(${digits}ch + 17px)` });
+    const table = el("table", { class: "diff compare-table" }, el("colgroup", {}, col(), el("col"), col(), el("col")));
+    const span = (range) => range ? Array.from({ length: range.last - range.first + 1 }, (_, k) => range.first + k) : [];
+    const name = (n) => n ? shortName(n) : "—";
+    for (const row of instance.compare[other]) {
+      table.append(el("tr", { class: "compare-row" + (row.marks ? " marked" : "") }, el("td", { colspan: 4 },
+        `${name(row.left)} · ${name(row.right)}`, ...(row.marks || []).map((m) => el("span", { class: "compare-mark" }, m)))));
+      const l = span(row.leftLines).filter((n) => n - left.first < left.lines.length), r = span(row.rightLines).filter((n) => n - right.first < right.lines.length);
+      for (let k = 0; k < Math.max(l.length, r.length); k++) {
+        const a = l[k], b = r[k];
+        table.append(el("tr", {},
+          el("td", { class: "ln" }, a === undefined ? "" : String(a)),
+          codeCell(a !== undefined && added.has(a) ? "add" : "ctx", a === undefined ? null : left.lines[a - left.first], a === undefined ? null : lh[a - left.first]),
+          el("td", { class: "ln" }, b === undefined ? "" : String(b)),
+          codeCell("ctx", b === undefined ? null : right.lines[b - right.first], b === undefined ? null : rh[b - right.first])));
+      }
+    }
+    box.append(el("div", { class: "diff-scroll" }, table));
+    if (left.cut || right.cut) box.append(el("p", { class: "hint" }, `Cut at its last whole member within 300 lines: ${[left.cut ? shortName(instance.type) : null, right.cut ? shortName(other) : null].filter(Boolean).join(" and ")}.`));
+    return box;
+  }
+
+  // Returns the norms of a pattern as a table, each with its share and a check or a cross for an instance, the
+  // departures first, then the norms the instance lacked before the change, then those it has. A companion norm names
+  // the instance's companion when it has one. The instance's unusual traits follow in a line of their own.
+  function normsBlock(p, instance) {
+    const box = el("div", { class: "pattern-norms" });
+    if (!p.norms.length) {
+      box.append(el("p", { class: "hint" }, p.count < 5 ? `No norms: a pattern needs five instances before what they share counts as usual.`
+        : "No norms: no feature is shared by four in five instances."));
+    } else {
+      const rank = (n) => instance.departures.includes(n.feature) ? 0 : instance.lacks.includes(n.feature) ? 1 : 2;
+      const table = el("table", { class: "norms" });
+      for (const n of p.norms.slice().sort((a, b) => rank(a) - rank(b))) {
+        const r = rank(n);
+        const companion = n.feature.startsWith("companion:") ? instance.companions[n.feature.slice("companion:".length)] : null;
+        table.append(el("tr", { class: ["departure", "lacked", "kept"][r], title: ["The change makes this instance depart from the norm.",
+          "This instance lacked the norm before the change, so it is not a departure.", "This instance has the norm."][r] },
+          el("td", { class: "mark" }, r === 2 ? "✓" : "✗"),
+          el("td", {}, n.text, companion ? el("span", { class: "row-meta" }, " · " + shortName(companion)) : ""),
+          el("td", { class: "share" }, `${n.share} of ${p.count}`)));
+      }
+      box.append(el("h3", {}, instance.departures.length ? `Norms: ${plural(instance.departures.length, "departure", "departures")}` : "Norms"), table);
+    }
+    if (instance.unusual.length) {
+      box.append(el("p", { class: "unusual" }, el("span", { class: "k" }, "Only this instance "),
+        ...instance.unusual.flatMap((k, i) => [i ? ", " : "", el("code", { title: k }, traitName(k))])));
+    }
+    return box;
+  }
+
+  // Returns the short name of a trait given as a key: the type's last segment, and an attribute in brackets without its
+  // Attribute suffix, as [Obsolete].
+  function traitName(key) {
+    const name = key.slice(key.indexOf(":") + 1).split(".").pop();
+    return key.startsWith("attribute:") ? `[${name.replace(/(.)Attribute$/, "$1")}]` : name;
+  }
+
+  // Opens the leaf view that holds a type, at its first changed file when it has one.
+  function openType(name) {
+    const t = CS.types.find((x) => x.name === name);
+    if (!t) return;
+    const changed = t.files.find((p) => fileStatus(p) !== "unchanged");
+    return changed ? openFile(changed) : openLeaf(t.leafHead || t.leafBase);
+  }
+
+  // Returns the details panel's section for the selected pattern: its name, purpose and keys, its norms with a check or a
+  // cross for the instance it was opened from, that instance's unusual traits, its added and changed instances, and
+  // every other instance grouped by the block that holds it, each block collapsed to a count until opened.
+  function patternPanel(p, type) {
+    const box = el("section", { class: "decision-panel pattern-panel" });
+    box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Pattern", help(HELP.pattern)), el("button", { class: "link", onclick: () => showPattern(null) }, "Close")));
+    const naming = patternNaming(p);
+    const busy = NARR.state === "writing" && !naming.nameByClaude && p.by === "key";
+    box.append(el("p", { class: "pattern-name" }, naming.name),
+      el("p", { class: "purpose" }, naming.purpose || (busy ? "Claude is naming it…" : p.by === "key" ? "Named from its first key." : "")));
+    if (naming.nameByClaude || naming.purposeByClaude) box.append(el("div", { class: "narrative-foot" },
+      el("span", { class: "by" }, `${naming.nameByClaude && naming.purposeByClaude ? "Name and purpose" : naming.nameByClaude ? "Name" : "Purpose"} written by Claude from three instances; check them against the code.`),
+      el("button", { class: "link", disabled: NARR.pending.has(patternKey(p)), onclick: () => regenerate(patternKey(p)) }, "Regenerate")));
+    box.append(kv(p.keys.length === 1 ? "Key" : "Keys", el("span", {}, ...p.keys.flatMap((k, i) => [i ? ", " : "", el("code", {}, k)]))));
+    box.append(kv("Before", plural(p.count, "instance", "instances")));
+    const instance = p.instances.find((i) => i.type === type);
+    if (instance) box.append(normsBlock(p, instance));
+    if (instance && Object.keys(instance.compare).length) {
+      const example = (role, n) => n && instance.compare[n]
+        ? el("li", {}, el("button", { class: "row", onclick: () => startCompare(p.id, type, n), title: `Compare ${shortName(type)} with ${n}` },
+          el("span", { class: "row-name" }, shortName(n)), el("span", { class: "row-meta" }, role)))
+        : "";
+      box.append(el("h3", {}, "Compare with"), el("ul", { class: "list" }, example("nearest", instance.examples.nearest), example("typical", instance.examples.typical)));
+    }
+    const row = (name, status) => {
+      const t = CS.types.find((x) => x.name === name);
+      return el("li", {}, el("button", { class: "row" + (name === type ? " current" : ""), onclick: () => openType(name), title: name },
+        status ? el("span", { class: "chip chip-" + status }, status) : "", el("span", { class: "row-name" }, shortName(name)),
+        el("span", { class: "row-meta" }, t ? nameOf(t.leafHead || t.leafBase) : "")));
+    };
+    box.append(el("h3", {}, `In this change: ${plural(p.instances.length, "instance", "instances")}`));
+    box.append(el("ul", { class: "list" }, ...p.instances.map((i) => row(i.type, i.status))));
+    if (!p.others.length) return box;
+    box.append(el("h3", {}, `Other instances: ${p.others.length}`));
+    const byBlock = new Map();
+    for (const o of p.others) { if (!byBlock.has(o.leaf)) byBlock.set(o.leaf, []); byBlock.get(o.leaf).push(o.type); }
+    for (const [leaf, names] of [...byBlock].sort((a, b) => b[1].length - a[1].length || nameOf(a[0]).localeCompare(nameOf(b[0])))) {
+      box.append(el("details", { class: "pattern-block", open: state.patternBlocks.has(leaf),
+        ontoggle: (ev) => { if (ev.target.open) state.patternBlocks.add(leaf); else state.patternBlocks.delete(leaf); } },
+        el("summary", { title: leaf }, `${nameOf(leaf)} · ${names.length}`), el("ul", { class: "list" }, ...names.map((n) => row(n, null)))));
+    }
+    return box;
   }
 
   // Returns the line that says how many of a node's changed files are reviewed, with a button that marks them all, or
@@ -1829,6 +2066,11 @@
     const at = steps.findIndex((s) => s.id === state.step);
     return at > 0 ? steps[at - 1] : null;
   }
+  // Returns the words of a step. A pattern step's are made afresh, so that it names the pattern as the chips do.
+  function stepSignal(s) {
+    const p = s.kind === "pattern" && PATTERNS.get(s.pattern), instance = p && p.instances.find((i) => i.type === s.target);
+    return instance ? `${shortName(s.target)} departs from ${patternNaming(p).name}: ${departureText(p, instance)}` : s.signal;
+  }
   // Opens a step where it lives and makes it the current step: an edge or a cycle's closing edge at its level or
   // view, selected; a block in its level; a decision at its hunk, with its reach in the details panel; a file in its
   // leaf. A set-aside step opens the leaf of its first file.
@@ -1836,6 +2078,11 @@
     state.step = s.id;
     if (state.tab !== "map") showTab("map");
     if (s.kind === "node") return showInContext(s.target);
+    if (s.kind === "pattern") {
+      // A pattern step opens its instance's file with the pattern in the details panel.
+      state.pattern = { id: s.pattern, type: s.target };
+      return openType(s.target);
+    }
     if (s.kind === "decision") {
       const d = DECISIONS.get(s.target);
       return d ? openDecision(d) : undefined;
@@ -1898,7 +2145,7 @@
         const current = s.id === state.step;
         const reviewed = s.files.filter((p) => REVIEWED.has(p)).length;
         const n = stepNarrative(s);
-        const text = el("span", { class: "step-text" }, s.signal);
+        const text = el("span", { class: "step-text" }, stepSignal(s));
         if (n) text.append(el("span", { class: "step-why" }, ...richText(n.text)));
         const meta = s.files.length ? el("span", { class: "step-meta" }, tier === "aside" ? `${reviewed} of ${s.files.length} reviewed` : done ? "read" : `${reviewed}/${s.files.length} files`) : null;
         const li = el("li", {}, el("button", { class: "row step" + (done ? " read" : "") + (current ? " current" : ""), onclick: () => openStep(s),
@@ -1964,6 +2211,59 @@
       }
       box.append(ul);
     }
+  }
+  // Renders the Patterns switch into the panel: the patterns found before the change, the most departures first, each
+  // with its new and changed instances, their departures and their leaves, and then the patterns new in this change,
+  // each with its instances. Hovering a pattern outlines the blocks that hold its instances. See docs/patterns.md
+  // section 7.5.
+  function renderPatterns(box) {
+    const departures = (p) => p.instances.reduce((s, i) => s + i.departures.length, 0);
+    const found = [...PATTERNS.values()].sort((a, b) => departures(b) - departures(a) || b.instances.length - a.instances.length || patternNaming(a).name.localeCompare(patternNaming(b).name));
+    const touched = new Set([...PATTERN_TOUCHED.values()]);
+    box.append(el("p", { class: "hint" }, `${plural(PATTERN_TOUCHED.size, "new or changed type plays", "new or changed types play")} the role of a pattern, in ${plural(touched.size, "block", "blocks")}. ` +
+      "Hover a pattern to outline its blocks."));
+    const hoverable = (p, node) => { node.addEventListener("mouseenter", () => hoverPattern(p)); node.addEventListener("mouseleave", () => hoverPattern(null)); return node; };
+    for (const p of found) {
+      const naming = patternNaming(p), n = departures(p);
+      box.append(hoverable(p, el("h3", { class: "pattern-head" }, el("button", { class: "link", title: `${naming.purpose || p.keys.join(", ")}\nShow the pattern`,
+        onclick: () => { state.pattern = { id: p.id, type: p.instances[0].type }; return openType(p.instances[0].type); } }, naming.name),
+        el("span", { class: "row-meta" }, ` · ${plural(p.count, "instance", "instances")} before` + (n ? ` · ${plural(n, "departure", "departures")}` : "")))));
+      const ul = hoverable(p, el("ul", { class: "list" }));
+      for (const i of p.instances) {
+        const on = state.pattern && state.pattern.id === p.id && state.pattern.type === i.type;
+        ul.append(el("li", {}, el("button", { class: "row" + (on ? " current" : ""), onclick: () => { state.pattern = { id: p.id, type: i.type }; return openType(i.type); },
+          title: i.type + (i.departures.length ? `\nDeparts from ${departureText(p, i)}` : "") },
+          el("span", { class: "chip chip-" + i.status }, i.status), el("span", { class: "row-name" }, shortName(i.type)),
+          i.departures.length ? el("span", { class: "departs" }, departureText(p, i)) : "",
+          el("span", { class: "row-meta" }, nameOf(leafOfType(i.type))))));
+      }
+      box.append(ul);
+    }
+    if (!NEW_PATTERNS.length) return;
+    box.append(el("h3", {}, `New in this change: ${NEW_PATTERNS.length}`));
+    box.append(el("p", { class: "hint" }, "Types the change added share these keys, and nothing carried them before, so they have no norms to compare with. " +
+      "Each becomes a pattern with norms once the change is in the base of a review."));
+    for (const p of NEW_PATTERNS) {
+      box.append(hoverable(p, el("h3", { class: "pattern-head" }, el("span", { title: p.keys.join(", ") }, p.name), el("span", { class: "row-meta" }, ` · ${plural(p.instances.length, "instance", "instances")}, all new`))));
+      box.append(hoverable(p, el("ul", { class: "list" }, ...p.instances.map((i) => el("li", {}, el("button", { class: "row", onclick: () => openType(i.type), title: i.type },
+        el("span", { class: "chip chip-added" }, "added"), el("span", { class: "row-name" }, shortName(i.type)), el("span", { class: "row-meta" }, nameOf(i.leaf))))))));
+    }
+  }
+  // Outlines the blocks of the drawing that hold a pattern's instances while it is under the pointer, solid for those
+  // with new or changed instances and dashed for those with only others, and fades everything else. A null pattern
+  // ends it. A leaf view has no drawing, so it does nothing there.
+  function hoverPattern(p) {
+    if (dragging || !state.current) return;
+    const s = stage();
+    for (const n of s.querySelectorAll(".hot, .pattern-touched, .pattern-held")) n.classList.remove("hot", "pattern-touched", "pattern-held");
+    if (!p) { s.classList.remove("hovering"); return; }
+    const owner = ownerMap(state.current.level);
+    const touched = new Set((p.instances || []).map((i) => owner.get(i.leaf || leafOfType(i.type))).filter(Boolean));
+    const held = new Set((p.others || []).map((o) => owner.get(o.leaf)).filter((k) => k && !touched.has(k)));
+    const mark = (keys, cls) => { for (const k of keys) for (const n of s.querySelectorAll(`.node[data-key="${CSS.escape(k)}"]`)) n.classList.add("hot", cls); };
+    mark(touched, "pattern-touched");
+    mark(held, "pattern-held");
+    s.classList.toggle("hovering", touched.size + held.size > 0);
   }
   // Returns a changed declaration that a test method references, with how it changed, which opens the decision that
   // holds it when there is one. A rewritten declaration is no decision, so it is only named.
@@ -2068,6 +2368,11 @@
     if (isDeclarationTerm(t) || refs) meta.append(el("span", {}, t.uses ? plural(t.uses, refs ? "reference" : "use", refs ? "references" : "uses") : refs ? "no references" : "no uses"));
     if (t.firstUse) meta.append(place(`first ${refs ? "referenced" : "used"} in ${fileName(t.firstUse.file)}:${t.firstUse.line}`, `${t.firstUse.file}: the first use outside the declaring type`, () => openLine(t.firstUse.file, t.firstUse.line)));
     if (t.decision && DECISIONS.has(t.decision)) meta.append(place("decision", "Open the decision that introduced it", () => openDecision(DECISIONS.get(t.decision))));
+    for (const id of t.patterns || []) {
+      const p = PATTERNS.get(id), created = NEW_PATTERNS.find((x) => x.id === id);
+      if (p) meta.append(place(`an instance of ${patternNaming(p).name}`, "Show the pattern", () => { state.pattern = { id, type: t.symbol }; return openType(t.symbol); }));
+      else if (created) meta.append(place(`an instance of ${created.name}, new in this change`, "Show the patterns", () => { state.panel = "patterns"; redraw(); }));
+    }
     return meta;
   }
   // Returns a term's entry: its kind and name, what it is, and where it is. In the tooltip the entry also names the
@@ -2207,7 +2512,9 @@
     document.addEventListener("scroll", () => { if (shown) hide(); }, { capture: true, passive: true });
   }
 
-  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary", tests: "Tests" };
+  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary", tests: "Tests", patterns: "Patterns" };
+  // The panels that put badges on the blocks, so that switching to or from one draws the map again.
+  const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
   const HELP = {
     path: "The reading path lists the parts of the change in the order to read them. Read first holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
@@ -2220,7 +2527,13 @@
     edges: "An edge is the set of references from one block to another. This list shows the edges whose reference counts changed, with new and removed edges first. Click an edge to show it on the map.",
     map: "This list shows the blocks and views that were added, removed or changed in the map, and the types that moved to a different block.",
     decision: "This section shows the selected decision's declarations and the hunks that follow from it, grouped by block. Click a hunk to open it.",
+    pattern: "A pattern is a role that several types play, found from what they declare about themselves: a base class, an interface or an attribute they share. " +
+      "The patterns come from the code before this change, and a type joins one when it carries every key. A norm is what four in five of five or more instances share. " +
+      "A departure is a norm that a new instance lacks, or that a changed instance had and no longer has. A departure is a difference to read, not a fault. Click an instance to open its type.",
     narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
+    patterns: "Patterns lists the roles that the change's new and changed types play, such as consumers or controllers, the most departures first. " +
+      "Hover a pattern to outline the blocks that hold its instances, solid for new and changed ones and dashed for the rest. " +
+      "While this list is open, a block's badge counts the new and changed instances it holds. Patterns new in this change come last.",
     terms: "These are the names this block introduces. The Glossary lists the names from the whole change.",
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
       "Tests are never drawn on the map. While this list is open, a block's badge counts the changed test files of the types it holds. Test infrastructure, such as fixtures and builders, comes last.",
@@ -2243,20 +2556,24 @@
     const head = $("#changes-head"), title = $("#changes-title");
     for (const n of [...head.children]) if (n !== title) n.remove();
     // With a path, a glossary or changed tests, the panel switches among the path, the changes, the glossary and the
-    // tests. It opens on the tests when every changed file is a test file or a file that no type binds, and otherwise
-    // on the path when the changeset has one. Switching to or from the tests draws the map again, for its test badges.
-    if (PATH.length || GLOSSARY.length || TEST_FILES.length) {
+    // tests and the patterns. It opens on the tests when every changed file is a test file or a file that no type binds,
+    // and otherwise on the path when the changeset has one. Switching to or from the tests or the patterns draws the map
+    // again, for their badges.
+    const patterns = PATTERNS.size + NEW_PATTERNS.length;
+    if (PATH.length || GLOSSARY.length || TEST_FILES.length || patterns) {
       if (state.panel === undefined) state.panel = TESTS_ONLY ? "tests" : PATH.length ? "path" : "changes";
       const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => {
-        const badges = (state.panel === "tests") !== (name === "tests");
+        const badges = state.panel !== name && (BADGE_PANELS.has(state.panel) || BADGE_PANELS.has(name));
         state.panel = name;
         if (badges) redraw(); else renderChanges();
       } }, label);
       title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
-        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null, TEST_FILES.length ? tab("tests", "Tests") : null)));
+        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null, TEST_FILES.length ? tab("tests", "Tests") : null,
+        patterns ? tab("patterns", "Patterns") : null)));
       if (state.panel === "path") { renderPath(box, head); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }
       if (state.panel === "tests") { renderTests(box); return; }
+      if (state.panel === "patterns") { renderPatterns(box); return; }
     } else title.replaceChildren(PANEL_TITLE.changes, help(HELP.changes));
     const talk = openThreadsUnder(ROOT).length;
     if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
@@ -2323,6 +2640,7 @@
     const box = $("#details");
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
+    if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
     const l = loc();
     const cur = state.current;
     if (l.leaf) {
@@ -2972,7 +3290,7 @@
     } else if (e.failed) {
       NARR.pending.delete(e.key); NARR.errors.set(e.key, e.message);
     } else {
-      NARR.items.set(e.key, { key: e.key, text: e.text, cites: e.cites || [] });
+      NARR.items.set(e.key, { key: e.key, text: e.text, cites: e.cites || [], name: e.name || null });
       NARR.pending.delete(e.key); NARR.errors.delete(e.key);
     }
     showNarratives();
@@ -2986,7 +3304,8 @@
       narrativeFrame = 0;
       renderSummary();
       if (state.current || loc().leaf) renderDetails();
-      if (state.panel === "path" || state.panel === "glossary") renderChanges();
+      if (state.panel === "path" || state.panel === "glossary" || state.panel === "patterns") renderChanges();
+      refreshPatternChips();
       if (tipKey) showTip(tipKey);
       if (termTip) showTermTip();
     });

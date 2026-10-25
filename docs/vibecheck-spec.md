@@ -71,6 +71,9 @@ records added and removed, never as text.
   "solution": "src/Example.sln",
   "exclude": ["System.**"],
   "tests": ["Example.Tests::**"],
+  "patterns": [
+    { "id": "consumer", "name": "Consumer", "purpose": "Handles one message from the bus.", "keys": ["implements:MassTransit.IConsumer<>"] }
+  ],
   "nodes": {
     "auth": { "name": "Auth", "purpose": "Identity, sessions and authorization decisions.", "category": "domain", "bind": ["Example.Auth.**"] },
     "billing": { "name": "Billing", "purpose": "Owns invoices, payments and the ledger.", "category": "domain" },
@@ -280,6 +283,19 @@ any view of a level, and the same reference counts and cycles are computed for a
 view's groups as for a container's children. Views are therefore cheap to propose,
 cheap to evaluate, and cheap to discard.
 
+### 2.9 Patterns
+
+The optional `patterns` list names, declares and ignores the patterns that a review
+finds among the types, such as consumers that implement `IConsumer<>`. An entry with
+an `id` and `keys` names the pattern that discovery finds with those keys, or
+declares it when discovery does not find it. An entry with `ignore` drops the group of
+one key from discovery, such as a marker interface that every message carries. A key
+is `inherits:`, `implements:` or `attribute:` and the open name of a type, or
+`suffix:` and the text a type's name ends with. [patterns.md](patterns.md) section 4
+describes keys, discovery and the list. A pattern binds nothing and draws nothing, so
+the list changes no binding and no edge. The canonical form writes the list only when
+it holds an entry, one entry per line in the order written.
+
 ## 3. Observed dependencies
 
 The checker opens the solution with Roslyn and, for every top-level type declared in
@@ -298,6 +314,8 @@ can show why an edge exists and where.
 
 Resolution details that matter in C#:
 
+- A reference in a type's base list or in its type parameters' constraints is a
+  reference of that type.
 - A referenced member resolves to its containing type, and a nested type to the
   top-level type that contains it. A partial type is one type however many files
   declare it, and references to any of its parts resolve to it.
@@ -321,12 +339,22 @@ Resolution details that matter in C#:
   helper emitted into every project, is prefixed with the assembly and `::` so that
   each type keeps its own identity. Patterns match the plain name together with the
   assembly.
-- Symbols with no source in the solution resolve to an external by assembly name.
-  References to the core library, meaning the assembly that defines `System.Object`
+- Symbols with no source in the solution resolve to an external by assembly name,
+  and each keeps its kind and the top-level type that declares it, in the open form
+  that [patterns.md](patterns.md) section 3.1 describes, such as
+  `MassTransit.IConsumer<>`. References to the core library, meaning the assembly that defines `System.Object`
   in the compilation, are never recorded, since every type would carry them. Other
   framework assemblies are recorded and can be bound like any external.
 - The left side of a member access that names a type or namespace is not recorded,
   since the member reference it qualifies already carries the dependency.
+
+The analysis also records the **traits** of each top-level type: the class it
+inherits, the interfaces it implements directly, the attributes applied to it, and
+the parameter types of its primary constructor or else of its constructor with the
+most parameters, each in open form, from source and from referenced assemblies alike.
+An interface or a parameter type of the core library is not a trait, while a base
+class or an attribute of the core library is. [patterns.md](patterns.md) section 3.1
+says why.
 
 A dependency between two types is a dependency between their leaves. The facts
 record dependencies per reference, and record the count per pair of leaves. Every
@@ -376,7 +404,8 @@ changeset is better served by a picture with an `unsorted` box than by no pictur
 **Failures.** The file is valid against the schema. Every node's parent exists.
 Every container has a child. No identifier is both a node and an external, and no
 node is named `unsorted`. Every pattern in a `bind`, `exclude` or `tests` list is
-well-formed. Every view names `root` or a container, and its groups partition the
+well-formed, and so is every entry of the `patterns` list, which has either an
+identifier and keys or an ignored key, and whose identifiers are unique. Every view names `root` or a container, and its groups partition the
 leaves under it.
 
 **Warnings.** The file is not in canonical form. A type binds to `unsorted`. A type
@@ -384,7 +413,8 @@ is claimed equally by two leaves. An `[Vibecheck]` attribute names no leaf, sits
 nested type, or sits on an excluded type or a test type. An `exclude` pattern matches
 only types of test projects, by the rule of section 5.1, and could move to `tests`.
 A referenced assembly is bound by no
-external. The layout file mentions an identifier the map does not define. The
+external. No type carries every key of an entry of the `patterns` list, or an entry
+ignores a suffix key, which discovery never uses. The layout file mentions an identifier the map does not define. The
 analysis itself reported something, such as a project that did not compile.
 
 `check --strict` turns warnings into failures, for a repository that wants its map
@@ -392,7 +422,12 @@ complete before a change merges.
 
 `check` also reports how the test types were placed, as "55 test types: 40 by name,
 12 by references, 3 infrastructure", so that the rules of [tests.md](tests.md)
-section 4 can be judged against real repositories.
+section 4 can be judged against real repositories. It reports each pattern it found
+with its number of instances, its number of norms, the mean number of norms its own
+instances lack, and its keys, as "pattern implements IConsumer<>: 14 instances, 4
+norms, 0.3 departures each (implements:MassTransit.IConsumer<>)", so that the
+thresholds of [patterns.md](patterns.md) section 5.2 can be judged against real
+repositories.
 
 ### 4.1 Metrics
 
@@ -538,7 +573,8 @@ viewer consumes two of these and never reads the code or the map directly.
   "excluded": { "types": 2, "files": 0 },
   "types": [
     { "name": "Example.Billing.Core.PaymentService", "assembly": "Example.Billing", "leaf": "billing.core", "by": "pattern",
-      "files": ["src/Billing/Core/PaymentService.cs", "src/Billing/Core/PaymentService.Refunds.cs"] },
+      "files": ["src/Billing/Core/PaymentService.cs", "src/Billing/Core/PaymentService.Refunds.cs"],
+      "traits": { "interfaces": [ { "type": "Example.Billing.IPaymentService" } ], "attributes": [], "injects": ["Stripe.ChargeService"] } },
     { "name": "Example.Billing.Integrations.StripeJsonContext", "assembly": "Example.Billing", "leaf": "billing.core", "by": "attribute",
       "files": ["src/Billing/Integrations/StripeClient.cs", "src/Billing/Generated/…/StripeJsonContext.g.cs"],
       "generator": "System.Text.Json.SourceGeneration.JsonSourceGenerator" },
@@ -552,7 +588,8 @@ viewer consumes two of these and never reads the code or the map directly.
       "kind": "calls", "symbol": "Example.Auth.Session.Require", "file": "src/Billing/Core/Payment.cs", "line": 42 }
   ],
   "leafEdges": [ { "from": "billing.core", "to": "auth", "count": 17 } ],
-  "externalRefs": [ { "from": "Example.Billing.Core.Charge", "assembly": "Stripe", "symbol": "Stripe.ChargeService.Create", "file": "…", "line": 30, "count": 4, "external": "stripe" } ],
+  "externalRefs": [ { "from": "Example.Billing.Core.Charge", "assembly": "Stripe", "type": "Stripe.ChargeService", "kind": "calls",
+    "symbol": "Stripe.ChargeService.Create", "file": "…", "line": 30, "count": 4, "external": "stripe" } ],
   "unresolvable": [ { "from": "…", "symbol": "…", "reason": "…", "file": "…", "line": 1 } ],
   "tests": {
     "types": [ { "name": "Example.Auth.Tests.SessionTests", "assembly": "Example.Auth.Tests", "files": ["tests/Auth/SessionTests.cs"],
@@ -567,6 +604,9 @@ viewer consumes two of these and never reads the code or the map directly.
   "nodes": { "billing": { "types": 40, "internal": 212, "crossing": 9, "attributed": 1 } },
   "levels": { "root": { "edges": [ { "from": "billing", "to": "auth", "count": 17 } ], "cycles": [] } },
   "views": { "by-concern": { "groups": { "payments": { "types": 31, "internal": 180, "crossing": 20, "attributed": 0 } }, "edges": [ { "from": "edges", "to": "payments", "count": 12 } ], "cycles": [] } },
+  "patterns": [ { "id": "consumer", "name": "Consumer", "purpose": "Handles one message from the bus.", "by": "map",
+    "keys": ["implements:MassTransit.IConsumer<>"], "instances": ["Example.Billing.Consumers.OrderPlacedConsumer", "…"],
+    "norms": [ { "feature": "injects:Example.Billing.IUnitOfWork", "share": 13 } ], "meanDepartures": 0.3 } ],
   "violations": [ { "rule": "well-formedness", "message": "…" } ],
   "warnings": [ "3 types are unsorted" ]
 }
@@ -587,7 +627,11 @@ system type is listed in `files` with no leaves, `test` set, and the leaf of its
 test types' subject as `subject`. Dependencies are listed per reference, since
 each one is evidence the viewer can show, and once more aggregated per pair of
 leaves, since that is what every drawing starts from. External references are
-aggregated per type and assembly, with the first symbol, file and line and a count.
+aggregated per type and referenced type, with the first kind, symbol, file and line
+and a count, and a reader that counts references per assembly sums them. Each type
+carries its traits, when it has any, and `patterns` lists the patterns among the types,
+with the keys, the instances and the norms of each, as [patterns.md](patterns.md)
+sections 4 and 5 find them.
 The facts also carry the declarations and sites of section 3.1 for the types the map
 holds. The document is written without indentation. On a solution of a thousand
 types with seventy thousand dependencies it is roughly twenty megabytes, before the
@@ -682,7 +726,22 @@ as the differences:
   section 6 plans it: the surprises first, each with the signal that put it there,
   then the other changed leaves with the decisions, files and test files under them,
   and last what is set aside. The first tier ends with a step for each test type whose
-  signals touch changed code and one step for every other test signal. Each step names what it opens and the changed files it covers.
+  signals touch changed code and one step for every other test signal, and then a
+  step for each new or changed instance of a pattern that departs from its norms. Each step names what it opens and the changed files it covers.
+- **Patterns**: each pattern found at base that has an instance at head that the
+  change added or changed, with its keys, its number of instances at base, its
+  norms, those instances with their status, their departures from the norms, the
+  norms they lack, their unusual traits, their companions and their nearest and
+  typical examples, every other instance at head with its leaf, the source at head of
+  each reported instance and example, and the rows that align each reported instance
+  with each of the others member by member, as [patterns.md](patterns.md) sections 5.7,
+  6 and 7.3 describe, and the three samples at base that Claude names it from, as
+  section 8 there describes. A type is an instance at head when
+  it carries every key of the pattern, and it is reported under the most specific of
+  the patterns it is an instance of.
+- **NewPatterns**: the patterns new in this change, which three or more added types
+  share by a key that nothing at base carries, each with its keys and its instances
+  with their leaves, as [patterns.md](patterns.md) section 4.5 describes.
 - **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
   section 8 lists them: added types and members, renamed declarations, nodes, views
   and externals added to the map, and assemblies referenced at head and not at base.

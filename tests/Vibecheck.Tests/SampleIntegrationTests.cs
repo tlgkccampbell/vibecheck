@@ -18,8 +18,8 @@ public class SampleIntegrationTests(SampleFixture sample)
     public void AnalysisListsTypesAndFilesIncludingGeneratedOnes()
     {
         // The test project adds three types in two files.
-        Assert.Equal(34, sample.Analysis.Types.Count);
-        Assert.Equal(18, sample.Analysis.Files.Count(f => f.Generator is null));
+        Assert.Equal(41, sample.Analysis.Types.Count);
+        Assert.Equal(25, sample.Analysis.Files.Count(f => f.Generator is null));
         Assert.Equal(2, sample.Analysis.Types.Count(t => t.Name.StartsWith("System.Text.RegularExpressions.Generated.")));
         Assert.Contains(sample.Analysis.Files, f => f.Path.StartsWith("src/Orchard.Billing/Generated/") && f.Generator!.Contains("JsonSourceGenerator"));
         Assert.Empty(sample.Analysis.Warnings);
@@ -36,7 +36,7 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Empty(facts.Warnings);
         Assert.DoesNotContain(facts.Types, t => t.Leaf == ArchitectureMap.Unsorted);
         Assert.Equal(new ExcludedCounts(2, 0), facts.Excluded);
-        Assert.Equal(29, facts.Types.Count);
+        Assert.Equal(36, facts.Types.Count);
         Assert.DoesNotContain(facts.Dependencies, d => d.To.StartsWith("System."));
     }
 
@@ -120,6 +120,28 @@ public class SampleIntegrationTests(SampleFixture sample)
         var known = sample.Analysis.Types.Select(t => t.Name).ToHashSet();
         Assert.All(sample.Analysis.Declarations, d => Assert.Contains(d.Type, known));
         Assert.All(sample.Analysis.Sites, s => { Assert.Contains(s.FromType, known); Assert.Contains(s.ToType, known); });
+    }
+
+    [Fact]
+    public void TheConsumersAreAPatternFoundByTheirInterface()
+    {
+        const string consumer = "Orchard.Notifications.Consumers.ReceiptConsumer";
+        var traits = sample.Analysis.Types.Single(t => t.Name == consumer).Traits!;
+        var implemented = Assert.Single(traits.Interfaces);
+        Assert.Equal(("Orchard.Shared.Messaging.IConsumer<>", "Orchard.Notifications.Dispatch.PaymentEvent"), (implemented.Type, Assert.Single(implemented.Arguments!)));
+        Assert.Equal(["Orchard.Notifications.Dispatch.Outbox"], traits.Injects);
+        // The serializer context's base is a framework type, which the analysis records although the assembly has no source.
+        Assert.Equal("System.Text.Json.Serialization.JsonSerializerContext", sample.Analysis.Types.Single(t => t.Name == Context).Traits!.Base!.Type);
+
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        var pattern = Assert.Single(facts.Patterns);
+        Assert.Equal(("implements:Orchard.Shared.Messaging.IConsumer<>", "implements IConsumer<>"), (pattern.Id, pattern.Name));
+        Assert.Equal(5, pattern.Instances.Count);
+        Assert.All(pattern.Instances, i => Assert.StartsWith("Orchard.Notifications.Consumers.", i));
+        // Every consumer is documented and handles payment events by kind, and four of five take the outbox.
+        Assert.Equal(["documented:5", "uses:Orchard.Notifications.Dispatch.PaymentEvent:5", "uses:Orchard.Notifications.Dispatch.PaymentEventKind:5",
+            "injects:Orchard.Notifications.Dispatch.Outbox:4"], pattern.Norms.Select(n => $"{n.Feature}:{n.Share}"));
+        Assert.Equal(0.2, pattern.MeanDepartures);
     }
 
     [Fact]

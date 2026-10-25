@@ -143,8 +143,8 @@ public class SkeletonTests
     {
         var analysis = TestData.Analysis(extraExternals:
         [
-            new ExternalReference(TestData.Service, "System.Collections", "System.Collections.Generic.List<T>", TestData.B1, 1),
-            new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", TestData.B1, 2),
+            new ExternalReference(TestData.Service, "System.Collections", "System.Collections.Generic.List<>", "references", "System.Collections.Generic.List<T>", TestData.B1, 1),
+            new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", "references", "Newtonsoft.Json.JsonConvert", TestData.B1, 2),
         ]);
         var map = Skeleton.Build(analysis, "Example.sln");
         Assert.Equal(["ext-sdk", "framework", "newtonsoft-json"], map.Externals.Keys);

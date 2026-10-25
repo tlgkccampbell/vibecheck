@@ -77,8 +77,8 @@ public class GlossaryTests
         headMap.Views["by-role"] = new ViewSpec { Name = "By role", Purpose = "Roles.", Level = Identifiers.Root, Groups = new(StringComparer.Ordinal) { ["all"] = new GroupSpec { Name = "All", Leaves = ["a.x", "a.y", "b", "shared", "c"] } } };
         var head = TestData.Analysis(extraExternals:
         [
-            new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", TestData.B1, 9),
-            new ExternalReference(TestData.Thing, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", TestData.X1, 30),
+            new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", "references", "Newtonsoft.Json.JsonConvert", TestData.B1, 9),
+            new ExternalReference(TestData.Thing, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", "references", "Newtonsoft.Json.JsonConvert", TestData.X1, 30),
         ]);
         var cs = ChangesetBuilder.Build(Checker.Run(baseMap, TestData.Analysis()), Checker.Run(headMap, head));
 
