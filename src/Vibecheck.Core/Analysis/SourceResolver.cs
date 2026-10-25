@@ -5,6 +5,7 @@ namespace Vibecheck.Analysis;
 /// it is not one. Identity comes from the solution's documents, not from the path: a
 /// generator's output is a source document whether or not the project writes it to
 /// disk, and a file under <c>obj</c> is build output even when a project compiles it.
+/// Once every document is registered, the lookups are safe to call from several threads at once.
 /// </summary>
 internal sealed class SourceResolver
 {
@@ -53,21 +54,21 @@ internal sealed class SourceResolver
     public string? SourceOf(string? path)
     {
         if (string.IsNullOrEmpty(path)) return null;
-        return documents.TryGetValue(Full(path), out var d) ? d.Path : null;
+        return Lookup(documents, path, out var d) ? d.Path : null;
     }
 
     /// <summary>Returns the generator that produced a document, or <see langword="null"/> for a regular document or an unknown path.</summary>
     public string? GeneratorOf(string? path)
     {
         if (string.IsNullOrEmpty(path)) return null;
-        return documents.TryGetValue(Full(path), out var d) ? d.Generator : null;
+        return Lookup(documents, path, out var d) ? d.Generator : null;
     }
 
     /// <summary>Returns the reason a path is not a source document: the build output location, or that it lies outside the repository.</summary>
     public string ReasonFor(string? path)
     {
         if (string.IsNullOrEmpty(path)) return "unknown";
-        if (rejected.TryGetValue(Full(path), out var reason)) return reason;
+        if (Lookup(rejected, path, out var reason)) return reason;
         return Path.IsPathRooted(path) ? "outside the repository" : "unknown: " + path.Replace('\\', '/');
     }
 
@@ -79,6 +80,13 @@ internal sealed class SourceResolver
         if (!relative.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return false;
         return !relative.Split('/').Any(s => s.Equals("obj", StringComparison.OrdinalIgnoreCase) || s.Equals("bin", StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// Looks up a path in a table keyed by full paths. A syntax tree's path is usually a key already, so the path is
+    /// tried as given before it is made full, which saves a call into the file system for each reference.
+    /// </summary>
+    private static bool Lookup<T>(Dictionary<string, T> table, string path, out T value) =>
+        table.TryGetValue(path, out value!) || table.TryGetValue(Full(path), out value!);
 
     private static string Full(string path)
     {
