@@ -731,8 +731,11 @@ as the differences:
 - **Patterns**: each pattern found at base that has an instance at head that the
   change added or changed, with its keys, its number of instances at base, its
   norms, those instances with their status, their departures from the norms, the
-  norms they lack, their unusual traits and their companions, and every other
-  instance at head with its leaf, as [patterns.md](patterns.md) section 5.7 describes. A type is an instance at head when
+  norms they lack, their unusual traits, their companions and their nearest and
+  typical examples, every other instance at head with its leaf, the source at head of
+  each reported instance and example, and the rows that align each reported instance
+  with each of the others member by member, as [patterns.md](patterns.md) sections 5.7,
+  6 and 7.3 describe. A type is an instance at head when
   it carries every key of the pattern, and it is reported under the most specific of
   the patterns it is an instance of.
 - **Glossary**: the names the changeset introduces, as [attention.md](attention.md)

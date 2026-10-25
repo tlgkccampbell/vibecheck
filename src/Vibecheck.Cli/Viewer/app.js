@@ -928,6 +928,9 @@
     pattern: null,
     // The blocks whose instances the pattern's section in the details panel shows opened.
     patternBlocks: new Set(),
+    // The comparison that replaces an instance's diffs, as the pattern's identifier, the instance's type and the type it
+    // is compared with, or null.
+    compare: null,
     // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
     glossaryBlock: null,
     term: null,
@@ -1615,6 +1618,8 @@
     const muted = done && state.opts.mute;
     const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
     if (types && types.length) block.append(declaresLine(types));
+    const cmp = compareFor(path);
+    if (cmp) { block.append(compareBlock(cmp.pattern, cmp.instance)); return block; }
     const diffs = el("div", { class: "file-diffs" });
     const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(hunkBlock(path, h, i, talk.lines, notes.lines))); };
     if (muted && !state.expanded.has(path)) diffs.hidden = true;
@@ -1667,6 +1672,76 @@
   function showPattern(selection) {
     state.pattern = selection;
     redraw();
+  }
+
+  // Returns the comparison that replaces a file's diffs, as the pattern and the instance whose source the file holds, or
+  // null when the file shows its diffs.
+  function compareFor(path) {
+    const p = state.compare && PATTERNS.get(state.compare.id);
+    const instance = p && p.instances.find((i) => i.type === state.compare.type);
+    const source = instance && p.sources[instance.type];
+    return source && source.file === path && Object.keys(instance.compare).length ? { pattern: p, instance } : null;
+  }
+
+  // Compares an instance with another type of its pattern in place of the instance's diffs, opening its file.
+  function startCompare(id, type, other) {
+    state.compare = { id, type, other };
+    const p = PATTERNS.get(id);
+    return openFile(p.sources[type].file);
+  }
+
+  // Returns the head line numbers of a file's added lines, from its hunks.
+  function addedLines(path) {
+    const added = new Set();
+    for (const h of HUNKS.get(path) || []) {
+      let b = parseHeader(h.header).b;
+      for (const [op] of h.lines) {
+        if (op === "+") added.add(b);
+        if (op !== "-") b++;
+      }
+    }
+    return added;
+  }
+
+  // Returns the compare view: the instance at head on the left, with its added lines marked, and another type of its
+  // pattern on the right, as plain source, aligned member by member as the changeset aligns them. Each row of members
+  // is headed by their names and the departures and unusual traits it shows. A picker switches the type on the right.
+  // See docs/patterns.md section 7.3.
+  function compareBlock(p, instance) {
+    const others = Object.keys(instance.compare);
+    const other = others.includes(state.compare.other) ? state.compare.other : others[0];
+    const left = p.sources[instance.type], right = p.sources[other];
+    const added = addedLines(left.file), language = languageOf(left.file);
+    const lit = (src) => language ? highlightSide(src.lines.map((t) => [" ", t]), [" "], language) : src.lines.map(() => null);
+    const lh = lit(left), rh = lit(right);
+    const role = (n) => n === instance.examples.nearest ? "nearest" : n === instance.examples.typical ? "typical" : "instance";
+    const box = el("div", { class: "compare" });
+    box.append(el("div", { class: "compare-head" },
+      el("span", { class: "compare-side" }, `${shortName(instance.type)} at head`),
+      el("span", { class: "compare-side" }, el("select", { "aria-label": "Compare with", onchange: (ev) => { state.compare = { ...state.compare, other: ev.target.value }; redraw(); } },
+        ...others.map((n) => el("option", { value: n, selected: n === other }, `${shortName(n)} · ${role(n)}`))),
+        el("button", { class: "link", onclick: () => { state.compare = null; redraw(); } }, "Back to the diff"))));
+    const digits = String(Math.max(left.first + left.lines.length, right.first + right.lines.length)).length;
+    const col = () => el("col", { style: `width: calc(${digits}ch + 17px)` });
+    const table = el("table", { class: "diff compare-table" }, el("colgroup", {}, col(), el("col"), col(), el("col")));
+    const span = (range) => range ? Array.from({ length: range.last - range.first + 1 }, (_, k) => range.first + k) : [];
+    const name = (n) => n ? shortName(n) : "—";
+    for (const row of instance.compare[other]) {
+      table.append(el("tr", { class: "compare-row" + (row.marks ? " marked" : "") }, el("td", { colspan: 4 },
+        `${name(row.left)} · ${name(row.right)}`, ...(row.marks || []).map((m) => el("span", { class: "compare-mark" }, m)))));
+      const l = span(row.leftLines).filter((n) => n - left.first < left.lines.length), r = span(row.rightLines).filter((n) => n - right.first < right.lines.length);
+      for (let k = 0; k < Math.max(l.length, r.length); k++) {
+        const a = l[k], b = r[k];
+        table.append(el("tr", {},
+          el("td", { class: "ln" }, a === undefined ? "" : String(a)),
+          codeCell(a !== undefined && added.has(a) ? "add" : "ctx", a === undefined ? null : left.lines[a - left.first], a === undefined ? null : lh[a - left.first]),
+          el("td", { class: "ln" }, b === undefined ? "" : String(b)),
+          codeCell("ctx", b === undefined ? null : right.lines[b - right.first], b === undefined ? null : rh[b - right.first])));
+      }
+    }
+    box.append(el("div", { class: "diff-scroll" }, table));
+    if (left.cut || right.cut) box.append(el("p", { class: "hint" }, `Cut at its last whole member within 300 lines: ${[left.cut ? shortName(instance.type) : null, right.cut ? shortName(other) : null].filter(Boolean).join(" and ")}.`));
+    return box;
   }
 
   // Returns the norms of a pattern as a table, each with its share and a check or a cross for an instance, the
@@ -1724,6 +1799,13 @@
     box.append(kv("Before", plural(p.count, "instance", "instances")));
     const instance = p.instances.find((i) => i.type === type);
     if (instance) box.append(normsBlock(p, instance));
+    if (instance && Object.keys(instance.compare).length) {
+      const example = (role, n) => n && instance.compare[n]
+        ? el("li", {}, el("button", { class: "row", onclick: () => startCompare(p.id, type, n), title: `Compare ${shortName(type)} with ${n}` },
+          el("span", { class: "row-name" }, shortName(n)), el("span", { class: "row-meta" }, role)))
+        : "";
+      box.append(el("h3", {}, "Compare with"), el("ul", { class: "list" }, example("nearest", instance.examples.nearest), example("typical", instance.examples.typical)));
+    }
     const row = (name, status) => {
       const t = CS.types.find((x) => x.name === name);
       return el("li", {}, el("button", { class: "row" + (name === type ? " current" : ""), onclick: () => openType(name), title: name },

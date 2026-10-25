@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Vibecheck.Analysis;
 using Vibecheck.Checking;
 using Vibecheck.Model;
 
@@ -72,7 +73,32 @@ public sealed record PatternChange(string Id, string Name, string? Purpose, stri
 {
     /// <summary>Gets the pattern's norms at base, most shared first.</summary>
     public List<NormChange> Norms { get; init; } = [];
+
+    /// <summary>Gets the source at head of each instance the pattern reports and of each of their examples, by the type's name.</summary>
+    public SortedDictionary<string, TypeSource> Sources { get; init; } = new(StringComparer.Ordinal);
 }
+
+/// <summary>
+/// The source of a type at head, from the file that declares most of it: the lines from its declaration's first line,
+/// at most <see cref="PatternExamples.MostLines"/> of them. A longer type is cut at its last whole member within the
+/// limit, and is marked as cut.
+/// </summary>
+public sealed record TypeSource(string File, int First, List<string> Lines, bool Cut);
+
+/// <summary>
+/// A row of the compare view, as <see cref="PatternExamples.Align"/> aligns two types: a member of the instance on the
+/// left and a member of the other type on the right, each with its name and its lines in the file of its
+/// <see cref="TypeSource"/>, either side empty when the member has no counterpart. The marks are the words for the
+/// instance's departures and unusual traits that the row shows.
+/// </summary>
+public sealed record CompareRow(string? Left, LineRange? LeftLines, string? Right, LineRange? RightLines)
+{
+    /// <summary>Gets the words for the departures and unusual traits the row shows, or <see langword="null"/> when it shows none.</summary>
+    public List<string>? Marks { get; init; }
+}
+
+/// <summary>The examples of an instance, as <see cref="PatternExamples.Choose"/> chooses them, either absent when the pattern has no other instance to give.</summary>
+public sealed record ExampleChoice(string? Nearest, string? Typical);
 
 /// <summary>
 /// A norm of a pattern, as <see cref="NormFact"/> describes it, with the words that say an instance has it and the
@@ -101,6 +127,12 @@ public sealed record PatternInstance(string Type, string Status)
 
     /// <summary>Gets the instance's companion in each other pattern that has one, by that pattern's identifier.</summary>
     public SortedDictionary<string, string> Companions { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Gets the instance's nearest and typical examples.</summary>
+    public ExampleChoice Examples { get; init; } = new(null, null);
+
+    /// <summary>Gets the rows that align the instance with each other type whose source the pattern carries, by that type's name.</summary>
+    public SortedDictionary<string, List<CompareRow>> Compare { get; init; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>An instance of a pattern at head that the pattern does not report as added or changed, with the leaf it binds to at head.</summary>

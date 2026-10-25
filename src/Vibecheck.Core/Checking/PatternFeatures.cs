@@ -97,7 +97,7 @@ public sealed class PatternFeatures
     }
 
     /// <summary>Returns the type arguments that the traits of a type give the keys of a pattern, keeping those that are types of the system.</summary>
-    private IEnumerable<string> KeyArguments(TypeFact type, PatternFact pattern)
+    public IEnumerable<string> KeyArguments(TypeFact type, PatternFact pattern)
     {
         if (type.Traits is not { } traits) yield break;
         var bases = traits.Base is null ? [] : new[] { (PatternKeys.Inherits, traits.Base) };

@@ -125,7 +125,7 @@ internal static class Snippets
             hunks.Add(new FileHunks(path, Diff(a ?? "", b ?? "")));
             texts[path] = (a, b);
         }
-        return ChangesetBuilder.Build(Facts(before), Facts(after), hunks, changes, texts);
+        return ChangesetBuilder.Build(Facts(before), Facts(after), hunks, changes, texts, paths => paths.Where(after.ContainsKey).ToDictionary(p => p, p => after[p]));
     }
 
     /// <summary>Returns the hunks of a line diff of two texts, with three lines of context as git gives them.</summary>

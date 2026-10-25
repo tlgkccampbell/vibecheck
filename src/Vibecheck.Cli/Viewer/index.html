@@ -450,6 +450,11 @@
   table.norms tr.lacked { color: var(--muted); }
   table.norms tr.kept td.mark { color: var(--added); }
   .unusual { font-size: 12px; margin: 4px 0 8px; }
+  .compare-head { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 10px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .compare-side { display: flex; align-items: center; gap: 10px; }
+  .compare-side .link { white-space: nowrap; }
+  table.diff.compare-table tr.compare-row td { font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--bg); border-top: 1px solid var(--line); padding: 3px 10px; white-space: normal; }
+  .compare-mark { margin-left: 10px; color: var(--warn); }
   .unusual .k { color: var(--muted); }
   .file-path { overflow-wrap: anywhere; }
   .file-head input { margin: 0; flex: none; cursor: pointer; }

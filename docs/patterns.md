@@ -8,8 +8,8 @@ reviewer can compare it with them. It builds on the map and facts of
 [attention.md](attention.md), and the test subjects of [tests.md](tests.md), and it
 lists, in section 11, the changes it makes to those documents.
 
-Phases 1 and 2 of section 13, traits and discovery, and norms and departures, are
-built. The other phases are not.
+Phases 1 to 3 of section 13, traits and discovery, norms and departures, and examples
+and the compare view, are built. The other phases are not.
 
 The design rests on one principle. A pattern is evidence about the code, not part of
 the architecture. Controllers sit in every feature, and a pattern cuts across the
@@ -360,9 +360,12 @@ An instance is changed when one of its files changed or it binds to another leaf
 norm carries the words that say an instance has it and lacks it, and each instance
 carries `lacks`, every norm it lacks at head, so that the details panel can mark a norm
 an instance lacked before the change apart from a departure, and `companions`, its
-companion in each other pattern that has one. Phases 1 and 2 carry everything above
-except `memberNorms`, `memberDepartures`, `examples` and `sources`. `sources` holds the text of each
-example at head, as section 7.3 needs it.
+companion in each other pattern that has one. Each instance also carries
+`compare`, the rows of section 7.3 that align it with each other type whose source the
+pattern carries, by that type's name, and `sources` holds the text of the reported
+instances as well as their examples, since the left column of the compare view needs
+the instance's whole type and not only its hunks. Phases 1 to 3 carry everything
+above except `memberNorms` and `memberDepartures`.
 
 The changeset also gains `NewPatterns`, the patterns of section 4.5, each with its
 keys, its name from its first key, and its instances with their leaves.
@@ -373,16 +376,17 @@ Each new or changed instance gets two examples from the pattern's other instance
 
 - The **nearest**: the instance with the most features in common with it, measured as
   the share of their combined features that both have. Ties go to an instance in the
-  same leaf, then to the one whose key type arguments share the longest namespace tail
-  with the instance's, so a consumer of a billing event is compared with another
-  consumer of a billing event.
+  same leaf, then to the one whose key type arguments share the most leading namespace
+  segments with the instance's, so a consumer of a billing event is compared with
+  another consumer of a billing event, then to the first by name.
 - The **typical**: the instance with the highest total of that measure against all
   the others, which is the instance most like the pattern as a whole. It is the same
   for every instance of the pattern.
 
-When the two are the same type, the typical one is the one after it in the order. The
-examples are computed at head, so that an example is code that exists after the change,
-but never from the change's own new instances.
+When the two are the same type, the typical one is the one after it in the order, and
+so it is when the typical is the instance itself. The examples are computed at head, so
+that an example is code that exists after the change, but never from the change's own
+new instances. A changed instance can be an example, as it was code before the change.
 
 Each example's source at head is carried in the changeset, up to 300 lines, so that a
 changeset published as an artifact can show it without the server. A longer type is
@@ -430,10 +434,13 @@ there rather than opening in the panel.
   constructor, then members paired by name, then the remaining members paired by
   shape, which spec section 3.1 defines without the name, so that two controller
   actions with the same signature and attributes pair however they are named. A member
-  with no counterpart has a row to itself.
+  with no counterpart has a row to itself, which follows the row of the member before
+  it on its own side. The tool aligns the rows when it builds the changeset, so that
+  the alignment is tested with the rest, and the viewer only draws them.
 - A departure is marked on the row that shows it, such as the constructor row for an
   injected type that is missing, or an action's row for an attribute its member norm
-  expects. An unusual trait is marked on the declaration's row.
+  expects. An unusual trait, and a departure that no member shows, such as a missing
+  test, is marked on the declaration's row.
 - A picker above the right column switches between the nearest, the typical and any
   other instance whose source the changeset carries.
 
