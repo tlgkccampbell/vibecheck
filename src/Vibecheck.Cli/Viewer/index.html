@@ -440,6 +440,10 @@
   .decision-head { border-left: 3px solid var(--accent); color: var(--fg); }
   .decision-head.selected { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
   .decision-head .btn { font-family: inherit; }
+  .help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; margin-left: 6px; border: 1px solid var(--muted); border-radius: 50%;
+    font: 600 10px/1 var(--sans); letter-spacing: 0; text-transform: none; color: var(--muted); cursor: help; vertical-align: 1px; }
+  .help:hover, .help:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+  .help-tip { position: fixed; z-index: 20; max-width: 320px; line-height: 1.45; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--fg); }
   .public-mark { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 1px 6px; border-radius: 2px; background: var(--warn-bg); color: var(--warn); }
   .decision-panel { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px solid var(--accent); }
   .decision-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -504,13 +508,18 @@
   .body pre { overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 8px; font-family: var(--code); font-size: 12.5px; }
   .body code { font-family: var(--code); font-size: 90%; }
   .body blockquote { margin: 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
-  .body table { border-collapse: collapse; } .body td, .body th { border: 1px solid var(--line); padding: 2px 6px; }
+  /* A table sizes its columns to their words, not to single characters as overflow-wrap: anywhere would let it, and
+     scrolls sideways when it is wider than the comment. */
+  .body table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow: auto; }
+  .body td, .body th { border: 1px solid var(--line); padding: 2px 6px; overflow-wrap: break-word; min-width: 4ch; }
   .body h1, .body h2, .body h3 { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--fg); margin: 12px 0 6px; }
   .thread { border: 1px solid var(--line); border-radius: 4px; background: var(--surface); font-family: var(--sans); font-size: 13px; white-space: normal; }
   .thread > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px; color: var(--fg); font-family: var(--mono); font-size: 12px; }
   .thread.resolved > summary { color: var(--muted); }
   .thread.pending { border-color: var(--modified); }
   .thread.flash { animation: thread-flash 1.6s ease-out; }
+  .row.flash { animation: row-flash 1.6s ease-out; }
+  @keyframes row-flash { from { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); } }
   @keyframes thread-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
   .thread-count { color: var(--muted); }
   .thread-excerpt { color: var(--muted); font-family: var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
@@ -586,6 +595,7 @@
   <span class="brand">vibecheck</span>
   <span class="nav-buttons">
     <button class="btn" id="up" title="Go up one level (Esc)">↑ Up</button>
+    <button class="btn" id="top" title="Go to the top of the project (Home)">⇈ Top</button>
     <button class="btn" id="fit" title="Zoom out to show the whole level (F)">⤢ Zoom to fit</button>
   </span>
   <nav class="crumbs" id="crumbs" aria-label="Path"></nav>
@@ -650,11 +660,11 @@
 
   <div class="side">
     <aside class="details-panel">
-      <h2 class="panel-title">Selected</h2>
+      <h2 class="panel-title">Selected <span class="help" tabindex="0" data-help="This panel shows details of the selected block, edge or decision, including Claude&#39;s explanation of why it changed when there is one. When nothing is selected, it describes the level on screen." aria-label="This panel shows details of the selected block, edge or decision, including Claude&#39;s explanation of why it changed when there is one. When nothing is selected, it describes the level on screen.">?</span></h2>
       <div id="details"></div>
     </aside>
     <aside class="legend-panel" id="legend-panel">
-      <h2 class="panel-title">Legend</h2>
+      <h2 class="panel-title">Legend <span class="help" tabindex="0" data-help="The legend shows the colors and marks the map uses for block categories and change status." aria-label="The legend shows the colors and marks the map uses for block categories and change status.">?</span></h2>
       <div class="legend" id="legend-categories"></div>
       <h3>Status</h3>
       <div class="legend">
