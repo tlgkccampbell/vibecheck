@@ -984,8 +984,9 @@
     tab: "map",
     // The lines selected to comment on: a path, a hunk index, a side, and the first and last line indexes, or null.
     compose: null,
-    // The reviewed files whose diffs the reader has shown, by path.
-    expanded: new Set(),
+    // The files whose diffs the reader has shown (true) or hidden (false), by path. A file without an entry shows its
+    // diffs unless it is reviewed and reviewed files are muted.
+    folds: new Map(),
     // The consequences whose diffs the reader has shown, by hunk identifier.
     expandedHunks: new Set(),
     // The selected decision's identifier, whose consequences the details panel lists and the map marks, or null.
@@ -1630,7 +1631,7 @@
   async function openHunk(path, index) {
     const hunk = (HUNKS.get(path) || [])[index];
     if (hunk && hunk.follows) state.expandedHunks.add(hunkId(path, index));
-    if (REVIEWED.has(path)) state.expanded.add(path);
+    state.folds.set(path, true);
     await openFile(path);
     const target = document.querySelector(`[data-hunk="${CSS.escape(hunkId(path, index))}"]`);
     if (!target) return;
@@ -1684,8 +1685,9 @@
     return box;
   }
 
-  // Returns a file's header and diffs for the leaf view. A changed file's header carries its reviewed checkbox, and a
-  // reviewed file's diffs stay collapsed while reviewed files are muted, until the reader shows them. A renamed file
+  // Returns a file's header and diffs for the leaf view. A changed file's header carries its reviewed checkbox, and the
+  // header of a file with diffs carries a button that hides or shows them. A reviewed file's diffs start out hidden while
+  // reviewed files are muted, as state.folds describes. A renamed file
   // names its path at base, and a path at base that a type still lists links to the renamed file. When types are given,
   // a line under the header names them, with the status of each that was added, removed or moved.
   function fileBlock(path, types) {
@@ -1718,12 +1720,13 @@
     if (cmp) { block.append(compareBlock(cmp.pattern, cmp.instance)); return block; }
     const diffs = el("div", { class: "file-diffs" });
     const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(hunkBlock(path, h, i, talk.lines, notes.lines))); };
-    if (muted && !state.expanded.has(path)) diffs.hidden = true;
+    if (!(state.folds.get(path) ?? !muted)) diffs.hidden = true;
     else fill();
-    if (muted && hunks.length) {
+    if (hunks.length) {
       head.append(el("button", { class: "link", onclick: (ev) => {
         const show = diffs.hidden;
-        if (show) { fill(); state.expanded.add(path); } else state.expanded.delete(path);
+        if (show) fill();
+        state.folds.set(path, show);
         diffs.hidden = !show;
         ev.target.textContent = show ? "Hide diff" : "Show diff";
       } }, diffs.hidden ? "Show diff" : "Hide diff"));
@@ -3692,7 +3695,7 @@
     const p = PULL.places[t.id];
     if (!p) return;
     if (state.tab !== "map") showTab("map");
-    state.expanded.add(p.path);
+    state.folds.set(p.path, true);
     await openFile(p.path);
     const target = document.querySelector(`[data-thread="${CSS.escape(t.id)}"]`);
     if (!target) return;
@@ -3847,7 +3850,7 @@
     const p = PULL.notes[a.key];
     if (!p) return;
     if (state.tab !== "map") showTab("map");
-    state.expanded.add(p.path);
+    state.folds.set(p.path, true);
     await openFile(p.path);
     const target = document.querySelector(`[data-note="${CSS.escape(a.key)}"]`);
     if (target) target.scrollIntoView({ block: "center" });
@@ -3925,11 +3928,12 @@
   const canWrite = () => !!(API && PULL.snapshot && PULL.snapshot.state === "OPEN");
   const pendingReview = () => { const d = discussion(); return d ? d.pending : null; };
 
-  // Sends JSON to a path of the server and returns whether it succeeded, with the answer's body.
+  // Sends JSON to a path of the server and returns whether it succeeded, with the answer's status and body. The status
+  // is 0 when the server could not be reached.
   async function send(path, body, method = "POST") {
     const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).catch(() => null);
-    if (!r) return { ok: false, body: { message: "The vibecheck server could not be reached." } };
-    return { ok: r.ok, body: await r.json().catch(() => ({})) };
+    if (!r) return { ok: false, status: 0, body: { message: "The vibecheck server could not be reached." } };
+    return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
   }
 
   // Draws what pull events brought while a comment box held the focus.
@@ -4230,19 +4234,35 @@
     redraw();
   }
 
-  // Marks files reviewed or not. The page changes at once. The server, when there is one, stores the marks, answers
-  // with the review's marks, which replace the page's, and tells the other pages that show the same changes.
+  // Marks files reviewed or not. The page changes at once, and the files' diffs go back to hiding or showing as their
+  // marks say. The server, when there is one, stores the marks, answers with the review's marks, which replace the
+  // page's, and tells the other pages that show the same changes. When the server does not store them, the page takes
+  // its marks back and says why in the notice under the top bar.
   async function setReviewed(paths, reviewed) {
     const before = new Map(REVIEWED);
+    for (const p of paths) state.folds.delete(p);
     applyMarks(Object.fromEntries(paths.map((p) => [p, reviewed ? REVIEWED.get(p) || "reviewer" : ""])));
     if (!API) return;
-    const r = await fetch(`${API}/reviewed`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths, reviewed }) }).catch(() => null);
-    const body = r && r.ok ? await r.json().catch(() => null) : null;
+    const r = await send(`${API}/reviewed`, { paths, reviewed });
     REVIEWED.clear();
-    for (const [path, why] of body ? Object.entries(body.marks || {}) : before) REVIEWED.set(path, why);
+    for (const [path, why] of r.ok ? Object.entries(r.body.marks || {}) : before) REVIEWED.set(path, why);
     renderProgress();
-    if (!body) $("#progress").textContent += " · the last mark could not be saved";
+    if (!r.ok) markFailed(r, paths, reviewed);
     redraw();
+  }
+
+  // Shows in the notice under the top bar that a mark was not saved, and why, with what the reader can do about it.
+  function markFailed(r, paths, reviewed) {
+    const what = paths.length === 1 ? paths[0].split("/").pop() : plural(paths.length, "file", "files");
+    const why = r.status === 0 ? "the vibecheck server could not be reached. If the vibecheck command has stopped, run it again and open the link it prints."
+      : r.status === 403 ? "the vibecheck server no longer accepts this page, which happens when the command was started again. Open the link it printed."
+      : r.status === 404 ? "the vibecheck server no longer has this review. Open it again from the list of ranges."
+      : r.body.message ? r.body.message : `the vibecheck server answered with status ${r.status}. The terminal that runs the vibecheck command shows the error.`;
+    const box = $("#notice");
+    box.className = "notice error";
+    box.replaceChildren(el("span", {}, `${what} could not be ${reviewed ? "marked reviewed" : "unmarked"}, since ${why}`),
+      el("button", { class: "close", title: "Dismiss", "aria-label": "Dismiss", onclick: () => { box.hidden = true; } }, "×"));
+    box.hidden = false;
   }
 
   // Draws the current location again once per frame, keeping the view, the selection and the leaf view's scroll.
