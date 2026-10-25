@@ -19,6 +19,9 @@ triviality, a reading path, new concepts and a glossary, is designed in
 consequences, semantic triviality, the reading path and the glossary, are built.
 Tests in a review are designed in [docs/tests.md](docs/tests.md); all three of its
 phases, test types, tests on decisions and test signals, are built.
+Patterns, the roles many types play, such as controllers, handlers and consumers, and the
+comparison of a new instance with the existing ones, are designed in
+[docs/patterns.md](docs/patterns.md); none of its phases is built.
 
 ## Layout
 
