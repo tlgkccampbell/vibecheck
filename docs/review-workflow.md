@@ -254,8 +254,8 @@ changed, not only what changed. Counts and diffs already say what.
   the node is selected or open. A view's groups get no narrative of their own, since a
   group is a regrouping of leaves the levels already explain.
 - Each term of the glossary that has no documentation summary, as one sentence that
-  says what the declaration is, keyed `term:<symbol>` and requested in batches by
-  block after the levels and views. See [attention.md](attention.md) section 8.3.
+  says what the solution means by it, keyed `term:<words>` and requested in batches
+  after the levels and views. See [attention.md](attention.md) section 8.4.
 - The name and purpose of each pattern the changeset reports, keyed `pattern:<keys>`
   and requested right after the summary, from the source of three of its instances at
   base. See [patterns.md](patterns.md) section 8.

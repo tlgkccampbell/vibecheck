@@ -5,18 +5,18 @@ namespace Vibecheck.Assist;
 
 /// <summary>
 /// Represents one request for narratives: the changed edges and nodes of one level or one view, or of part of one
-/// when it has more than a batch holds, the terms of one block that have no documentation summary, the name and
+/// when it has more than a batch holds, the glossary's terms that have no documentation summary, the name and
 /// purpose of one pattern, or the summary of the whole changeset. See <c>docs/review-workflow.md</c> section 6.2,
-/// <c>docs/attention.md</c> section 8.3 and <c>docs/patterns.md</c> section 8.
+/// <c>docs/attention.md</c> section 8.4 and <c>docs/patterns.md</c> section 8.
 /// </summary>
-/// <param name="Id">Identifies the batch within its plan, such as <c>summary</c>, <c>level:root/1</c>, <c>view:by-concern/1</c>, <c>term:billing.core/1</c> or <c>pattern:consumer</c>.</param>
+/// <param name="Id">Identifies the batch within its plan, such as <c>summary</c>, <c>level:root/1</c>, <c>view:by-concern/1</c>, <c>term:root/1</c> or <c>pattern:consumer</c>.</param>
 /// <param name="Kind">One of <c>summary</c>, <c>level</c>, <c>view</c>, <c>term</c> and <c>pattern</c>.</param>
-/// <param name="Location">The level or view whose blocks the batch explains, the block whose terms it defines, the pattern it names, or <see cref="Identifiers.Root"/> for the summary.</param>
+/// <param name="Location">The level or view whose blocks the batch explains, the pattern it names, or <see cref="Identifiers.Root"/> for the summary and for terms.</param>
 /// <param name="Edges">The changed edges the batch explains.</param>
 /// <param name="Nodes">The changed nodes the batch explains, each a child of the level.</param>
 public sealed record NarrativeBatch(string Id, string Kind, string Location, IReadOnlyList<DrawnEdge> Edges, IReadOnlyList<string> Nodes)
 {
-    /// <summary>Gets the terms the batch defines, each a declaration of the block without a documentation summary.</summary>
+    /// <summary>Gets the terms the batch defines, each a term of the glossary without a documentation summary.</summary>
     public IReadOnlyList<Term> Terms { get; init; } = [];
 
     /// <summary>Gets the pattern the batch names, or <see langword="null"/> for a batch of any other kind.</summary>
@@ -47,7 +47,7 @@ public static class NarrativePlanner
     /// Returns the batches of a changeset in the order they are requested: the summary, then the name and purpose of
     /// each pattern whose map entry does not give both, then the location the viewer opens on, which is the top level's
     /// first view or else the top level, then the other levels and views breadth first, larger changes first within
-    /// each depth, and last the glossary's terms without a documentation summary, by block. Locations with no changed
+    /// each depth, and last the glossary's terms without a documentation summary. Locations with no changed
     /// edge or node are left out, and so is a pattern with no instance at base to name it from.
     /// </summary>
     public static List<NarrativeBatch> Plan(Changeset changeset, int batchSize = BatchSize)
@@ -96,15 +96,11 @@ public static class NarrativePlanner
                     part.Where(p => p.Edge is not null).Select(p => p.Edge!).ToList(), part.Where(p => p.Node is not null).Select(p => p.Node!).ToList()));
             }
         }
-        // The terms with no documentation summary come last, by block in the glossary's order, so that the
-        // explanations the reviewer meets first are written first. A map part has its purpose, and an assembly is not
-        // declared in the solution, so only declarations are defined.
-        foreach (var group in changeset.Glossary.Where(t => t.Summary is null && t.File is not null && Term.IsDeclaration(t.Kind)).GroupBy(t => t.Block ?? ArchitectureMap.Unsorted, StringComparer.Ordinal))
-        {
-            var terms = group.ToList();
-            for (var i = 0; i < terms.Count; i += batchSize)
-                batches.Add(new NarrativeBatch($"term:{group.Key}/{i / batchSize + 1}", "term", group.Key, [], []) { Terms = terms.Skip(i).Take(batchSize).ToList() });
-        }
+        // The terms with no documentation summary come last, in the glossary's order, so that the explanations the
+        // reviewer meets first are written first. A term that a type's whole name documents needs no definition.
+        var terms = changeset.Glossary.Where(t => t.Summary is null).ToList();
+        for (var i = 0; i < terms.Count; i += batchSize)
+            batches.Add(new NarrativeBatch($"term:{Identifiers.Root}/{i / batchSize + 1}", "term", Identifiers.Root, [], []) { Terms = terms.Skip(i).Take(batchSize).ToList() });
         return batches;
     }
 

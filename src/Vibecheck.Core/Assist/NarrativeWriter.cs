@@ -129,7 +129,7 @@ public sealed record NarrativeTally(int Written, int Dropped, IReadOnlyList<stri
 /// a term's definition only the file that declares it, a pattern's name and purpose only the files of its samples, and
 /// the summary only nodes of the map. Narratives that fail, or that the answer leaves out, are requested once more on
 /// their own, and dropped if they fail again. See <c>docs/review-workflow.md</c> sections 6.2 and 6.3,
-/// <c>docs/attention.md</c> section 8.3 and <c>docs/patterns.md</c> section 8.
+/// <c>docs/attention.md</c> section 8.4 and <c>docs/patterns.md</c> section 8.
 /// </summary>
 public static class NarrativeWriter
 {
@@ -142,7 +142,7 @@ public static class NarrativeWriter
     /// <summary>How long one request may take. A request that takes longer counts as failed, so that one hung call cannot keep the narratives from finishing.</summary>
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(5);
 
-    private const int PairsPerEdge = 8, SitesPerSide = 4, DiffLinesPerNode = 160, FilesPerNode = 30, SummaryEdges = 12, DeclarationLines = 40, SitesPerTerm = 4,
+    private const int PairsPerEdge = 8, SitesPerSide = 4, DiffLinesPerNode = 160, FilesPerNode = 30, SummaryEdges = 12, SamplesPerTerm = 5, ChangedSamplesPerTerm = 2,
         LinesPerSample = 80, NameLength = 40;
 
     /// <summary>
@@ -333,10 +333,16 @@ public static class NarrativeWriter
                 var key = Str(t, "key");
                 if (!terms.TryGetValue(key, out var term) || good.Any(n => n.Key == key)) continue;
                 var text = Text(t);
-                var file = Str(t, "file");
+                var allowed = TermSamples(term, context).Select(x => x.File).ToHashSet(StringComparer.Ordinal);
+                var files = Strings(t, "files").Distinct(StringComparer.Ordinal).ToList();
+                var foreign = files.Where(f => !allowed.Contains(f)).ToList();
                 if (text is null) rejected[key] = "the definition is empty";
-                else if (file != term.File) rejected[key] = $"the definition cites {(file.Length == 0 ? "no file" : file)}, which is not the file that declares it";
-                else { good.Add(new Narrative(key, text, [file])); rejected.Remove(key); }
+                // A definition that talks about the names restates what the reviewer sees beside it.
+                else if (text.Contains("whose name", StringComparison.OrdinalIgnoreCase) || text.Contains("names hold", StringComparison.OrdinalIgnoreCase))
+                    rejected[key] = "the definition describes the names that hold the term rather than the concept it names";
+                else if (files.Count == 0) rejected[key] = "the definition cites no file";
+                else if (foreign.Count > 0) rejected[key] = $"the definition cites {string.Join(", ", foreign)}, which does not declare one of the types listed for it";
+                else { good.Add(new Narrative(key, text, files)); rejected.Remove(key); }
             }
             foreach (var key in batch.Keys)
                 if (!rejected.ContainsKey(key) && good.All(n => n.Key != key)) rejected[key] = "the answer gave no definition for it";
@@ -459,46 +465,45 @@ public static class NarrativeWriter
     }
 
     /// <summary>
-    /// Returns the prompt that asks for the definitions of a batch's terms. Each term gives its declaration's lines as
-    /// the head hunks hold them, up to <see cref="DeclarationLines"/>, and up to <see cref="SitesPerTerm"/> of the
-    /// places that use it, with the line at each when a hunk holds it.
+    /// Returns the prompt that asks for the definitions of a batch's terms. Each term lists how many types and families
+    /// hold it and its <see cref="TermSamples"/>, each with the file that declares it, its leaf and its documentation
+    /// summary when it has one.
     /// </summary>
     private static string TermPrompt(NarrativeBatch batch, NarrativeContext context)
     {
         var cs = context.Changeset;
-        var lines = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
-        Dictionary<int, string> LinesOf(string path) => lines.TryGetValue(path, out var held) ? held : lines[path] = cs.Hunks.FirstOrDefault(h => h.Path == path)?.LinesAtHead() ?? [];
+        var summaries = context.Head.Declarations.Where(d => d.Kind == "type" && d.Summary is not null)
+            .GroupBy(d => d.Symbol, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Summary!, StringComparer.Ordinal);
         var sb = new StringBuilder();
         foreach (var t in batch.Terms)
         {
-            sb.Append($"### `{t.Key}`\n\n`{t.Symbol}`, {(t.Accessibility is null ? "" : t.Accessibility + " ")}{t.Kind}");
-            if (t.Previous is not null) sb.Append($", renamed from `{t.Previous}`");
-            sb.Append($", declared at {t.File}:{t.Line}");
-            if (t.Block is not null) sb.Append($" in {NameOf(cs.Map, t.Block)}");
-            sb.Append(".\n");
-            var declaration = context.Head.Declarations.Where(d => d.Symbol == t.Symbol).OrderBy(d => d.File == t.File ? 0 : 1).ThenBy(d => d.FirstLine).FirstOrDefault();
-            if (declaration is not null && t.File is not null)
+            var count = t.Instances.Count + t.Others.Count;
+            sb.Append($"### `{t.Key}`\n\n\"{t.Name}\", in the names of {count} type{(count == 1 ? "" : "s")} in {t.Families} famil{(t.Families == 1 ? "y" : "ies")}");
+            sb.Append(t.New ? ", new in the change" : "").Append($", {t.Instances.Count} of them added or changed by the change. Among them:\n");
+            foreach (var (type, file, leaf, changed) in TermSamples(t, context))
             {
-                var text = LinesOf(t.File);
-                var count = declaration.LastLine - declaration.FirstLine + 1;
-                var shown = Enumerable.Range(declaration.FirstLine, Math.Min(count, DeclarationLines)).Where(text.ContainsKey).Select(n => text[n]).ToList();
-                if (shown.Count > 0) sb.Append("```csharp\n").Append(string.Join("\n", shown)).Append("\n```\n");
-                if (count > DeclarationLines) sb.Append($"The declaration runs to line {declaration.LastLine}.\n");
+                sb.Append($"- `{type}`, {(changed ? "added or changed, " : "")}declared in {file} in {NameOf(cs.Map, leaf)}");
+                sb.Append(summaries.TryGetValue(TypeNames.Plain(type), out var summary) ? $": {summary}\n" : ", with no documentation\n");
             }
-            var uses = context.Head.Dependencies.Where(d => d.Symbol == t.Symbol).Select(d => (d.FromType, d.File, d.Line))
-                .Concat(context.Head.Sites.Where(s => s.Symbol == t.Symbol).Select(s => (s.FromType, s.File, s.Line)))
-                .OrderBy(s => s.File, StringComparer.Ordinal).ThenBy(s => s.Line).Take(SitesPerTerm).ToList();
-            if (uses.Count > 0) sb.Append("Used at:\n");
-            foreach (var (from, file, line) in uses)
-            {
-                var at = LinesOf(file).GetValueOrDefault(line);
-                sb.Append($"- {file}:{line}, from `{from}`{(at is null ? "" : ": `" + at.Trim() + "`")}\n");
-            }
-            if (t.Uses > uses.Count) sb.Append($"- and {t.Uses - uses.Count} more\n");
+            if (count > SamplesPerTerm) sb.Append($"- and {count - SamplesPerTerm} more\n");
             sb.Append('\n');
         }
-        var location = batch.Location == ArchitectureMap.Unsorted ? "the types no leaf of the map binds" : $"`{batch.Location}`, {NameOf(cs.Map, batch.Location)}";
-        return Prompts.Fill(Prompts.Read("define.md"), ("location", location), ("terms", sb.ToString().TrimEnd()));
+        return Prompts.Fill(Prompts.Read("define.md"), ("terms", sb.ToString().TrimEnd()));
+    }
+
+    /// <summary>
+    /// Returns the types a term's definition is written from, up to <see cref="SamplesPerTerm"/>: first up to
+    /// <see cref="ChangedSamplesPerTerm"/> of those the change added or changed, and then the others, in the term's
+    /// order. Each comes with the first file that declares it at head and its leaf.
+    /// </summary>
+    private static List<(string Type, string File, string Leaf, bool Changed)> TermSamples(Term term, NarrativeContext context)
+    {
+        var files = context.Changeset.Types.ToDictionary(t => t.Name, t => t.Files, StringComparer.Ordinal);
+        return term.Instances.Take(ChangedSamplesPerTerm).Select(i => (i.Type, i.Leaf, Changed: true))
+            .Concat(term.Others.Select(o => (o.Type, o.Leaf, Changed: false)))
+            .Concat(term.Instances.Skip(ChangedSamplesPerTerm).Select(i => (i.Type, i.Leaf, Changed: true)))
+            .Where(x => files.TryGetValue(x.Type, out var f) && f.Count > 0)
+            .Take(SamplesPerTerm).Select(x => (x.Type, files[x.Type][0], x.Leaf, x.Changed)).ToList();
     }
 
     /// <summary>Returns the files that declare a pattern's samples at base.</summary>

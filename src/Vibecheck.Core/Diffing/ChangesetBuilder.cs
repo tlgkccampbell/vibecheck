@@ -54,8 +54,9 @@ public static class ChangesetBuilder
             Tests = tests,
             Patterns = PatternChanges.Build(baseFacts, headFacts, files, read),
             NewPatterns = PatternChanges.New(baseFacts, headFacts),
+            Glossary = Glossary.Build(baseFacts, headFacts, files),
         };
-        return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views), Glossary = Glossary.Build(changeset, baseFacts, headFacts, declarations) };
+        return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views) };
     }
 
     private static List<TypeChange> DiffTypes(Facts baseFacts, Facts headFacts)

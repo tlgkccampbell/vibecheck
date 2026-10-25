@@ -194,54 +194,78 @@ public class NarrativeTests
     }
 
     /// <summary>
-    /// Returns the context of a changeset that adds an undocumented <c>Clock.Later</c>, which Caller uses, and a
-    /// documented <c>Clock.Soon</c>, which the glossary already defines.
+    /// Returns the context of a changeset that adds an undocumented <c>GammaConsumer</c> beside two consumers, one of
+    /// them documented, and changes <c>DeltaStore</c>, whose term the documented <c>IStore</c> already defines.
     /// </summary>
     private static NarrativeContext TermContext()
     {
-        const string clock = "namespace A;\n\npublic class Clock\n{\n    public int Now(int zone) => zone;\n}\n";
-        const string caller = "namespace B;\n\npublic class Caller\n{\n    public int First(A.Clock clock) => clock.Now(1);\n}\n";
-        var before = new Dictionary<string, string> { ["src/Clock.cs"] = clock, ["src/Caller.cs"] = caller };
-        var after = new Dictionary<string, string>
+        static string Class(string name, string doc = "") => $"namespace A;\n\n{doc}public class {name}\n{{\n}}\n";
+        var before = new Dictionary<string, string>
         {
-            ["src/Clock.cs"] = clock.Replace("=> zone;", "=> zone;\n\n    public int Later() => Now(0) + 1;\n\n    /// <summary>Soon.</summary>\n    public int Soon() => 1;"),
-            ["src/Caller.cs"] = caller.Replace("clock.Now(1);", "clock.Now(1) + clock.Later();"),
+            ["src/AlphaConsumer.cs"] = Class("AlphaConsumer", "/// <summary>Consumes alpha.</summary>\n"),
+            ["src/BetaConsumer.cs"] = Class("BetaConsumer"),
+            ["src/IStore.cs"] = "namespace A;\n\n/// <summary>Keeps things.</summary>\npublic interface IStore\n{\n}\n",
+            ["src/DeltaStore.cs"] = Class("DeltaStore : IStore"),
+            ["src/EpsilonStore.cs"] = Class("EpsilonStore : IStore"),
+        };
+        var after = new Dictionary<string, string>(before)
+        {
+            ["src/GammaConsumer.cs"] = Class("GammaConsumer"),
+            ["src/DeltaStore.cs"] = "namespace A;\n\npublic class DeltaStore : IStore\n{\n    public int Count;\n}\n",
         };
         return new NarrativeContext(Snippets.Changeset(before, after), Snippets.Analyze(before), Snippets.Analyze(after), "(no commit messages)\n");
     }
 
     [Fact]
-    public void PlansTheDefinitionsOfUndocumentedTermsByBlockAfterTheLevelsAndViews()
+    public void PlansTheDefinitionsOfUndocumentedTermsAfterTheLevelsAndViews()
     {
-        var plan = NarrativePlanner.Plan(TermContext().Changeset);
+        var context = TermContext();
+        var plan = NarrativePlanner.Plan(context.Changeset);
 
+        Assert.Equal(["Consumer", "Store"], context.Changeset.Glossary.Select(t => t.Name));
         var terms = Assert.Single(plan, b => b.Kind == "term");
         Assert.Same(terms, plan[^1]);
-        Assert.Equal(("term:a/1", "a"), (terms.Id, terms.Location));
-        // Later has no summary and is defined; Soon has one and is not; Caller.First is rewritten, not introduced.
-        Assert.Equal(["term:A.Clock.Later"], terms.Keys);
+        Assert.Equal(("term:root/1", "root"), (terms.Id, terms.Location));
+        // IStore documents "Store", so only "Consumer" is defined.
+        Assert.Equal(["term:consumer"], terms.Keys);
     }
 
     [Fact]
-    public async Task DefinesATermFromItsDeclarationAndItsSitesAndDiscardsADefinitionThatCitesAnotherFile()
+    public async Task DefinesATermFromTheTypesThatHoldItAndDiscardsADefinitionThatCitesAnotherFile()
     {
         var context = TermContext();
         var batch = NarrativePlanner.Plan(context.Changeset)[^1];
         var claude = new FakeClaude(
-            """{ "terms": [ { "key": "term:A.Clock.Later", "text": "Made up.", "file": "src/Caller.cs" } ] }""",
-            """{ "terms": [ { "key": "term:A.Clock.Later", "text": "Returns the time one tick on.", "file": "src/Clock.cs" } ] }""");
+            """{ "terms": [ { "key": "term:consumer", "text": "Made up.", "files": ["src/DeltaStore.cs"] } ] }""",
+            """{ "terms": [ { "key": "term:consumer", "text": "Takes in one kind of message.", "files": ["src/AlphaConsumer.cs", "src/GammaConsumer.cs"] } ] }""");
 
         var narratives = await NarrativeWriter.WriteAsync(batch, context, claude, null, _ => { });
 
         var definition = Assert.Single(narratives);
-        Assert.Equal(("term:A.Clock.Later", "Returns the time one tick on."), (definition.Key, definition.Text));
-        Assert.Equal(["src/Clock.cs"], definition.Cites);
+        Assert.Equal(("term:consumer", "Takes in one kind of message."), (definition.Key, definition.Text));
+        Assert.Equal(["src/AlphaConsumer.cs", "src/GammaConsumer.cs"], definition.Cites);
         var prompt = claude.Requests[0].Prompt;
-        Assert.Contains("### `term:A.Clock.Later`", prompt, StringComparison.Ordinal);
-        Assert.Contains("`A.Clock.Later`, public method, declared at src/Clock.cs:7 in A.", prompt, StringComparison.Ordinal);
-        Assert.Contains("    public int Later() => Now(0) + 1;", prompt, StringComparison.Ordinal);
-        Assert.Contains("- src/Caller.cs:5, from `B.Caller`: `public int First(A.Clock clock) => clock.Now(1) + clock.Later();`", prompt, StringComparison.Ordinal);
+        Assert.Contains("### `term:consumer`\n\n\"Consumer\", in the names of 3 types in 3 families, 1 of them added or changed by the change. Among them:\n", prompt, StringComparison.Ordinal);
+        // The changed type comes first, and then the others, each with its summary when it has one.
+        Assert.Contains("- `A.GammaConsumer`, added or changed, declared in src/GammaConsumer.cs in A, with no documentation\n"
+            + "- `A.AlphaConsumer`, declared in src/AlphaConsumer.cs in A: Consumes alpha.\n"
+            + "- `A.BetaConsumer`, declared in src/BetaConsumer.cs in A, with no documentation\n", prompt, StringComparison.Ordinal);
         Assert.Equal(Prompts.Read("terms.schema.json"), claude.Requests[0].Schema);
-        Assert.Contains("the definition cites src/Caller.cs, which is not the file that declares it", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("the definition cites src/DeltaStore.cs, which does not declare one of the types listed for it", claude.Requests[1].Prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DiscardsADefinitionThatDescribesTheNamesRatherThanTheConcept()
+    {
+        var context = TermContext();
+        var batch = NarrativePlanner.Plan(context.Changeset)[^1];
+        var claude = new FakeClaude(
+            """{ "terms": [ { "key": "term:consumer", "text": "A type whose name holds \"Consumer\" consumes messages.", "files": ["src/AlphaConsumer.cs"] } ] }""",
+            """{ "terms": [ { "key": "term:consumer", "text": "Takes in one kind of message.", "files": ["src/AlphaConsumer.cs"] } ] }""");
+
+        var narratives = await NarrativeWriter.WriteAsync(batch, context, claude, null, _ => { });
+
+        Assert.Equal("Takes in one kind of message.", Assert.Single(narratives).Text);
+        Assert.Contains("the definition describes the names that hold the term rather than the concept it names", claude.Requests[1].Prompt, StringComparison.Ordinal);
     }
 }

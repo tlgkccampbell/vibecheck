@@ -742,13 +742,13 @@ as the differences:
 - **NewPatterns**: the patterns new in this change, which three or more added types
   share by a key that nothing at base carries, each with its keys and its instances
   with their leaves, as [patterns.md](patterns.md) section 4.5 describes.
-- **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
-  section 8 lists them: added types and members, renamed declarations, nodes, views
-  and externals added to the map, and assemblies referenced at head and not at base.
-  Each term carries its kind, its block, the file and line of its declaration, its
-  documentation summary when it has one, the number of sites that use it at head, the
-  first use outside its declaring type, and the decision that introduced it. The list
-  is grouped by block and ordered by use.
+- **Glossary**: the terms of the system's vocabulary that the change touches, as
+  [attention.md](attention.md) section 8 finds them: runs of words, such as "Command
+  Handler", that the names of types in at least two families share. Each term carries
+  its name and words, whether it is new in the change, the number of families that
+  hold it, the types the change added or changed under it and the other types that
+  hold it, each with its leaf, and the documentation summary of a type whose whole
+  name is the term. New terms come first, then those with the most touched types.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a

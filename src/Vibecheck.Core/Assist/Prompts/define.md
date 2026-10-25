@@ -1,19 +1,21 @@
-You define the names a changeset of a C# solution introduces, for a reviewer who will meet them in the diff. A model wrote much of the change, and the declarations below have no documentation comment, so the reviewer has nothing to read before the code itself.
+You define the vocabulary of a C# solution, for a reviewer who meets it in the names of the types a change touches. A model wrote much of the change, so the reviewer may not know what the solution means by the words its names share.
 
-This request covers the names declared in {{location}}. Write one sentence for each.
+Each term below is a run of words that the names of several unrelated types hold, such as "Command Handler" in `CreateOrderCommandHandler` and `CancelOrderCommandHandler`. No type documents the term itself.
 
-## The names to define
+## The terms to define
 
-Each name gives its declaration as the code at head has it, and up to four of the places that use it.
+Each term says how many types hold it, and lists up to five of them with the file that declares each and its documentation summary when it has one.
 
 {{terms}}
 
 ## How to answer
 
-For each name, write one plain sentence that says what the thing is or does, as a documentation summary would: what a type represents, what a method does or returns, what a property or field holds. Describe what the code declares. Do not judge it, and do not say whether it is correct or well made. Name types and members in backticks.
+For each term, write one plain sentence that defines the concept the term names, as an entry in the solution's glossary would. Begin with what the thing is or does, such as "Handles one command sent through the mediator and returns its result." for "Command Handler". Say what the types have in common, not what any one of them does.
 
-Each definition cites the file that declares the name, with the path exactly as given above. A definition that cites any other file, or that is empty, is discarded.
+The reviewer sees the term, its types and their blocks beside the definition, so do not repeat any of them. Do not restate the term, and do not mention names, words, types that hold the term, or how many there are. Describe what the code shows. Do not judge it, and do not say whether it is correct or well made. Name types and members in backticks.
 
-The code at the head of the range is in your working directory, with the paths above relative to it. Read the declaring file when its lines above do not say enough, but keep to what the definition needs.
+Each definition cites the files it rests on, from those listed under its term, with each path exactly as given. A definition that cites any other file, or none, or that is empty, is discarded.
 
-Answer with each name by its key, as given in its heading.
+The code at the head of the range is in your working directory, with the paths above relative to it. Read the listed files when their summaries do not say enough, but keep to what the definition needs.
+
+Answer with each term by its key, as given in its heading.

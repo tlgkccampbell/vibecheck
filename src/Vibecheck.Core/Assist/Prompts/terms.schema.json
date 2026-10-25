@@ -8,11 +8,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["key", "text", "file"],
+        "required": ["key", "text", "files"],
         "properties": {
           "key": { "type": "string" },
           "text": { "type": "string" },
-          "file": { "type": "string" }
+          "files": { "type": "array", "items": { "type": "string" } }
         }
       }
     }

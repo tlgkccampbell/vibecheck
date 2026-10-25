@@ -47,7 +47,7 @@ public sealed record Changeset
     /// <summary>Gets the order in which to read the changeset, as <see cref="ReadingPath"/> plans it.</summary>
     public List<PathStep> Path { get; init; } = [];
 
-    /// <summary>Gets the names the changeset introduces, grouped by block and ordered by use, as <see cref="Diffing.Glossary"/> lists them.</summary>
+    /// <summary>Gets the terms of the system's vocabulary that the changeset touches, new terms first, as <see cref="Diffing.Glossary"/> lists them.</summary>
     public List<Term> Glossary { get; init; } = [];
 
     /// <summary>Gets the test types with a changed file, ordered by name, as <see cref="TestChanges"/> lists them.</summary>

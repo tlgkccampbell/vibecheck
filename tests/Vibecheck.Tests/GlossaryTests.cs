@@ -1,106 +1,129 @@
-using Vibecheck.Analysis;
 using Vibecheck.Checking;
 using Vibecheck.Diffing;
-using Vibecheck.Model;
 using Xunit;
 
 namespace Vibecheck.Tests;
 
-/// <summary>Tests of the glossary: the names a changeset introduces, with their uses and first use. See <c>docs/attention.md</c> section 8.</summary>
+/// <summary>Tests of the glossary: the concepts that recur across the names of a system's types, and those a change touches. See <c>docs/attention.md</c> section 8.</summary>
 public class GlossaryTests
 {
-    private const string Clock = "namespace A;\n\n/// <summary>Tells the time.</summary>\npublic class Clock\n{\n    public int Now(int zone) => zone;\n}\n";
-    private const string Caller = "namespace C;\n\npublic class Caller\n{\n    public int First(A.Clock clock) => clock.Now(1);\n}\n";
+    [Theory]
+    [InlineData("A.B.IOrderRepository", "Order Repository")]
+    [InlineData("A.HTTPClient", "HTTP Client")]
+    [InlineData("A.Base64Encoder", "Base64 Encoder")]
+    [InlineData("A.Result<T>", "Result")]
+    [InlineData("Lib::A.IO", "IO")]
+    [InlineData("A.Order_Line", "Order Line")]
+    [InlineData("A.I", "I")]
+    public void SplitsANameIntoWords(string name, string words) =>
+        Assert.Equal(words, string.Join(' ', Glossary.WordsOf(name)));
 
-    /// <summary>Clock's <c>Now</c> is renamed to <c>Current</c>, a documented <c>Later</c> is added, and an undocumented <c>Timer</c> appears in B with a field; Caller uses them all.</summary>
-    private static Changeset Changeset()
+    [Theory]
+    [InlineData("Changes", "change")]
+    [InlineData("Policies", "policy")]
+    [InlineData("Status", "status")]
+    [InlineData("Class", "class")]
+    [InlineData("Analysis", "analysis")]
+    [InlineData("Ids", "ids")]
+    public void MatchesAPlainPluralAsItsSingular(string word, string stem) => Assert.Equal(stem, Glossary.StemOf(word));
+
+    [Fact]
+    public void OneTermHoldsTheSingularAndThePluralAndIsSpelledInTheSingular()
     {
-        var before = new Dictionary<string, string> { ["src/Clock.cs"] = Clock, ["src/Caller.cs"] = Caller };
-        var after = new Dictionary<string, string>
+        var found = Assert.Single(Glossary.Find(new[] { "FileHunks", "GitHunks", "Hunk" }.Select(Type)));
+
+        Assert.Equal(("Hunk", 3), (found.Name, found.Families));
+    }
+
+    private static TypeFact Type(string name) => new("A." + name, "A", "a", "pattern", [$"src/{name}.cs"]);
+
+    /// <summary>A Mediator-style system: commands and queries about orders and invoices, each with its handler, and controllers and services beside them.</summary>
+    private static readonly string[] Mediator =
+    [
+        "Order", "OrderController", "OrderService", "Invoice", "InvoiceController", "InvoiceService",
+        "CreateOrderCommand", "CreateOrderCommandHandler", "CancelOrderCommand", "CancelOrderCommandHandler",
+        "PayInvoiceCommand", "PayInvoiceCommandHandler", "GetOrderQuery", "GetOrderQueryHandler", "GetInvoiceQuery", "GetInvoiceQueryHandler",
+        "Session", "ISessionReader",
+    ];
+
+    [Fact]
+    public void FindsTheRunsOfWordsThatSeveralFamiliesOfNamesShare()
+    {
+        var found = Glossary.Find(Mediator.Select(Type));
+
+        // "Handler" is left out, since every handler is a command or a query handler; "Order Command" and "Order Command
+        // Handler" join the subject "Order" to a term; "Service" names nothing on its own; and "Session" is one type and
+        // the reader named after it, which is one family.
+        Assert.Equal(["Command", "Command Handler", "Controller", "Invoice", "Order", "Query", "Query Handler"], found.Select(f => f.Name));
+        var handler = found.Single(f => f.Name == "Command Handler");
+        Assert.Equal((3, 3), (handler.Families, handler.Types.Count));
+        Assert.Equal(["command", "handler"], handler.Words);
+        // The commands and their handlers both hold "Command", in the three families of the commands.
+        Assert.Equal((3, 6), (found.Single(f => f.Name == "Command").Families, found.Single(f => f.Name == "Command").Types.Count));
+    }
+
+    [Fact]
+    public void KeepsAShorterTermWhenSomeTypeHoldsItOutsideTheLongerOnes()
+    {
+        var found = Glossary.Find(Mediator.Append("RetryHandler").Append("AuditHandler").Select(Type));
+
+        Assert.Contains(found, f => f.Name == "Handler" && f.Types.Count == 7);
+    }
+
+    private const string Consumer = "namespace A;\n\n/// <summary>Handles one message from the bus.</summary>\npublic interface IConsumer\n{\n    void Consume();\n}\n";
+
+    private static string Class(string name, string body = "") => $"namespace A;\n\npublic class {name}\n{{\n{body}}}\n";
+
+    [Fact]
+    public void ListsTheTermsAChangeTouchesWithTheTypesItReportsUnderEach()
+    {
+        var before = new Dictionary<string, string>
         {
-            ["src/Clock.cs"] = Clock.Replace("    public int Now(int zone) => zone;", "    public int Current(int zone) => zone;\n\n    /// <summary>Adds one.</summary>\n    public int Later() => Current(0) + 1;"),
-            ["src/Caller.cs"] = Caller.Replace("clock.Now(1);", "clock.Current(1);\n\n    public int Second(A.Clock clock) => clock.Later() + new B.Timer().Ticks;"),
-            ["src/Timer.cs"] = "namespace B;\n\npublic class Timer\n{\n    public int Ticks;\n}\n",
+            ["src/CreateOrderCommand.cs"] = Class("CreateOrderCommand"),
+            ["src/CreateOrderCommandHandler.cs"] = Class("CreateOrderCommandHandler"),
+            ["src/CancelOrderCommand.cs"] = Class("CancelOrderCommand"),
+            ["src/CancelOrderCommandHandler.cs"] = Class("CancelOrderCommandHandler"),
+            ["src/OrderController.cs"] = Class("OrderController"),
+            ["src/InvoiceController.cs"] = Class("InvoiceController"),
         };
-        return Snippets.Changeset(before, after);
-    }
+        var after = new Dictionary<string, string>(before)
+        {
+            ["src/CancelOrderCommandHandler.cs"] = Class("CancelOrderCommandHandler", "    public int Handle() => 1;\n"),
+            ["src/RefundOrderCommand.cs"] = Class("RefundOrderCommand"),
+            ["src/RefundOrderCommandHandler.cs"] = Class("RefundOrderCommandHandler"),
+            ["src/IConsumer.cs"] = Consumer,
+            ["src/ReceiptConsumer.cs"] = Class("ReceiptConsumer : IConsumer", "    public void Consume() { }\n"),
+            ["src/ShippingConsumer.cs"] = Class("ShippingConsumer : IConsumer", "    public void Consume() { }\n"),
+        };
 
-    [Fact]
-    public void ListsEachAddedOrRenamedNameOnceWithItsUsesAndFirstUse()
-    {
-        var cs = Changeset();
+        var cs = Snippets.Changeset(before, after);
 
-        // Grouped by block, the most used first within each; constructors are not terms.
-        Assert.Equal(["A.Clock.Current", "A.Clock.Later", "B.Timer", "B.Timer.Ticks", "C.Caller.Second"], cs.Glossary.Select(t => t.Symbol));
-        Assert.Equal(["a", "a", "b", "b", "c"], cs.Glossary.Select(t => t.Block));
+        // "Consumer" is new, so it comes first; "Controller" is untouched, so it is not listed.
+        Assert.Equal(["Consumer", "Order", "Command Handler", "Command"], cs.Glossary.Select(t => t.Name));
+        var consumer = cs.Glossary[0];
+        Assert.True(consumer.New);
+        Assert.Equal(("term:consumer", "Handles one message from the bus.", "A.IConsumer"), (consumer.Key, consumer.Summary, consumer.SummaryOf));
+        Assert.Equal(["A.IConsumer", "A.ReceiptConsumer", "A.ShippingConsumer"], consumer.Instances.Select(i => i.Type));
 
-        var current = cs.Glossary[0];
-        Assert.Equal(("term:A.Clock.Current", "Clock.Current", "A.Clock.Now", "method", "public", true), (current.Key, current.Name, current.Previous, current.Kind, current.Accessibility, current.Exposed));
-        Assert.Equal(("src/Clock.cs", 6, (string?)null), (current.File, current.Line, current.Summary));
-        // Later's call inside Clock and Caller's call both use it, and the first use outside Clock is Caller's.
-        Assert.Equal(2, current.Uses);
-        Assert.Equal(new SiteRef("src/Caller.cs", 5), current.FirstUse);
-        Assert.Equal("src/Clock.cs#0", current.Decision);
-
-        var later = cs.Glossary[1];
-        Assert.Equal(("Adds one.", 1, new SiteRef("src/Caller.cs", 7)), (later.Summary, later.Uses, later.FirstUse));
-        Assert.Null(later.Previous);
-
-        var timer = cs.Glossary[2];
-        Assert.Equal(("Timer", "type", null, 1), (timer.Name, timer.Kind, timer.Summary, timer.Uses));
-        Assert.Equal(("src/Timer.cs", 3), (timer.File, timer.Line));
-        Assert.Equal(new SiteRef("src/Caller.cs", 7), timer.FirstUse);
-        Assert.Equal("src/Timer.cs#0", timer.Decision);
-
-        var second = cs.Glossary[4];
-        Assert.Equal((0, (SiteRef?)null, "Caller.Second"), (second.Uses, second.FirstUse, second.Name));
-    }
-
-    [Fact]
-    public void ARenamedTypeIsOneTermAndItsMembersAreNotListedAgain()
-    {
-        const string old = "namespace A;\n\npublic class Old\n{\n    public int M() => 1;\n}\n";
-        var cs = Snippets.Changeset(new Dictionary<string, string> { ["src/T.cs"] = old }, new Dictionary<string, string> { ["src/T.cs"] = old.Replace("Old", "Fresh") });
-
-        var term = Assert.Single(cs.Glossary);
-        Assert.Equal(("term:A.Fresh", "Fresh", "A.Old", "type"), (term.Key, term.Name, term.Previous, term.Kind));
-        Assert.Null(term.Summary);
-    }
-
-    [Fact]
-    public void ListsPartsAddedToTheMapAndAssembliesReferencedForTheFirstTime()
-    {
-        var baseMap = TestData.Map();
-        var headMap = TestData.Map();
-        headMap.Nodes["c"] = new NodeSpec { Name = "C", Purpose = "The new part.", Bind = ["C.**"] };
-        headMap.Externals["json"] = new ExternalSpec { Name = "Json", Purpose = "Serialization.", Bind = ["Newtonsoft.*"] };
-        headMap.Views["by-role"] = new ViewSpec { Name = "By role", Purpose = "Roles.", Level = Identifiers.Root, Groups = new(StringComparer.Ordinal) { ["all"] = new GroupSpec { Name = "All", Leaves = ["a.x", "a.y", "b", "shared", "c"] } } };
-        var head = TestData.Analysis(extraExternals:
-        [
-            new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", "references", "Newtonsoft.Json.JsonConvert", TestData.B1, 9),
-            new ExternalReference(TestData.Thing, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", "references", "Newtonsoft.Json.JsonConvert", TestData.X1, 30),
-        ]);
-        var cs = ChangesetBuilder.Build(Checker.Run(baseMap, TestData.Analysis()), Checker.Run(headMap, head));
-
-        // The map's parts and the assemblies have no block, so they come after the blocks, the most used first.
-        Assert.Equal(["term:node:c", "term:external:json", "term:assembly:Newtonsoft.Json", "term:view:by-role"], cs.Glossary.Select(t => t.Key));
-        var node = cs.Glossary[0];
-        Assert.Equal(("C", Term.Node, "c", "The new part."), (node.Name, node.Kind, node.Block, node.Summary));
-        var assembly = cs.Glossary[2];
-        Assert.Equal((Term.Assembly, (string?)null, 2, new SiteRef(TestData.X1, 30)), (assembly.Kind, assembly.Block, assembly.Uses, assembly.FirstUse));
-        var external = cs.Glossary[1];
-        Assert.Equal(("Json", "Serialization.", 2), (external.Name, external.Summary, external.Uses));
-        Assert.Equal(("By role", "Roles."), (cs.Glossary[3].Name, cs.Glossary[3].Summary));
-        // The assembly Ext.Sdk is referenced at both ends, so it is not new.
-        Assert.DoesNotContain(cs.Glossary, t => t.Symbol == "Ext.Sdk");
+        var handler = cs.Glossary[2];
+        Assert.False(handler.New);
+        Assert.Null(handler.Summary);
+        Assert.Equal([("A.CancelOrderCommandHandler", "changed"), ("A.RefundOrderCommandHandler", "added")], handler.Instances.Select(i => (i.Type, i.Status)));
+        Assert.Equal(["A.CreateOrderCommandHandler"], handler.Others.Select(o => o.Type));
+        Assert.Equal(3, handler.Families);
+        // A handler holds "Command" within "Command Handler", so it is reported under the longer term only.
+        Assert.Equal(["A.RefundOrderCommand"], cs.Glossary[3].Instances.Select(i => i.Type));
+        Assert.Equal(["A.CancelOrderCommandHandler", "A.RefundOrderCommand", "A.RefundOrderCommandHandler"], cs.Glossary[1].Instances.Select(i => i.Type));
     }
 
     [Fact]
     public void TheGlossaryRoundTripsThroughJson()
     {
-        var cs = Changeset();
+        var before = new Dictionary<string, string> { ["src/AConsumer.cs"] = Class("AConsumer") };
+        var cs = Snippets.Changeset(before, new Dictionary<string, string>(before) { ["src/BConsumer.cs"] = Class("BConsumer") });
         var back = FactsJson.Deserialize<Changeset>(FactsJson.Serialize(cs));
+
+        Assert.Single(cs.Glossary);
         Assert.Equal(FactsJson.Serialize(cs.Glossary), FactsJson.Serialize(back.Glossary));
-        Assert.Equal(cs.Glossary.Count, back.Glossary.Count);
     }
 }

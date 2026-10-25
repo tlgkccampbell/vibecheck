@@ -987,9 +987,11 @@
     // The comparison that replaces an instance's diffs, as the pattern's identifier, the instance's type and the type it
     // is compared with, or null.
     compare: null,
-    // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
+    // The block the Concepts panel is narrowed to, or null for every term, the key of the term it marks, or null, and the keys
+    // of the terms whose other types it lists.
     glossaryBlock: null,
     term: null,
+    termOthers: new Set(),
     current: null, // { level, layout }
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
@@ -2276,9 +2278,8 @@
   function renderPatterns(box) {
     const departures = (p) => p.instances.reduce((s, i) => s + i.departures.length, 0);
     const found = [...PATTERNS.values()].sort((a, b) => departures(b) - departures(a) || b.instances.length - a.instances.length || patternNaming(a).name.localeCompare(patternNaming(b).name));
-    const touched = new Set([...PATTERN_TOUCHED.values()]);
-    box.append(el("p", { class: "hint" }, `${plural(PATTERN_TOUCHED.size, "new or changed type plays", "new or changed types play")} the role of a pattern, in ${plural(touched.size, "block", "blocks")}. ` +
-      "Hover a pattern to outline its blocks."));
+    box.append(el("p", { class: "hint" }, "Patterns lists the repeated ", el("em", {}, "code patterns"), " that this change touches, such as types that implement the same interface. " +
+      "Concepts lists repeated concepts instead. Hover a pattern to outline its blocks."));
     const hoverable = (p, node) => { node.addEventListener("mouseenter", () => hoverPattern(p)); node.addEventListener("mouseleave", () => hoverPattern(null)); return node; };
     for (const p of found) {
       const naming = patternNaming(p), n = departures(p);
@@ -2306,9 +2307,9 @@
         el("span", { class: "chip chip-added" }, "added"), el("span", { class: "row-name" }, shortName(i.type)), el("span", { class: "row-meta" }, nameOf(i.leaf))))))));
     }
   }
-  // Outlines the blocks of the drawing that hold a pattern's instances while it is under the pointer, solid for those
-  // with new or changed instances and dashed for those with only others, and fades everything else. A null pattern
-  // ends it. A leaf view has no drawing, so it does nothing there.
+  // Outlines the blocks of the drawing that hold a pattern's instances, or a term's types, while it is under the
+  // pointer, solid for those with new or changed ones and dashed for those with only others, and fades everything else.
+  // A null pattern ends it. A leaf view has no drawing, so it does nothing there.
   function hoverPattern(p) {
     if (dragging || !state.current) return;
     const s = stage();
@@ -2340,67 +2341,79 @@
   }
 
   // ---------- The glossary ----------
-  // The names the change introduces, as the changeset lists them: added types and members, renamed declarations, parts
-  // added to the map, and assemblies referenced for the first time, each with where it is declared, its documentation
-  // summary, how often it is used and where first. The panel lists them by block, a block's details panel lists its
-  // own, and an introduced name in a diff shows its entry on hover. See docs/attention.md section 8.
+  // The terms of the system's vocabulary that the change touches, as the changeset lists them: runs of words, such as
+  // "Command Handler", that the names of several unrelated types share. Each term lists the types the change added or
+  // changed under it and counts the others. The panel lists the terms, new ones first, a block's details panel lists
+  // those with a type in the block, and a term within a name in a changed line shows its entry on hover. See
+  // docs/attention.md section 8.
   const GLOSSARY = CS.glossary || [];
   const TERMS = new Map(GLOSSARY.map((t) => [t.key, t]));
-  // The group of the terms that no block holds: the parts added to the map and the assemblies.
-  const MAP_TERMS = "~map";
-  const DECLARATION_KINDS = new Set(["type", "method", "constructor", "property", "field", "event", "indexer", "operator"]);
-  const isDeclarationTerm = (t) => DECLARATION_KINDS.has(t.kind);
-  const termGroup = (t) => t.block || MAP_TERMS;
-  const termGroupName = (g) => g === MAP_TERMS ? "Map and assemblies" : nameOf(g);
-  // Returns the name a declaration shows in code: its own, without its type, namespace or type arguments.
-  const codeName = (symbol) => memberName(symbol, "type").replace(/<.*$/, "");
-  // Declaration terms by the name they show in code at head, and renamed ones by their name at base too, so that both
-  // sides of a rename find the entry.
-  const TERMS_AT_HEAD = new Map(), TERMS_AT_BASE = new Map();
-  for (const t of GLOSSARY.filter(isDeclarationTerm)) {
-    const add = (map, name) => { if (!map.has(name)) map.set(name, []); map.get(name).push(t); };
-    add(TERMS_AT_HEAD, codeName(t.symbol));
-    if (t.previous) add(TERMS_AT_BASE, codeName(t.previous));
+  const TERMS_BY_WORDS = new Map(GLOSSARY.map((t) => [t.words.join(" "), t]));
+  const TERM_WORDS = Math.max(0, ...GLOSSARY.map((t) => t.words.length));
+  // The simple names of the types at either end, which are the names the glossary's terms were found in, and so the
+  // only names that the diffs mark.
+  const TYPE_NAMES = new Set(CS.types.map((t) => shortName(t.name).replace(/<.*$/, "")));
+  // Returns the form of a word by which the glossary matches it, as Glossary.StemOf forms it in the core.
+  function stemOf(word) {
+    const w = word.toLowerCase();
+    if (w.length <= 3 || !w.endsWith("s") || /(ss|us|is)$/.test(w)) return w;
+    return w.endsWith("ies") && w.length > 4 ? w.slice(0, -3) + "y" : w.slice(0, -1);
   }
-  // Returns a pattern that matches any name of a map as a whole identifier, or null when the map has none.
-  function termPattern(map) {
-    const names = [...map.keys()].filter((n) => /^[A-Za-z_]\w*$/.test(n)).sort((a, b) => b.length - a.length);
-    return names.length ? new RegExp(`(?<!\\w)(${names.join("|")})(?!\\w)`) : null;
+  // Returns the words of an identifier, each with where it starts and ends and its stem, split as Glossary.WordsOf
+  // splits a name in the core.
+  function wordsOf(id) {
+    const isUpper = (c) => !!c && c !== c.toLowerCase(), isLower = (c) => !!c && c !== c.toUpperCase();
+    const words = [];
+    let start = -1;
+    for (let i = 0; i <= id.length; i++) {
+      const c = id[i];
+      if (!c || !/[\p{L}\p{N}]/u.test(c)) { if (start >= 0) words.push([start, i]); start = -1; continue; }
+      const begins = start >= 0 && isUpper(c) && (!isUpper(id[i - 1]) || isLower(id[i + 1]));
+      if (begins) words.push([start, i]);
+      if (start < 0 || begins) start = i;
+    }
+    return words.map(([s, e]) => ({ s, e, stem: stemOf(id.slice(s, e)) }));
   }
-  const TERM_PATTERN = { head: termPattern(TERMS_AT_HEAD), base: termPattern(TERMS_AT_BASE) };
-  // Wraps each introduced name in a cell of a changed line in a span that shows the name's entry on hover and opens the
-  // Glossary on a click. A removed line is matched against the names at base, an added line against those at head,
-  // and a context line is left alone. Returns the cell.
+  // Returns the runs of an identifier's words that are terms, the longest first at each word, as [start, end, term].
+  function termsIn(id) {
+    const words = wordsOf(id), found = [];
+    for (let i = 0; i < words.length;) {
+      let n = Math.min(TERM_WORDS, words.length - i), t = null;
+      for (; n > 0 && !(t = TERMS_BY_WORDS.get(words.slice(i, i + n).map((w) => w.stem).join(" "))); n--);
+      if (t) { found.push([words[i].s, words[i + n - 1].e, t]); i += n; } else i++;
+    }
+    return found;
+  }
+  // Wraps each term within the name of a type in a cell of a changed line in a span that shows the term's entry on
+  // hover and opens the Concepts panel on a click, so that "CommandHandler" is marked in CreateOrderCommandHandler. Other
+  // identifiers, comments and context lines are left alone. Returns the cell.
   function markTerms(td, kind) {
-    const side = kind === "del" ? "base" : kind === "add" ? "head" : null;
-    const re = side && TERM_PATTERN[side];
-    if (!re) return td;
-    const map = side === "head" ? TERMS_AT_HEAD : TERMS_AT_BASE;
+    if (!TERM_WORDS || (kind !== "add" && kind !== "del")) return td;
     const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT), nodes = [];
-    while (walker.nextNode()) if (re.test(walker.currentNode.data)) nodes.push(walker.currentNode);
+    while (walker.nextNode()) nodes.push(walker.currentNode);
     for (const node of nodes) {
-      const frag = document.createDocumentFragment();
-      node.data.split(re).forEach((part, i) => frag.append(i % 2 ? el("span", { class: "term", "data-term": map.get(part).map((t) => t.key).join(" ") }, part) : part));
+      const text = node.data, frag = document.createDocumentFragment();
+      let at = 0;
+      for (const m of text.matchAll(/[\p{L}_][\p{L}\p{N}_]*/gu)) {
+        if (!TYPE_NAMES.has(m[0])) continue;
+        for (const [s, e, t] of termsIn(m[0])) {
+          frag.append(text.slice(at, m.index + s), el("span", { class: "term", "data-term": t.key }, text.slice(m.index + s, m.index + e)));
+          at = m.index + e;
+        }
+      }
+      if (at === 0) continue;
+      frag.append(text.slice(at));
       node.replaceWith(frag);
     }
     return td;
   }
 
-  const fileName = (path) => path.split("/").pop();
-  const TERM_KIND_TEXT = { node: "map node", view: "map view", external: "external", assembly: "assembly" };
-  const termKind = (t) => TERM_KIND_TEXT[t.kind] || (t.accessibility ? `${t.accessibility} ${t.kind}` : t.kind);
-  // Returns what a term is shown as: its name, after its previous name when it was renamed.
-  function termName(t) {
-    const name = (s) => isDeclarationTerm(t) ? memberName(s, t.kind) : t.name;
-    return t.previous ? el("span", { class: "term-name" }, el("code", {}, name(t.previous)), " is now ", el("code", {}, name(t.symbol))) : el("code", { class: "term-name" }, name(t.symbol));
-  }
-  // Returns the line of a term's entry that says what it is: its documentation summary or a map part's purpose,
-  // Claude's definition when a declaration has none, or that it has no documentation, which is itself worth a
-  // reviewer's attention in code a model wrote. An assembly has none of these.
+  const termTypes = (t) => t.instances.length + t.others.length;
+  const termBlocks = (t) => new Set([...t.instances, ...t.others].map((i) => i.leaf)).size;
+  // Returns the line of a term's entry that says what it means: the documentation of a type whose whole name is the
+  // term, or else Claude's definition, or else that nothing defines it.
   function termText(t, inTip) {
-    if (t.summary) return el("p", { class: "term-text" }, t.summary);
-    if (t.kind === "assembly") return null;
-    if (!isDeclarationTerm(t)) return el("p", { class: "term-text undocumented" }, "No purpose given.");
+    if (t.summary) return el("p", { class: "term-text" }, t.summary, " ", el("span", { class: "by" }, `from ${shortName(t.summaryOf)}`));
     const n = NARR.state === "off" ? null : NARR.items.get(t.key);
     const busy = NARR.pending.has(t.key);
     if (n) {
@@ -2408,36 +2421,44 @@
       if (!inTip) p.append(" ", el("button", { class: "link", disabled: busy, onclick: () => regenerate(t.key), title: "Write the definition again" }, busy ? "Writing…" : "Regenerate"));
       return p;
     }
-    const p = el("p", { class: "term-text undocumented" }, "No documentation.");
+    const p = el("p", { class: "term-text undocumented" }, "No type documents it.");
     if (busy || NARR.state === "writing" || NARR.state === "waiting") p.append(" ", el("span", { class: "by" }, "Claude is writing a definition…"));
     else if (NARR.errors.has(t.key)) p.append(" ", el("span", { class: "by" }, NARR.errors.get(t.key)));
     return p;
   }
-  // Returns the line of a term's entry that places it: where it is declared, how often it is used and where first
-  // outside its own type, and the decision that introduced it. Each place opens in the leaf view, except in the
-  // tooltip, which is read and not clicked.
-  function termMeta(t, inTip) {
-    const meta = el("div", { class: "term-meta" });
-    const place = (text, title, open) => inTip ? el("span", { title }, text) : el("button", { class: "link", title, onclick: open }, text);
-    const refs = t.kind === "assembly" || t.kind === "external";
-    if (t.file) meta.append(place(`declared in ${fileName(t.file)}:${t.line}`, t.file, () => openLine(t.file, t.line)));
-    if (t.kind === "node") meta.append(place("show on the map", t.symbol, () => showInContext(t.symbol)));
-    if (isDeclarationTerm(t) || refs) meta.append(el("span", {}, t.uses ? plural(t.uses, refs ? "reference" : "use", refs ? "references" : "uses") : refs ? "no references" : "no uses"));
-    if (t.firstUse) meta.append(place(`first ${refs ? "referenced" : "used"} in ${fileName(t.firstUse.file)}:${t.firstUse.line}`, `${t.firstUse.file}: the first use outside the declaring type`, () => openLine(t.firstUse.file, t.firstUse.line)));
-    if (t.decision && DECISIONS.has(t.decision)) meta.append(place("decision", "Open the decision that introduced it", () => openDecision(DECISIONS.get(t.decision))));
-    for (const id of t.patterns || []) {
-      const p = PATTERNS.get(id), created = NEW_PATTERNS.find((x) => x.id === id);
-      if (p) meta.append(place(`an instance of ${patternNaming(p).name}`, "Show the pattern", () => { state.pattern = { id, type: t.symbol }; return openType(t.symbol); }));
-      else if (created) meta.append(place(`an instance of ${created.name}, new in this change`, "Show the patterns", () => { state.panel = "patterns"; redraw(); }));
-    }
-    return meta;
+  // Returns some types of a term grouped by block, with each block's name on a line of its own above its types, which
+  // wrap across the panel's width so that no name is cut short. A touched type takes the color of its status, as a
+  // block on the map does, and each type opens in the leaf view.
+  function termTypeGroups(types) {
+    const byLeaf = new Map();
+    for (const i of types) { if (!byLeaf.has(i.leaf)) byLeaf.set(i.leaf, []); byLeaf.get(i.leaf).push(i); }
+    return el("div", { class: "term-types" }, ...[...byLeaf].sort((a, b) => nameOf(a[0]).localeCompare(nameOf(b[0]))).map(([leaf, list]) =>
+      el("div", { class: "term-group" }, el("div", { class: "term-group-name", title: leaf }, nameOf(leaf)),
+        el("div", { class: "term-group-types" }, ...list.map((i) => el("button", { class: "term-type" + (i.status ? " st-" + i.status : ""), onclick: () => openType(i.type),
+          title: i.type + (i.status ? `\n${i.status} in this change` : "") }, shortName(i.type)))))));
   }
-  // Returns a term's entry: its kind and name, what it is, and where it is. In the tooltip the entry also names the
-  // term's block, since the tooltip stands alone, and has no links.
+  // Returns the line that counts a term's touched types by status, each count in its status's color, which is also the
+  // key to the colors of the names below it.
+  function termTouched(t) {
+    const count = (status) => t.instances.filter((i) => i.status === status).length;
+    const parts = ["added", "changed"].filter(count).map((s) => el("span", { class: "st-" + s }, `${count(s)} ${s}`));
+    return el("div", { class: "term-touched" }, ...parts.flatMap((p, n) => n ? [", ", p] : [p]), " in this change");
+  }
+  // Returns a term's entry: its name, whether it is new, how many types hold it and in how many blocks, and what it
+  // means. Outside the tooltip the entry also lists the types the change touched under it, and the others on request.
   function termEntry(t, inTip) {
     const entry = el("div", { class: "term-entry" },
-      el("div", { class: "term-head" }, el("span", { class: "term-kind" }, termKind(t)), termName(t), inTip && t.block && t.kind !== "node" ? el("span", { class: "term-block" }, nameOf(t.block)) : null));
-    entry.append(termText(t, inTip) || "", termMeta(t, inTip));
+      el("div", { class: "term-head" }, el("span", { class: "term-name" }, t.name), t.new ? el("span", { class: "chip chip-added" }, "new") : null,
+        el("span", { class: "term-block" }, `${plural(termTypes(t), "type", "types")} in ${plural(termBlocks(t), "block", "blocks")}`)));
+    entry.append(termText(t, inTip));
+    if (inTip) return entry;
+    entry.append(termTouched(t), termTypeGroups(t.instances));
+    if (t.others.length) {
+      const open = state.termOthers.has(t.key);
+      entry.append(el("button", { class: "link", onclick: () => { if (open) state.termOthers.delete(t.key); else state.termOthers.add(t.key); renderChanges(); } },
+        open ? "Hide the others" : `Show the ${plural(t.others.length, "other", "others")}`));
+      if (open) entry.append(termTypeGroups(t.others));
+    }
     return entry;
   }
 
@@ -2455,59 +2476,54 @@
     state.decision = d.id;
     return openHunk(d.file, d.hunk);
   }
-  // Opens a term where it lives: a declaration at its line in the leaf view, a map node on the map, and anything else
-  // in the Glossary.
-  function openTerm(t) {
-    if (t.file) return openLine(t.file, t.line);
-    if (t.kind === "node") return showInContext(t.symbol);
-    return showGlossary(null, t.key);
-  }
-  // Returns the terms under a block, a group of a view, or the whole map.
+  // Returns the terms with a type the change touched under a block, a group of a view, or the whole map.
   function termsUnder(id) {
     if (id === ROOT || id === null || id === undefined) return GLOSSARY;
     const leaves = id.startsWith("g:") ? groupLeaves(id) : [id];
-    return GLOSSARY.filter((t) => t.block && leaves.some((l) => isUnder(t.block, l)));
+    return GLOSSARY.filter((t) => t.instances.some((i) => leaves.some((l) => isUnder(i.leaf, l))));
   }
-  // Opens the Glossary panel on the terms under a block, or on every term when the block is null, with a term marked.
+  // Opens the Concepts panel on the terms under a block, or on every term when the block is null, with a term marked.
   function showGlossary(block, term) {
     state.panel = "glossary";
     state.glossaryBlock = block;
     state.term = term || null;
     renderChanges();
   }
-  // Returns the details panel's section for the names a block introduces, or null when it introduces none: up to six,
-  // each opening where it lives, and the Glossary for all of them.
+  // Returns the details panel's section for the terms a block's changed types hold, or null when they hold none: up to
+  // six, each opening in the Concepts panel, and the panel for all of them.
   function glossarySection(id) {
     const terms = termsUnder(id);
     if (!terms.length) return null;
-    const box = el("section", { class: "glossary-section" }, el("h3", {}, `Glossary: ${plural(terms.length, "new name", "new names")}`, help(HELP.terms)));
+    const box = el("section", { class: "glossary-section" }, el("h3", {}, `Concepts: ${terms.length}`, help(HELP.terms)));
     const ul = el("ul", { class: "list" });
     for (const t of terms.slice(0, 6)) {
-      ul.append(el("li", {}, el("button", { class: "row", onclick: () => openTerm(t), title: t.summary || (isDeclarationTerm(t) ? "No documentation." : "") },
-        el("span", { class: "term-kind" }, t.kind), el("span", { class: "row-name" }, termName(t)), el("span", { class: "row-meta" }, t.uses ? String(t.uses) : ""))));
+      ul.append(el("li", {}, el("button", { class: "row", onclick: () => showGlossary(id, t.key), title: t.summary || "" },
+        el("span", { class: "row-name" }, t.name), t.new ? el("span", { class: "chip chip-added" }, "new") : "", el("span", { class: "row-meta" }, plural(termTypes(t), "type", "types")))));
     }
-    box.append(ul, el("button", { class: "link", onclick: () => showGlossary(id) }, terms.length > 6 ? `All ${terms.length} in the Glossary` : "Show in the Glossary"));
+    box.append(ul, el("button", { class: "link", onclick: () => showGlossary(id) }, terms.length > 6 ? `All ${terms.length} in Concepts` : "Show in Concepts"));
     return box;
   }
-  // Renders the glossary into the panel: the terms by block, the most used first, with the count in the pinned head.
+  // Renders the Concepts panel: the terms new in the change, then the others the change touches, with the
+  // count in the pinned head. Hovering a term outlines the blocks that hold its types.
   function renderGlossary(box, head) {
     const block = state.glossaryBlock;
     const terms = block ? termsUnder(block) : GLOSSARY;
-    head.append(el("div", { class: "path-head" }, el("span", {}, block ? `${plural(terms.length, "term", "terms")} in ${nameOf(block)}` : plural(GLOSSARY.length, "new name", "new names")),
+    head.append(el("div", { class: "path-head" }, el("span", {}, block ? `${plural(terms.length, "concept", "concepts")} in ${nameOf(block)}` : plural(GLOSSARY.length, "concept", "concepts")),
       block ? el("button", { class: "link", onclick: () => showGlossary(null) }, "Show all") : null));
-    if (!terms.length) { box.append(el("p", { class: "hint" }, block ? "The change introduces no name here." : "The change introduces no new name.")); return; }
-    box.append(el("p", { class: "hint" }, "The names the change introduces, by block, the most used first. In a diff, an introduced name has a dotted underline and shows its entry on hover."));
-    let group, ul;
-    for (const t of terms) {
-      const g = termGroup(t);
-      if (g !== group) { group = g; box.append(el("h3", {}, termGroupName(g))); ul = el("ul", { class: "list glossary" }); box.append(ul); }
-      ul.append(el("li", { class: state.term === t.key ? "current" : "" }, termEntry(t, false)));
+    if (!terms.length) { box.append(el("p", { class: "hint" }, block ? "The change touches no concept here." : "The change touches no concept.")); return; }
+    box.append(el("p", { class: "hint" }, "Concepts lists the repeated ", el("em", {}, "concepts"), " that this change touches, such as “Command Handler” in the names of many types. " +
+      "Patterns lists repeated code patterns instead. Hover a concept to outline its blocks."));
+    const hoverable = (t, node) => { node.addEventListener("mouseenter", () => hoverPattern(t)); node.addEventListener("mouseleave", () => hoverPattern(null)); return node; };
+    for (const [title, group] of [["New in this change", terms.filter((t) => t.new)], ["Touched by this change", terms.filter((t) => !t.new)]]) {
+      if (!group.length) continue;
+      box.append(el("h3", {}, `${title}: ${group.length}`));
+      box.append(el("ul", { class: "list glossary" }, ...group.map((t) => hoverable(t, el("li", { class: state.term === t.key ? "current" : "" }, termEntry(t, false))))));
     }
     const cur = box.querySelector("li.current");
     if (cur) cur.scrollIntoView({ block: "nearest" });
   }
-  // Shows a term's entry in a tooltip beside an introduced name under the pointer in the leaf view, and opens the
-  // Glossary on the name when it is clicked.
+  // Shows a term's entry in a tooltip beside a term under the pointer in the leaf view, and opens the Concepts panel on
+  // the term when it is clicked.
   let termTip = null;
   function installTermTips() {
     const view = $("#leafview"), tip = el("div", { class: "tip term-tip", id: "termtip", role: "tooltip", hidden: true });
@@ -2525,19 +2541,20 @@
     view.addEventListener("scroll", hide, { passive: true });
     view.addEventListener("click", (ev) => {
       const span = termAt(ev);
-      const t = span && TERMS.get(span.dataset.term.split(" ")[0]);
+      const t = span && TERMS.get(span.dataset.term);
       if (!t) return;
       hide();
-      showGlossary(t.block || null, t.key);
+      showGlossary(null, t.key);
     });
   }
-  // Fills the term tooltip with the entries of the names under the pointer, up to three, and places it below them, or
-  // above when there is no room below.
+  // Fills the term tooltip with the entry of the term under the pointer, and places it below the term, or above when
+  // there is no room below.
   function showTermTip() {
     const tip = $("#termtip"), span = termTip;
     if (!tip || !span || !span.isConnected) { termTip = null; if (tip) tip.hidden = true; return; }
-    const terms = span.dataset.term.split(" ").map((k) => TERMS.get(k)).filter(Boolean);
-    tip.replaceChildren(...terms.slice(0, 3).map((t) => termEntry(t, true)));
+    const t = TERMS.get(span.dataset.term);
+    if (!t) { tip.hidden = true; return; }
+    tip.replaceChildren(termEntry(t, true));
     showBeside(tip, span);
   }
   // Shows a fixed tooltip below an element, or above it when there is no room below, kept inside the window.
@@ -2569,7 +2586,7 @@
     document.addEventListener("scroll", () => { if (shown) hide(); }, { capture: true, passive: true });
   }
 
-  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary", tests: "Tests", patterns: "Patterns" };
+  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
   // The panels that put badges on the blocks, so that switching to or from one draws the map again.
   const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
@@ -2577,8 +2594,8 @@
     path: "The reading path lists the parts of the change in the order to read them. Read first holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
       "Then holds the other changed blocks. Set aside counts the consequences, trivial files and files already reviewed. A step is read once all its files are reviewed.",
     changes: "This panel lists every changed block and its changed files. Below them are the decisions, the edges whose reference counts changed, and the changes to the map itself.",
-    glossary: "The Glossary lists the names this change introduces, such as new types, new members and renamed declarations, grouped by block. Click a name to go to its declaration. " +
-      "A name without a doc comment gets a definition from Claude.",
+    glossary: "Concepts lists the concepts that recur in the names of types, such as “Command Handler”. A word counts only when unrelated types share it. " +
+      "New concepts come first, and Claude defines each concept that no type documents.",
     decisions: "A decision is a hunk that adds, removes, renames or changes the signature of a declaration. Its consequences are other hunks whose changes all follow from it, such as updated call sites. " +
       "Decisions that reach the most blocks come first. Hover a row to see its reach on the map, and click it to go there.",
     edges: "An edge is the set of references from one block to another. This list shows the edges whose reference counts changed, with new and removed edges first. Click an edge to show it on the map.",
@@ -2591,7 +2608,7 @@
     patterns: "Patterns lists the roles that the change's new and changed types play, such as consumers or controllers, the most departures first. " +
       "Hover a pattern to outline the blocks that hold its instances, solid for new and changed ones and dashed for the rest. " +
       "While this list is open, a block's badge counts the new and changed instances it holds. Patterns new in this change come last.",
-    terms: "These are the names this block introduces. The Glossary lists the names from the whole change.",
+    terms: "These are the concepts that this block's new and changed types hold in their names. Concepts lists those of the whole change.",
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
       "Tests are never drawn on the map. While this list is open, a block's badge counts the changed test files of the types it holds. Test infrastructure, such as fixtures and builders, comes last.",
     testsSection: "These are the changed test files whose test types test a type in this block. They count apart from the block's own files in the progress.",
@@ -2637,8 +2654,8 @@
         if (badges) redraw(); else renderChanges();
       } }, label);
       title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
-        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null, TEST_FILES.length ? tab("tests", "Tests") : null,
-        patterns ? tab("patterns", "Patterns") : null)));
+        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Concepts") : null,
+        patterns ? tab("patterns", "Patterns") : null, TEST_FILES.length ? tab("tests", "Tests") : null)));
       if (state.panel === "path") { renderPath(box, head); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }
       if (state.panel === "tests") { renderTests(box); return; }

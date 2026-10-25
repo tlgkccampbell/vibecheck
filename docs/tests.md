@@ -325,7 +325,7 @@ test files toward its being read.
 
 ### 7.5 What tests leave alone
 
-Test types are never terms of the glossary, never new concepts, never placed, and
+Test types never hold a term of the Concepts panel, are never new concepts, are never placed, and are
 never in a narrative's inputs, since none of these is drawn from anything but the
 system's types. A test type is never `unsorted`.
 
