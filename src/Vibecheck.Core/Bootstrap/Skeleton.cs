@@ -7,16 +7,15 @@ namespace Vibecheck.Bootstrap;
 /// Builds the deterministic skeleton map of <c>docs/vibecheck-spec.md</c> section 5.1:
 /// one top-level node per project and one node per namespace segment beyond the
 /// project's root namespace, which leaves the unsorted leaf empty by construction.
-/// Types in <c>System</c> namespaces and every project that references a test
-/// framework are excluded before any node is derived.
+/// Types in <c>System</c> namespaces are excluded, and every project that references a
+/// test framework is listed as test types, before any node is derived.
 /// </summary>
 public static class Skeleton
 {
     public static ArchitectureMap Build(AnalysisResult analysis, string solutionRelativePath)
     {
-        var exclude = ExcludePatterns(analysis);
-        var map = new ArchitectureMap { Version = 0, Solution = solutionRelativePath.Replace('\\', '/'), Exclude = exclude };
-        (analysis, _) = Exclusion.Parse(exclude, []).Apply(analysis);
+        var map = new ArchitectureMap { Version = 0, Solution = solutionRelativePath.Replace('\\', '/'), Exclude = ["System.**"], Tests = TestPatterns(analysis) };
+        (analysis, _) = Exclusion.Parse(map, []).Apply(analysis);
         var prefix = CommonPrefixSegments(analysis.Projects.Select(p => p.Name).ToList());
         var topLevelIds = new HashSet<string>(StringComparer.Ordinal);
         var typesByAssembly = analysis.Types.GroupBy(t => t.Assembly, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -112,24 +111,13 @@ public static class Skeleton
         return string.Join('.', split[0].Take(n));
     }
 
-    /// <summary>The assembly name patterns by which the skeleton recognizes a test project: a project whose types reference any of them.</summary>
-    internal static readonly string[] TestFrameworkPatterns = ["xunit*", "nunit.framework", "Microsoft.VisualStudio.TestPlatform.TestFramework", "TUnit.Core"];
-
     /// <summary>
-    /// Returns the exclude list the skeleton writes: <c>System.**</c> for generator
-    /// output and polyfills that land in the framework's namespaces, and every type
-    /// of each project that references a test framework, qualified by its assembly.
+    /// Returns the tests list the skeleton writes: every type of each project that references a test framework, as
+    /// <see cref="TestFrameworks.TestAssemblies"/> finds them, qualified by its assembly. The skeleton's exclude list
+    /// is <c>System.**</c> alone, for generator output and polyfills that land in the framework's namespaces.
     /// </summary>
-    internal static List<string> ExcludePatterns(AnalysisResult analysis)
-    {
-        var assemblyOf = analysis.Types.ToDictionary(t => t.Name, t => t.Assembly, StringComparer.Ordinal);
-        var testAssemblies = analysis.ExternalReferences
-            .Where(e => TestFrameworkPatterns.Any(p => AssemblyMatches(p, e.Assembly)) && assemblyOf.ContainsKey(e.FromType))
-            .Select(e => assemblyOf[e.FromType])
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(a => a, StringComparer.Ordinal);
-        return ["System.**", .. testAssemblies.Select(a => a + "::**")];
-    }
+    internal static List<string> TestPatterns(AnalysisResult analysis) =>
+        TestFrameworks.TestAssemblies(analysis).Select(a => a + "::**").ToList();
 
     /// <summary>The assembly name patterns that the skeleton binds to one <c>framework</c> external.</summary>
     internal static readonly string[] FrameworkPatterns = ["System.*", "Microsoft.Win32.*", "Microsoft.VisualBasic*", "netstandard", "mscorlib", "WindowsBase"];

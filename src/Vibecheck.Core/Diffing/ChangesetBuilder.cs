@@ -48,6 +48,7 @@ public static class ChangesetBuilder
             Views = headFacts.Views,
             Hunks = clustered,
             Decisions = decisions,
+            Tests = TestChanges.Build(baseFacts, headFacts, files, clustered),
         };
         return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views), Glossary = Glossary.Build(changeset, baseFacts, headFacts, declarations) };
     }
@@ -159,11 +160,13 @@ public static class ChangesetBuilder
             if (g?.PreviousPath is { } old)
             {
                 baseFiles.TryGetValue(old, out b);
-                result.Add(new FileChange(path, "renamed", b?.Leaves ?? [], h?.Leaves ?? []) { PreviousPath = old, BlobBase = g.BlobBase, BlobHead = g.BlobHead });
+                result.Add(new FileChange(path, "renamed", b?.Leaves ?? [], h?.Leaves ?? [])
+                    { PreviousPath = old, BlobBase = g.BlobBase, BlobHead = g.BlobHead, Test = b?.Test == true || h?.Test == true, Subject = (h ?? b)?.Subject });
                 continue;
             }
             var status = b is null && h is null ? g!.Status : b is null ? "added" : h is null ? "removed" : b.Hash != h.Hash ? "modified" : g?.Status ?? "unchanged";
-            result.Add(new FileChange(path, status, b?.Leaves ?? [], h?.Leaves ?? []) { BlobBase = g?.BlobBase, BlobHead = g?.BlobHead });
+            result.Add(new FileChange(path, status, b?.Leaves ?? [], h?.Leaves ?? [])
+                { BlobBase = g?.BlobBase, BlobHead = g?.BlobHead, Test = b?.Test == true || h?.Test == true, Subject = (h ?? b)?.Subject });
         }
         return result;
     }
@@ -189,7 +192,8 @@ public static class ChangesetBuilder
 
     /// <summary>
     /// Rolls file changes up through the hierarchy. A file counts under every node that contains any leaf its types bind
-    /// to, as <see cref="StatusUnder"/> decides.
+    /// to, as <see cref="StatusUnder"/> decides, and a changed test file counts apart under every node that contains its
+    /// subject leaf.
     /// </summary>
     private static SortedDictionary<string, NodeContent> Rollup(ArchitectureMap baseMap, ArchitectureMap headMap, List<FileChange> files)
     {
@@ -203,12 +207,13 @@ public static class ChangesetBuilder
             var added = counted.Count(s => s == "added");
             var removed = counted.Count(s => s == "removed");
             var modified = counted.Count(s => s == "modified");
+            var tests = files.Count(f => f.Test && f.Status != "unchanged" && (id == Identifiers.Root || (f.Subject is not null && Identifiers.IsUnder(f.Subject, id))));
             string status;
             if (id != Identifiers.Root && id != ArchitectureMap.Unsorted && !baseMap.Nodes.ContainsKey(id)) status = "added";
             else if (id != Identifiers.Root && id != ArchitectureMap.Unsorted && !headMap.Nodes.ContainsKey(id)) status = "removed";
             else if (added + removed + modified == 0) status = "unchanged";
             else status = headMap.IsContainer(id) ? "children" : "modified";
-            content[id] = new NodeContent(total, added, removed, modified, status);
+            content[id] = new NodeContent(total, added, removed, modified, status, tests);
         }
         return content;
     }

@@ -99,7 +99,7 @@ public class ExclusionTests
     }
 
     [Fact]
-    public void TheSkeletonExcludesSystemNamespacesAndTestProjects()
+    public void TheSkeletonExcludesSystemNamespacesAndListsTestProjectsAsTests()
     {
         var analysis = TestData.Analysis(
             extraTypes: [new TypeInfo("Example.Tests.ThingTests", "Example.Tests", ["tests/ThingTests.cs"])],
@@ -107,7 +107,8 @@ public class ExclusionTests
             extraExternals: [new ExternalReference("Example.Tests.ThingTests", "xunit.v3.assert", "Xunit.Assert", "tests/ThingTests.cs", 1)]);
         analysis = analysis with { Projects = [.. analysis.Projects, new ProjectInfo("Example.Tests", "Example.Tests", "tests")] };
         var map = Skeleton.Build(analysis, "Example.sln");
-        Assert.Equal(["System.**", "Example.Tests::**"], map.Exclude);
+        Assert.Equal(["System.**"], map.Exclude);
+        Assert.Equal(["Example.Tests::**"], map.Tests);
         Assert.DoesNotContain("tests", map.Nodes.Keys);
         Assert.DoesNotContain("xunit-v3-assert", map.Externals.Keys);
         Assert.Empty(Checker.Run(map, analysis).Warnings);
@@ -118,5 +119,6 @@ public class ExclusionTests
     {
         var map = Skeleton.Build(TestData.Analysis(), "Example.sln");
         Assert.Equal(["System.**"], map.Exclude);
+        Assert.Empty(map.Tests);
     }
 }

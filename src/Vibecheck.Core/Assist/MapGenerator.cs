@@ -27,18 +27,18 @@ public static class MapGenerator
 
     /// <summary>
     /// Proposes a concept map for an analysis and revises it against the checker's findings. The skeleton supplies the
-    /// solution, the exclusions and the externals, which the generated map keeps. Returns the usable proposal with the
+    /// solution, the exclusions, the test types and the externals, which the generated map keeps. Returns the usable proposal with the
     /// fewest findings, preferring the later of two that tie.
     /// </summary>
     /// <exception cref="ClaudeException">Claude failed, or no proposal could be used as a map.</exception>
     public static async Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null)
     {
         var errors = new List<string>();
-        var (included, _) = Exclusion.Parse(skeleton.Exclude, errors).Apply(analysis);
+        var (included, _) = Exclusion.Parse(skeleton, errors).Apply(analysis);
         var listing = Units.Listing(Units.Build(included), included.Types.Count);
         var rules = Prompts.Fill(Prompts.Read("map-rules.md"),
             ("externals", skeleton.Externals.Count == 0 ? "none" : string.Join(", ", skeleton.Externals.Keys.Select(k => $"`{k}`"))),
-            ("exclude", string.Join(", ", skeleton.Exclude.Select(e => $"`{e}`"))));
+            ("exclude", string.Join(", ", skeleton.Exclude.Concat(skeleton.Tests).Select(e => $"`{e}`"))));
         var schema = Prompts.Read("map.schema.json");
 
         progress?.Report($"proposing a concept map from {included.Types.Count} types");
@@ -73,7 +73,7 @@ public static class MapGenerator
     internal static (ArchitectureMap? Map, string Text, IReadOnlyList<string> Findings) Evaluate(ArchitectureMap skeleton, JsonElement answer, AnalysisResult analysis)
     {
         var problems = new List<string>();
-        var map = new ArchitectureMap { Version = skeleton.Version, Solution = skeleton.Solution, Exclude = [.. skeleton.Exclude] };
+        var map = new ArchitectureMap { Version = skeleton.Version, Solution = skeleton.Solution, Exclude = [.. skeleton.Exclude], Tests = [.. skeleton.Tests] };
         foreach (var (k, v) in skeleton.Externals) map.Externals[k] = v;
         foreach (var node in answer.GetProperty("nodes").EnumerateArray())
         {

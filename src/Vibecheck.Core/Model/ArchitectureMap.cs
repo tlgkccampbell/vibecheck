@@ -4,7 +4,8 @@ namespace Vibecheck.Model;
 
 /// <summary>
 /// The architecture map: the checked-in description of a system's nodes, the code
-/// each leaf binds, the views that regroup leaves, and the types the map excludes.
+/// each leaf binds, the views that regroup leaves, the types the map excludes, and the
+/// types it reads as tests.
 /// Edges are never part of the map; they are read from the code. See
 /// <c>docs/vibecheck-spec.md</c>.
 /// </summary>
@@ -20,6 +21,12 @@ public sealed class ArchitectureMap
 
     /// <summary>Type patterns naming the types that are not part of the system: not partitioned, not drawn, and creating no edges.</summary>
     public List<string> Exclude { get; init; } = [];
+
+    /// <summary>
+    /// Gets the type patterns naming the test types: types that bind to nothing and create no edges, as excluded types do,
+    /// but that the analysis keeps as evidence about the system. See <c>docs/tests.md</c> section 3.1.
+    /// </summary>
+    public List<string> Tests { get; init; } = [];
 
     public SortedDictionary<string, NodeSpec> Nodes { get; init; } = new(StringComparer.Ordinal);
 
@@ -67,7 +74,7 @@ public sealed class ArchitectureMap
     /// <summary>Returns a deep copy of the map.</summary>
     public ArchitectureMap Clone()
     {
-        var copy = new ArchitectureMap { Version = Version, Solution = Solution, Exclude = [.. Exclude] };
+        var copy = new ArchitectureMap { Version = Version, Solution = Solution, Exclude = [.. Exclude], Tests = [.. Tests] };
         foreach (var (k, v) in Nodes) copy.Nodes[k] = v;
         foreach (var (k, v) in Views) copy.Views[k] = v;
         foreach (var (k, v) in Externals) copy.Externals[k] = v;

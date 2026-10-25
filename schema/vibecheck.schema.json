@@ -10,6 +10,7 @@
     "version": { "const": 0 },
     "solution": { "type": "string", "description": "The solution file, relative to the repository root." },
     "exclude": { "type": "array", "items": { "type": "string" }, "description": "Type patterns naming the types that are not part of the system. An excluded type is not partitioned and creates no edges." },
+    "tests": { "type": "array", "items": { "type": "string" }, "description": "Type patterns naming the test types. A test type binds to nothing and creates no edges, but the analysis keeps it as evidence about the system. A type that exclude also matches is excluded. See docs/tests.md section 3.1." },
     "nodes": {
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/identifier" },

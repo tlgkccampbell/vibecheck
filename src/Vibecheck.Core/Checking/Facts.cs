@@ -46,6 +46,9 @@ public sealed record Facts
     /// <summary>Gets the sites among the types the map holds, as <see cref="AnalysisResult.Sites"/> lists them. Every site of a declaration is here or in <see cref="Dependencies"/>.</summary>
     public List<Site> Sites { get; init; } = [];
 
+    /// <summary>Gets the test types, with their subjects and test methods, and the references they make into the system, as <see cref="TestTypes"/> builds them.</summary>
+    public TestFacts Tests { get; init; } = new([], []);
+
     [JsonIgnore]
     public bool Passed => Violations.Count == 0;
 }
@@ -53,8 +56,52 @@ public sealed record Facts
 /// <summary>A top-level type, the leaf it binds to, how it was bound (<c>attribute</c>, <c>pattern</c> or <c>fallback</c>), the files that declare it, and the generator that produced a part of it.</summary>
 public sealed record TypeFact(string Name, string Assembly, string Leaf, string By, IReadOnlyList<string> Files, string? Generator = null);
 
-/// <summary>A source document, its content hash, and the leaves its types bind to. A generated document names its generator.</summary>
-public sealed record FileFact(string Path, string Hash, IReadOnlyList<string> Leaves, string? Generator = null);
+/// <summary>
+/// A source document, its content hash, and the leaves its types bind to. A generated document names its generator. A
+/// file that declares test types and no system type has no leaves, and is marked as a test file with the leaf of its
+/// test types' subject.
+/// </summary>
+public sealed record FileFact(string Path, string Hash, IReadOnlyList<string> Leaves, string? Generator = null)
+{
+    /// <summary>Gets a value indicating whether the file declares test types and no type of the system.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Test { get; init; }
+
+    /// <summary>Gets the leaf of the subject of the file's test types, or <see langword="null"/> for a file of test infrastructure or any file that is not a test file.</summary>
+    public string? Subject { get; init; }
+}
+
+/// <summary>The test types of a commit and the references they make into the system. See <c>docs/tests.md</c> section 3.2.</summary>
+/// <param name="Types">The test types, ordered by name.</param>
+/// <param name="Exercises">The references from test types to declarations of the system, ordered by file and line.</param>
+public sealed record TestFacts(List<TestTypeFact> Types, List<ExerciseFact> Exercises);
+
+/// <summary>
+/// A test type: a type that the map's <c>tests</c> list matches and its <c>exclude</c> list does not. It binds to no leaf.
+/// Its subject is the system type it tests, which places it in the view, and a test type without one is test
+/// infrastructure, such as a fixture, a builder or a helper. See <c>docs/tests.md</c> section 4.
+/// </summary>
+/// <param name="Name">The type's name, as <see cref="TypeFact.Name"/> gives it.</param>
+/// <param name="Assembly">The assembly that declares the type.</param>
+/// <param name="Files">The files that declare the type.</param>
+/// <param name="Subject">The system type the test type tests, or <see langword="null"/> for test infrastructure.</param>
+/// <param name="Methods">The test type's test methods, ordered by file and line.</param>
+public sealed record TestTypeFact(string Name, string Assembly, IReadOnlyList<string> Files, SubjectFact? Subject, List<TestMethodFact> Methods);
+
+/// <summary>The system type a test type tests, the leaf that type binds to, and the rule that decided it: <c>name</c> or <c>references</c>.</summary>
+public sealed record SubjectFact(string Type, string Leaf, string By);
+
+/// <summary>
+/// A test method: a method of a test type that carries a test framework attribute, as <see cref="Declaration.Test"/>
+/// names it. The symbol is the method's, and the lines are those its declaration covers in its file, one-based.
+/// </summary>
+public sealed record TestMethodFact(string Symbol, string File, int First, int Last);
+
+/// <summary>
+/// An exercise: a reference from a test type to a declaration of the system, kept apart from the dependencies so that
+/// it never becomes an edge. The method is the member of the test type whose lines hold the reference, when one does.
+/// </summary>
+public sealed record ExerciseFact(string From, string? Method, string Symbol, string File, int Line);
 
 /// <summary>An observed dependency between two types, kept as evidence. The leaves of its ends are found through the types list.</summary>
 public sealed record DependencyFact(string From, string To, string Kind, string Symbol, string File, int Line);

@@ -48,7 +48,11 @@ public sealed record AnalysisResult
 /// <param name="Shape">A hash of the declaration's tokens outside its body and its name. Two declarations that differ only by name have the same shape.</param>
 /// <param name="Body">A hash of the body's tokens, or <see langword="null"/> for a declaration without a body.</param>
 /// <param name="Summary">The first sentence of the documentation summary, or <see langword="null"/>.</param>
-public sealed record Declaration(string Symbol, string Type, string? Container, string Kind, string Accessibility, bool Exposed, string File, int FirstLine, int LastLine, int? BodyLine, string Shape, string? Body, string? Summary = null)
+/// <param name="Test">
+/// The name of the test framework attribute that makes a method a test method, without its <c>Attribute</c> suffix, such
+/// as <c>Fact</c>, or <see langword="null"/> for any other declaration. <see cref="TestFrameworks"/> lists the attributes.
+/// </param>
+public sealed record Declaration(string Symbol, string Type, string? Container, string Kind, string Accessibility, bool Exposed, string File, int FirstLine, int LastLine, int? BodyLine, string Shape, string? Body, string? Summary = null, string? Test = null)
 {
     /// <summary>Gets the member's name without its containing type, or the whole symbol for a top-level type.</summary>
     [JsonIgnore]

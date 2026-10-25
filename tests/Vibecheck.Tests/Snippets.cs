@@ -9,7 +9,9 @@ namespace Vibecheck.Tests;
 
 /// <summary>
 /// Analyzes source snippets compiled in memory, as the Roslyn analysis would analyze a solution, and diffs two
-/// versions of them into hunks, so that tests of declarations and clustering need neither MSBuild nor git.
+/// versions of them into hunks, so that tests of declarations and clustering need neither MSBuild nor git. Files under
+/// <c>tests/</c> make a second project, <c>Snippets.Tests</c>, which references the first and the test frameworks that
+/// <see cref="Frameworks"/> declares.
 /// </summary>
 internal static class Snippets
 {
@@ -18,23 +20,81 @@ internal static class Snippets
 
     private static readonly MetadataReference[] References = ReferencesOf("System.Private.CoreLib", "System.Runtime", "System.Collections");
 
-    /// <summary>Returns the analysis of one project made of the files given, keyed by path relative to the root.</summary>
+    /// <summary>The folder whose files make the test project.</summary>
+    public const string TestFolder = "tests/";
+
+    /// <summary>
+    /// Gets stand-ins for the test frameworks, each compiled into an assembly named as the framework's is, so that the
+    /// suite needs no framework it does not already use. Each assembly declares the attributes and assertions the tests
+    /// name, and <c>Xunit.SkippableFact</c> declares an attribute that derives from xUnit's <c>Fact</c>.
+    /// </summary>
+    private static readonly Lazy<MetadataReference[]> Frameworks = new(() =>
+    {
+        var core = Compile("xunit.core", """
+            namespace Xunit
+            {
+                [System.AttributeUsage(System.AttributeTargets.Method)]
+                public class FactAttribute : System.Attribute { public string? Skip { get; set; } }
+                public class TheoryAttribute : FactAttribute { }
+                public sealed class InlineDataAttribute : System.Attribute { public InlineDataAttribute(params object[] data) { } }
+            }
+            """);
+        var assert = Compile("xunit.assert", """
+            namespace Xunit
+            {
+                public static class Assert
+                {
+                    public static void Equal<T>(T expected, T actual) { }
+                    public static void True(bool condition) { }
+                    public static void NotNull(object? value) { }
+                }
+            }
+            """);
+        var nunit = Compile("nunit.framework", """
+            namespace NUnit.Framework
+            {
+                public sealed class TestAttribute : System.Attribute { }
+                public sealed class TestFixtureAttribute : System.Attribute { }
+            }
+            """);
+        var skippable = Compile("Xunit.SkippableFact", """
+            namespace Xunit { public sealed class SkippableFactAttribute : FactAttribute { } }
+            """, core);
+        return [core, assert, nunit, skippable];
+    });
+
+    /// <summary>
+    /// Returns the analysis of the files given, keyed by path relative to the root: one project of the files outside
+    /// <see cref="TestFolder"/>, and a test project of those inside it when there are any. Files that are not C# take no
+    /// part in the analysis, as a document in a solution's folder does not.
+    /// </summary>
     public static AnalysisResult Analyze(IReadOnlyDictionary<string, string> files)
     {
         var resolver = new SourceResolver(Root);
-        var trees = files.Select(f => CSharpSyntaxTree.ParseText(f.Value, CSharpParseOptions.Default, Path.Combine(Root, f.Key))).ToList();
-        var compilation = CSharpCompilation.Create("Snippets", trees, References, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var located = trees.Select(t => (t, resolver.AddDocument(t.FilePath)!, (string?)null)).ToList();
-        return RoslynAnalyzer.Collect(resolver, [new RoslynAnalyzer.ProjectTrees("Snippets", "", compilation, located)], []);
+        var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+        List<SyntaxTree> Parse(bool tests) => files.Where(f => f.Key.EndsWith(".cs", StringComparison.Ordinal) && f.Key.StartsWith(TestFolder, StringComparison.Ordinal) == tests)
+            .Select(f => CSharpSyntaxTree.ParseText(f.Value, CSharpParseOptions.Default, Path.Combine(Root, f.Key))).ToList();
+        RoslynAnalyzer.ProjectTrees Project(string name, Compilation compilation) =>
+            new(name, "", compilation, compilation.SyntaxTrees.Select(t => (t, resolver.AddDocument(t.FilePath)!, (string?)null)).ToList());
+
+        var compilation = CSharpCompilation.Create("Snippets", Parse(tests: false), References, options);
+        var projects = new List<RoslynAnalyzer.ProjectTrees> { Project("Snippets", compilation) };
+        var testTrees = Parse(tests: true);
+        if (testTrees.Count > 0)
+            projects.Add(Project("Snippets.Tests", CSharpCompilation.Create("Snippets.Tests", testTrees, [.. References, .. Frameworks.Value, compilation.ToMetadataReference()], options)));
+        return RoslynAnalyzer.Collect(resolver, projects, []);
     }
 
     /// <summary>Returns the facts of the files given under a map that binds every type to one leaf.</summary>
     public static Facts Facts(IReadOnlyDictionary<string, string> files) => Checker.Run(Map(), Analyze(files));
 
-    /// <summary>Returns a map with one leaf per top-level namespace segment the tests use, so that tests can count blocks.</summary>
+    /// <summary>
+    /// Returns a map with one leaf per top-level namespace segment the tests use, so that tests can count blocks, and
+    /// with the test project's types as its test types.
+    /// </summary>
     public static ArchitectureMap Map()
     {
-        var map = new ArchitectureMap { Version = 0, Solution = "Snippets.sln" };
+        var map = new ArchitectureMap { Version = 0, Solution = "Snippets.sln", Tests = ["Snippets.Tests::**"] };
         foreach (var ns in new[] { "A", "B", "C" }) map.Nodes[ns.ToLowerInvariant()] = new NodeSpec { Name = ns, Bind = [ns + ".**"] };
         return map;
     }
@@ -95,6 +155,17 @@ internal static class Snippets
     }
 
     private static string[] Lines(string text) => text.Length == 0 ? [] : text.TrimEnd('\n').Split('\n');
+
+    /// <summary>Compiles a source text into an assembly of the given name, in memory, and returns a reference to its image.</summary>
+    private static MetadataReference Compile(string assembly, string source, params MetadataReference[] references)
+    {
+        var compilation = CSharpCompilation.Create(assembly, [CSharpSyntaxTree.ParseText(source)], [.. References, .. references],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        using var image = new MemoryStream();
+        var emitted = compilation.Emit(image);
+        if (!emitted.Success) throw new InvalidOperationException($"{assembly} does not compile: {string.Join("; ", emitted.Diagnostics)}");
+        return MetadataReference.CreateFromImage(image.ToArray());
+    }
 
     private static MetadataReference[] ReferencesOf(params string[] names)
     {

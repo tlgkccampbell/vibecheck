@@ -17,8 +17,9 @@ public class SampleIntegrationTests(SampleFixture sample)
     [Fact]
     public void AnalysisListsTypesAndFilesIncludingGeneratedOnes()
     {
-        Assert.Equal(31, sample.Analysis.Types.Count);
-        Assert.Equal(16, sample.Analysis.Files.Count(f => f.Generator is null));
+        // The test project adds three types in two files.
+        Assert.Equal(34, sample.Analysis.Types.Count);
+        Assert.Equal(18, sample.Analysis.Files.Count(f => f.Generator is null));
         Assert.Equal(2, sample.Analysis.Types.Count(t => t.Name.StartsWith("System.Text.RegularExpressions.Generated.")));
         Assert.Contains(sample.Analysis.Files, f => f.Path.StartsWith("src/Orchard.Billing/Generated/") && f.Generator!.Contains("JsonSourceGenerator"));
         Assert.Empty(sample.Analysis.Warnings);
@@ -37,6 +38,26 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Equal(new ExcludedCounts(2, 0), facts.Excluded);
         Assert.Equal(29, facts.Types.Count);
         Assert.DoesNotContain(facts.Dependencies, d => d.To.StartsWith("System."));
+    }
+
+    [Fact]
+    public void TestTypesArePlacedByTheirSubjectsAndKeepTheirExercises()
+    {
+        const string session = "Orchard.Auth.Sessions.Session";
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        Assert.Equal("3 test types: 1 by name, 1 by references, 1 infrastructure", TestTypes.Placement(facts.Tests));
+        var tests = facts.Tests.Types.Single(t => t.Name == "Orchard.Tests.Sessions.SessionTests");
+        Assert.Equal(new SubjectFact(session, "auth.sessions", "name"), tests.Subject);
+        Assert.Equal(["Has_FindsAGrantedScope", "Has_RejectsAMissingScope"], tests.Methods.Select(m => m.Symbol.Split('.')[^1]));
+        Assert.Equal(new SubjectFact(session, "auth.sessions", "references"), facts.Tests.Types.Single(t => t.Name == "Orchard.Tests.Sessions.ScopeChecks").Subject);
+        Assert.Null(facts.Tests.Types.Single(t => t.Name == "Orchard.Tests.Sessions.SessionBuilder").Subject);
+        Assert.Contains(facts.Tests.Exercises, e => e.Symbol == session + ".Has" && e.Method == "Orchard.Tests.Sessions.SessionTests.Has_FindsAGrantedScope");
+        Assert.DoesNotContain(facts.Tests.Exercises, e => e.Symbol.StartsWith("Xunit.", StringComparison.Ordinal) || e.Symbol.StartsWith("Orchard.Tests.", StringComparison.Ordinal));
+        var file = facts.Files.Single(f => f.Path == "tests/Orchard.Tests/Sessions/SessionTests.cs");
+        Assert.Equal((true, "auth.sessions"), (file.Test, file.Subject));
+        Assert.Equal((true, (string?)null), facts.Files.Where(f => f.Path.EndsWith("SessionBuilder.cs")).Select(f => (f.Test, f.Subject)).Single());
+        Assert.DoesNotContain(facts.Types, t => t.Assembly == "Orchard.Tests");
+        Assert.DoesNotContain(facts.LeafEdges, e => e.From == ArchitectureMap.Unsorted || e.To == ArchitectureMap.Unsorted);
     }
 
     [Fact]
@@ -149,6 +170,9 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Contains("billing.core.payments", skeleton.Nodes.Keys);
         Assert.Equal("Orchard.Billing", skeleton.Nodes["billing"].Name);
         Assert.Contains("framework", skeleton.Externals.Keys);
+        Assert.Equal(["System.**"], skeleton.Exclude);
+        Assert.Equal(["Orchard.Tests::**"], skeleton.Tests);
+        Assert.DoesNotContain("tests", skeleton.Nodes.Keys);
         var facts = Checker.Run(skeleton, sample.Analysis);
         Assert.Empty(facts.Warnings);
         Assert.DoesNotContain(facts.ExternalRefs, e => e.External is null);

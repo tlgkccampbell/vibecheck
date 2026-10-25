@@ -17,6 +17,8 @@ Directing the reviewer's attention, with decisions and their consequences, seman
 triviality, a reading path, new concepts and a glossary, is designed in
 [docs/attention.md](docs/attention.md); its first four phases, decisions and their
 consequences, semantic triviality, the reading path and the glossary, are built.
+Tests in a review are designed in [docs/tests.md](docs/tests.md); its first phase, test
+types, is built.
 
 ## Layout
 
@@ -199,7 +201,7 @@ behind one edge.
 ## Bootstrapping a map
 
 1. `vibecheck init --solution <sln>` writes a skeleton map from namespaces, with
-   `System.**` and every test project excluded.
+   `System.**` excluded and every test project listed under `tests`.
 2. `vibecheck units --out units.txt` writes the listing a language model reads: every
    type folded into units with its documentation summary and heaviest references.
 3. The model writes the map: a tree of concepts with a purpose line each, leaves
@@ -282,6 +284,19 @@ in code a model wrote is worth a look; when Claude is available it writes a one-
 definition in its place, checked to cite the declaring file and marked as Claude's. A
 block's details panel lists its own terms. In every diff, an introduced name carries a
 dotted underline, hovering it shows its entry, and clicking it opens the Glossary.
+
+Tests are never drawn on the map. The map's `tests` list names the test types, which
+bind to no block and create no edges, and each is placed by its **subject**, the type
+it tests: by its name less a suffix such as `Tests`, or else by the type its references
+reach most. A test type with no test methods, or that neither rule places, is test
+infrastructure. A block's changed test files are listed in a collapsed **Tests** section
+of its leaf view, after its own files, and the bar counts them apart, as "24 of 30
+files reviewed · 3 of 9 test files". The **Tests** face of the Changes panel lists the
+changed test types by block, with the test methods each change added, removed or
+changed, and test infrastructure last; while it is open, each block carries a badge
+with the number of its changed test files. A change of tests alone opens there.
+`vibecheck check` reports how the test types were placed, and warns about an `exclude`
+pattern that names only test projects, which belongs in `tests`.
 
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a

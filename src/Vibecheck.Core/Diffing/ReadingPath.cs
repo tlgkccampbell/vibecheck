@@ -61,6 +61,8 @@ public static class ReadingPath
             : id.StartsWith("g:", StringComparison.Ordinal) && id.Split('/') is [var v, var g] && map.Views.TryGetValue(v[2..], out var view) && view.Groups.TryGetValue(g, out var group) ? group.Name
             : map.Nodes.TryGetValue(id, out var node) ? node.Name : id;
         List<string> FilesUnder(string id) => changed.Where(f => CountedLeaves(f).Any(l => Identifiers.IsUnder(l, id))).Select(f => f.Path).ToList();
+        // The changed test files whose subject is a leaf, which its step lists after its own files. See docs/tests.md section 7.2.
+        List<string> TestFilesOf(string leaf) => changed.Where(f => f.Test && f.Subject == leaf).Select(f => f.Path).ToList();
         List<string> EdgeFiles(DrawnEdge e)
         {
             var from = e.Evidence.SelectMany(p => filesOfType.GetValueOrDefault(p.From, [])).Distinct(StringComparer.Ordinal).ToList();
@@ -164,7 +166,7 @@ public static class ReadingPath
             foreach (var c in DrawnEdges.Children(cs, level))
             {
                 if (named.Contains(c) || map.IsContainer(c)) continue;
-                var files = FilesUnder(c);
+                var files = FilesUnder(c).Concat(TestFilesOf(c)).ToList();
                 if (files.Count > 0 && !files.All(setAside.Contains)) leaves.Add((c, level, files.Count));
             }
         }
@@ -172,18 +174,23 @@ public static class ReadingPath
         var listedDecisionFiles = new HashSet<string>(StringComparer.Ordinal);
         if (widest is not null) { decided.Add(widest.Id); listedDecisionFiles.Add(widest.File); }
         var leafSteps = new List<PathStep>();
+        var listedTests = new HashSet<string>(StringComparer.Ordinal);
         var decisionSteps = new List<PathStep>();
         var fileSteps = new List<PathStep>();
         foreach (var (leaf, level, _) in leaves.OrderBy(l => levels.IndexOf(l.Level)).ThenByDescending(l => l.Size).ThenBy(l => l.Leaf, StringComparer.Ordinal))
         {
             var files = FilesUnder(leaf);
+            var tests = TestFilesOf(leaf);
             var decisions = ranked.Select(x => x.Decision).Concat(cs.Decisions.Where(d => d.Consequences.Count == 0))
                 .Where(d => !decided.Contains(d.Id) && files.Contains(d.File)).ToList();
             var own = files.Where(p => !setAside.Contains(p) && !listedDecisionFiles.Contains(p) && !decisions.Any(d => d.File == p) && OwnEdits(hunksOf.GetValueOrDefault(p), decisionAt) > 0).ToList();
-            var parts = new List<string> { Plural(files.Count, "file changed", "files changed") };
+            var parts = new List<string>();
+            if (files.Count > 0) parts.Add(Plural(files.Count, "file changed", "files changed"));
             if (decisions.Count > 0) parts.Add(Plural(decisions.Count, "decision", "decisions"));
             if (own.Count > 0) parts.Add($"{Plural(own.Count, "file", "files")} with edits on their own");
-            var step = new PathStep($"node:{leaf}", "then", "node", leaf, $"{Name(leaf)}: {string.Join(" · ", parts)}", files) { Under = level == Identifiers.Root ? null : level };
+            if (tests.Count > 0) parts.Add(Plural(tests.Count, "test file", "test files"));
+            listedTests.UnionWith(tests);
+            var step = new PathStep($"node:{leaf}", "then", "node", leaf, $"{Name(leaf)}: {string.Join(" · ", parts)}", [.. files, .. tests]) { Under = level == Identifiers.Root ? null : level };
             leafSteps.Add(step);
             then.Add(step);
             foreach (var d in decisions)
@@ -204,10 +211,15 @@ public static class ReadingPath
                 then.Add(fs);
             }
         }
-        // Changed files that no type binds, such as project files and documents, come last.
-        foreach (var f in changed.Where(f => CountedLeaves(f).Count == 0 && hunksOf.GetValueOrDefault(f.Path)?.Reason is null).OrderBy(f => f.Path, StringComparer.Ordinal))
+        // Changed test files that no leaf's step lists, test infrastructure among them, and then the changed files that no
+        // type binds, such as project files and documents, come last.
+        var rest = changed.Where(f => f.Test && !listedTests.Contains(f.Path) && !setAside.Contains(f.Path)).OrderBy(f => f.Subject is null).ThenBy(f => f.Path, StringComparer.Ordinal)
+            .Select(f => (File: f, Where: f.Subject is null ? "test infrastructure" : $"tests of {Name(f.Subject)}"))
+            .Concat(changed.Where(f => !f.Test && CountedLeaves(f).Count == 0 && hunksOf.GetValueOrDefault(f.Path)?.Reason is null).OrderBy(f => f.Path, StringComparer.Ordinal)
+                .Select(f => (File: f, Where: "outside the map")));
+        foreach (var (f, where) in rest)
         {
-            var fs = new PathStep($"file:{f.Path}", "then", "file", f.Path, $"{FileName(f.Path)}: {f.Status}, outside the map", [f.Path]);
+            var fs = new PathStep($"file:{f.Path}", "then", "file", f.Path, $"{FileName(f.Path)}: {f.Status}, {where}", [f.Path]);
             fileSteps.Add(fs);
             then.Add(fs);
         }

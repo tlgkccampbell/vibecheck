@@ -234,6 +234,19 @@
   /* The decision badge on a block counts the decisions its files hold. */
   svg#stage .decision-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
   svg#stage .decision-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--accent); }
+  /* While the Tests switch is on, the tests badge on a block counts the changed test files of the types it holds. */
+  svg#stage .tests-bg { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+  svg#stage .tests-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--muted); }
+  /* A leaf's Tests section, and the test methods under a test type in the Tests switch. */
+  .tests-section { margin: 12px 0; }
+  .tests-section > summary { font-weight: 600; }
+  .tests-section > .typecard { margin-top: 8px; }
+  .test-methods { list-style: none; margin: 0 0 4px; padding: 0 0 0 26px; font-size: 12px; }
+  .test-methods li { display: flex; gap: 6px; align-items: baseline; color: var(--muted); }
+  .test-methods code { font-family: var(--mono); font-size: 11.5px; color: var(--fg); }
+  .test-methods .st-added .row-change { color: var(--added); }
+  .test-methods .st-removed .row-change { color: var(--removed); }
+  .test-methods .st-modified .row-change { color: var(--modified); }
   /* A decision's row in the Changes panel carries a diamond where a block's row carries its status square. */
   .dot.decision-dot { width: 7px; height: 7px; background: var(--accent); border-radius: 1px; transform: rotate(45deg); margin: 0 1px; }
   .dot.decision-dot.public { background: transparent; border: 1.5px solid var(--warn); }

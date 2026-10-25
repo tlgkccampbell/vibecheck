@@ -7,9 +7,9 @@ namespace Vibecheck.Format;
 
 /// <summary>
 /// Writes <c>vibecheck.json</c> in canonical form. Each node, external and group entry
-/// occupies one line, the exclude list occupies one line in the order written,
-/// nodes, views, groups and externals are sorted by identifier, and keys appear in
-/// the schema's order. The output uses two-space indentation, LF line endings and
+/// occupies one line, the exclude list occupies one line in the order written, and so
+/// does the tests list, which is written only when it holds a pattern. Nodes, views,
+/// groups and externals are sorted by identifier, and keys appear in the schema's order. The output uses two-space indentation, LF line endings and
 /// ends with a newline.
 /// </summary>
 public static class MapWriter
@@ -27,6 +27,7 @@ public static class MapWriter
         sb.Append("  \"version\": ").Append(map.Version).Append(",\n");
         sb.Append("  \"solution\": ").Append(Str(map.Solution)).Append(",\n");
         sb.Append("  \"exclude\": ").Append(StrList(map.Exclude)).Append(",\n");
+        if (map.Tests.Count > 0) sb.Append("  \"tests\": ").Append(StrList(map.Tests)).Append(",\n");
 
         sb.Append("  \"nodes\": {");
         AppendRecords(sb, "    ", map.Nodes.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv =>

@@ -30,7 +30,7 @@
   // leaf when every such file is in one of those places. Its identifiers hold a "~" and a "/", which no map
   // identifier can, so they never collide with the map's. See docs/pull-requests.md section 4.4.
   const OTHER = "~other";
-  const OTHER_FILES = CS.files.filter((f) => f.status !== "unchanged" && !f.leavesBase.length && !f.leavesHead.length);
+  const OTHER_FILES = CS.files.filter((f) => f.status !== "unchanged" && !f.test && !f.leavesBase.length && !f.leavesHead.length);
   const otherGroupOf = (path) => OTHER + "/" + (path.includes("/") ? path.slice(0, path.indexOf("/")) : "");
   const OTHER_GROUPS = [...new Set(OTHER_FILES.map((f) => otherGroupOf(f.path)))].sort();
   const OTHER_LEAVES = OTHER_GROUPS.length > 1 ? OTHER_GROUPS : OTHER_FILES.length ? [OTHER] : [];
@@ -39,7 +39,17 @@
   const otherLeafOf = (path) => OTHER_LEAVES.length === 1 ? OTHER : otherGroupOf(path);
   const otherFilesOf = (id) => OTHER_FILES.filter((f) => id === OTHER || otherGroupOf(f.path) === id);
 
-  const isLeaf = (id) => id === UNSORTED || OTHER_LEAVES.includes(id) || !!(NODES[id] && NODES[id].bind);
+  // A test file declares test types and no type of the system, and the map never draws it. A changed test file is
+  // listed in the Tests section of the leaf its subject binds to, or in the test infrastructure leaf when it has no
+  // subject. That leaf is never drawn either, and the Tests switch reaches it. Test files count apart in the progress.
+  // See docs/tests.md section 7.
+  const TESTS = "~tests";
+  const TEST_FILES = CS.files.filter((f) => f.test && f.status !== "unchanged");
+  const TEST_TYPES = CS.tests || [];
+  // Returns the changed test files whose subject binds to a leaf, or those without a subject for the test infrastructure leaf.
+  const testFilesOf = (leaf) => TEST_FILES.filter((f) => leaf === TESTS ? !f.subject : f.subject === leaf);
+
+  const isLeaf = (id) => id === UNSORTED || id === TESTS || OTHER_LEAVES.includes(id) || !!(NODES[id] && NODES[id].bind);
   const parentOf = (id) => id === ROOT ? null : id.startsWith(OTHER + "/") ? OTHER : id.lastIndexOf(".") < 0 ? ROOT : id.slice(0, id.lastIndexOf("."));
   const isUnder = (id, anc) => anc === ROOT || id === anc || id.startsWith(anc + (anc === OTHER ? "/" : "."));
   const shortName = (type) => type.replace(/^.*::/, "").split(".").pop();
@@ -97,6 +107,7 @@
     if (id === ROOT) return META.solution || MAP.solution;
     if (id === UNSORTED) return "Unsorted";
     if (id === OTHER) return "Other files";
+    if (id === TESTS) return "Test infrastructure";
     if (isOther(id)) return id.length > OTHER.length + 1 ? id.slice(OTHER.length + 1) + "/" : "Top-level files";
     if (NODES[id]) return NODES[id].name;
     if (EXTERNALS[id]) return EXTERNALS[id].name;
@@ -107,6 +118,7 @@
     if (id === ROOT) return META.title ? `Changeset ${META.range || ""}: ${META.title}` : "";
     if (id === UNSORTED) return "Types that no leaf binds. The map should be extended to place them.";
     if (id === OTHER) return "Changed files that no type binds, such as project files, documents and workflows.";
+    if (id === TESTS) return "Changed test types that test no single type of the system, such as fixtures, builders and helpers.";
     if (isOther(id)) return id.length > OTHER.length + 1 ? `Changed files under ${id.slice(OTHER.length + 1)}/ that no type binds.` : "Changed files at the top that no type binds.";
     if (NODES[id]) return NODES[id].purpose || "";
     if (EXTERNALS[id]) return EXTERNALS[id].purpose || "External assembly.";
@@ -261,8 +273,9 @@
 
   // Returns the leaves a changed file counts under, as the changeset's content counts it: its leaves at head, its
   // leaves at base when it was removed, and its leaves at both ends when it was renamed. A file that no type binds
-  // counts under its Other files leaf.
+  // counts under its Other files leaf, and a test file counts under none.
   function countedLeaves(f) {
+    if (f.test) return [];
     if (!f.leavesBase.length && !f.leavesHead.length) return [otherLeafOf(f.path)];
     if (f.status === "removed") return f.leavesBase;
     return f.status === "renamed" ? [...new Set(f.leavesBase.concat(f.leavesHead))] : f.leavesHead;
@@ -280,7 +293,7 @@
     }
     return out;
   }
-  const FILES_BY_NODE = filesByNode(CHANGED_FILES);
+  const FILES_BY_NODE = filesByNode(CHANGED_FILES.filter((f) => !f.test));
 
   // Returns the paths of a node's or a group's changed files, how many there are, and how many of them are reviewed.
   function reviewedCount(key) {
@@ -867,8 +880,10 @@
     decision: null,
     // What the last mark action of a decision did: the decision's identifier and the text that says so, or null.
     decisionNote: null,
-    // The Changes panel's content, "path", "changes" or "glossary", or undefined before the first render chooses.
+    // The Changes panel's content, "path", "changes", "glossary" or "tests", or undefined before the first render chooses.
     panel: undefined,
+    // The leaves whose Tests sections the reader has opened.
+    testsOpen: new Set(),
     // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
     glossaryBlock: null,
     term: null,
@@ -1066,6 +1081,17 @@
         dg.append(text(left + dw / 2, r.y + 3, label, { class: "decision-text", "text-anchor": "middle" }));
         dg.append(svg("title", {}, `${plural(decisions.length, "decision", "decisions")} in files under ${nameOf(c.id)}`));
         g.append(dg);
+        left += dw + 6;
+      }
+      // While the Tests switch is on, the tests badge counts the changed test files whose subjects the block holds.
+      const tests = state.panel === "tests" ? TEST_FILES.filter((f) => f.subject && c.leaves.includes(f.subject)).length : 0;
+      if (tests) {
+        const label = "✓ " + tests, tw = label.length * MONO.badge + 12;
+        const tg = svg("g", { class: "tests-badge" });
+        tg.append(svg("rect", { x: left, y: r.y - 8, width: tw, height: 15, rx: 7.5, class: "tests-bg" }));
+        tg.append(text(left + tw / 2, r.y + 3, label, { class: "tests-text", "text-anchor": "middle" }));
+        tg.append(svg("title", {}, `${plural(tests, "changed test file", "changed test files")} of types under ${nameOf(c.id)}`));
+        g.append(tg);
       }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
@@ -1522,15 +1548,32 @@
       el("button", { class: "btn", onclick: () => setReviewed(r.paths, !all) }, all ? "Unmark all" : "Mark all reviewed"));
   }
 
+  // Returns a leaf's Tests section, which holds the changed test files whose subject binds to the leaf, or null when it
+  // has none. It stays collapsed to one line that counts them until the reader opens it, and then shows each file as
+  // the leaf view shows any file.
+  function testsSection(id) {
+    const files = byRank(testFilesOf(id).map((f) => f.path), fileRank);
+    if (!files.length) return null;
+    const reviewed = files.filter((p) => REVIEWED.has(p)).length;
+    const box = el("details", { class: "tests-section", open: state.testsOpen.has(id),
+      ontoggle: (ev) => { if (ev.target.open) state.testsOpen.add(id); else state.testsOpen.delete(id); } },
+      el("summary", {}, `Tests: ${plural(files.length, "changed test file", "changed test files")} · ${reviewed} reviewed`, help(HELP.testsSection)));
+    const card = el("section", { class: "typecard" });
+    for (const path of files) card.append(fileBlock(path));
+    box.append(card);
+    return box;
+  }
+
   function renderLeaf(id) {
     const wrap = el("div", { class: "leaf" });
     const m = metricsOf(id), content = contentOf(id);
     wrap.append(el("div", {},
       el("div", { class: "leaf-title" }, nameOf(id).toUpperCase()),
       el("div", { class: "leaf-sub" }, purposeOf(id))));
-    if (isOther(id)) {
-      // Files that no type binds have no types and no edges, so the leaf lists the files themselves.
-      const files = byRank(otherFilesOf(id).map((f) => f.path), fileRank);
+    if (isOther(id) || id === TESTS) {
+      // Files that no type binds, and the files of test infrastructure, have no types and no edges in the map, so the
+      // leaf lists the files themselves.
+      const files = byRank((id === TESTS ? testFilesOf(TESTS) : otherFilesOf(id)).map((f) => f.path), fileRank);
       wrap.append(reviewedBar(id) || "", el("h3", {}, plural(files.length, "changed file", "changed files")));
       const card = el("section", { class: "typecard" });
       for (const path of files) card.append(fileBlock(path));
@@ -1568,6 +1611,7 @@
       for (const path of byRank(t.files, fileRank)) card.append(fileBlock(path));
       wrap.append(card);
     }
+    wrap.append(testsSection(id) || "");
 
     // Edges in and out of this leaf, changed first.
     const out = CS.edges.filter((e) => e.from === id && e.to !== id), inn = CS.edges.filter((e) => e.to === id && e.from !== id);
@@ -1775,6 +1819,53 @@
     const bottom = a.bottom - parseFloat(style.paddingBottom) - parseFloat(style.borderBottomWidth);
     if (block.height > bottom - top || block.bottom > bottom) aside.scrollTop += block.bottom - bottom;
     else if (block.top < top) aside.scrollTop -= top - block.top;
+  }
+
+  // ---------- Tests ----------
+  // The Tests switch lists the changed test types by the block their subjects bind to, in the order the path first
+  // reaches each block, and test infrastructure last. See docs/tests.md section 7.3.
+  const TESTS_ONLY = TEST_FILES.length > 0 && CHANGED_FILES.every((f) => f.test || (!f.leavesBase.length && !f.leavesHead.length));
+  const SUBJECT_RULE = { name: "placed by its name", references: "placed by the type its references reach most" };
+  const METHOD_STATUS = { added: "added", removed: "removed", changed: "modified" };
+  // Returns where the path first reaches a leaf, by a step on the leaf itself, under it, or on a block that holds it.
+  function pathOrder(leaf) {
+    if (leaf === TESTS) return Infinity;
+    const i = PATH.findIndex((s) => s.target === leaf || s.under === leaf || (s.kind === "node" && isUnder(leaf, s.target)));
+    return i < 0 ? PATH.length : i;
+  }
+  function renderTests(box) {
+    const groups = new Map();
+    for (const t of TEST_TYPES) {
+      const key = t.subject ? t.subject.leaf : TESTS;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
+    const keys = [...groups.keys()].sort((a, b) => pathOrder(a) - pathOrder(b) || nameOf(a).localeCompare(nameOf(b)));
+    const reviewed = TEST_FILES.filter((f) => REVIEWED.has(f.path)).length;
+    box.append(el("p", { class: "hint" }, `${plural(TEST_TYPES.length, "test type", "test types")} changed in ${plural(TEST_FILES.length, "test file", "test files")}, ${reviewed} reviewed.`));
+    for (const key of keys) {
+      box.append(el("h3", {}, el("button", { class: "link", onclick: () => openLeaf(key), title: key === TESTS ? purposeOf(TESTS) : `Open ${nameOf(key)} with its tests` }, nameOf(key))));
+      const ul = el("ul", { class: "list tests" });
+      for (const t of groups.get(key)) {
+        const done = t.files.every((p) => REVIEWED.has(p)) && state.opts.mute;
+        const li = el("li", {}, el("button", { class: "row st-" + (done ? "reviewed" : t.status), onclick: () => openFile(t.files[0]),
+          title: t.name + (t.subject ? `\nTests ${t.subject.type}, ${SUBJECT_RULE[t.subject.by] || t.subject.by}` : "") + "\n" + t.files.join("\n") },
+          el("span", { class: "dot" }), el("span", { class: "row-name" }, el("code", {}, shortName(t.name))),
+          el("span", { class: "row-meta" }, t.methods.length ? plural(t.methods.length, "method", "methods") : t.status)));
+        if (t.methods.length) li.append(el("ul", { class: "test-methods" }, ...t.methods.map((m) =>
+          el("li", { class: "st-" + METHOD_STATUS[m.status] }, el("span", { class: "row-change" }, m.status + " "), el("code", {}, memberName(m.symbol, "method"))))));
+        ul.append(li);
+      }
+      box.append(ul);
+    }
+  }
+  // Opens a leaf's view with its Tests section open, or the test infrastructure leaf.
+  async function openLeaf(leaf) {
+    if (leaf !== TESTS) state.testsOpen.add(leaf);
+    rememberView();
+    state.trail = [{ level: ROOT }, ...ancestors(parentOf(leaf)).map((x) => ({ level: x })), { leaf }];
+    state.selected = null;
+    await mount();
   }
 
   // ---------- The glossary ----------
@@ -2002,7 +2093,7 @@
     document.addEventListener("scroll", () => { if (shown) hide(); }, { capture: true, passive: true });
   }
 
-  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary" };
+  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary", tests: "Tests" };
   // The explanations that the question marks beside the page's major sections show on hover, by section.
   const HELP = {
     path: "The reading path lists the parts of the change in the order to read them. Read first holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
@@ -2017,6 +2108,9 @@
     decision: "This section shows the selected decision's declarations and the hunks that follow from it, grouped by block. Click a hunk to open it.",
     narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
     terms: "These are the names this block introduces. The Glossary lists the names from the whole change.",
+    tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
+      "Tests are never drawn on the map. While this list is open, a block's badge counts the changed test files of the types it holds. Test infrastructure, such as fixtures and builders, comes last.",
+    testsSection: "These are the changed test files whose test types test a type in this block. They count apart from the block's own files in the progress.",
     types: "These are the types in this block whose files changed, with the hunks of each file. Files with decisions or their own edits come first, " +
       "then files that only follow from decisions, then reviewed files.",
     uses: "Uses lists the blocks this block references, and Used by lists the blocks that reference it. Each count is the number of references at base and at head. " +
@@ -2034,15 +2128,21 @@
     // The panel's head holds the title and, on the path, the arrows; everything after the title is drawn afresh.
     const head = $("#changes-head"), title = $("#changes-title");
     for (const n of [...head.children]) if (n !== title) n.remove();
-    // With a path or a glossary, the panel switches among the path, the changes and the glossary, and opens on the
-    // path when the changeset has one.
-    if (PATH.length || GLOSSARY.length) {
-      if (state.panel === undefined) state.panel = PATH.length ? "path" : "changes";
-      const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => { state.panel = name; renderChanges(); } }, label);
+    // With a path, a glossary or changed tests, the panel switches among the path, the changes, the glossary and the
+    // tests. It opens on the tests when every changed file is a test file or a file that no type binds, and otherwise
+    // on the path when the changeset has one. Switching to or from the tests draws the map again, for its test badges.
+    if (PATH.length || GLOSSARY.length || TEST_FILES.length) {
+      if (state.panel === undefined) state.panel = TESTS_ONLY ? "tests" : PATH.length ? "path" : "changes";
+      const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => {
+        const badges = (state.panel === "tests") !== (name === "tests");
+        state.panel = name;
+        if (badges) redraw(); else renderChanges();
+      } }, label);
       title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
-        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null)));
+        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null, TEST_FILES.length ? tab("tests", "Tests") : null)));
       if (state.panel === "path") { renderPath(box, head); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }
+      if (state.panel === "tests") { renderTests(box); return; }
     } else title.replaceChildren(PANEL_TITLE.changes, help(HELP.changes));
     const talk = openThreadsUnder(ROOT).length;
     if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
@@ -2494,7 +2594,8 @@
   async function openFile(path) {
     const f = fileOf(path);
     if (!f) return;
-    const leaf = f.leavesHead[0] || f.leavesBase[0] || otherLeafOf(f.path);
+    const leaf = f.test ? f.subject || TESTS : f.leavesHead[0] || f.leavesBase[0] || otherLeafOf(f.path);
+    if (f.test) state.testsOpen.add(leaf);
     rememberView();
     state.trail = [{ level: ROOT }, ...ancestors(parentOf(leaf)).map((x) => ({ level: x })), { leaf }];
     state.selected = null;
@@ -3556,12 +3657,15 @@
 
   // ---------- Reviewed marks ----------
 
-  // Shows how many of the changeset's changed files are reviewed.
+  // Shows how many of the changeset's changed files are reviewed, with the test files counted apart so that a change
+  // with many tests does not hide how much of the system's change is read.
   function renderProgress() {
-    const done = CHANGED_FILES.filter((f) => REVIEWED.has(f.path)).length;
+    const files = CHANGED_FILES.filter((f) => !f.test), done = files.filter((f) => REVIEWED.has(f.path)).length;
+    const tests = TEST_FILES.filter((f) => REVIEWED.has(f.path)).length;
     const steps = countedSteps();
-    $("#progress").textContent = (CHANGED_FILES.length ? `${done} of ${CHANGED_FILES.length} files reviewed` : "")
-      + (steps.length ? ` · ${steps.filter(stepRead).length} of ${plural(steps.length, "step", "steps")} read` : "");
+    $("#progress").textContent = [files.length ? `${done} of ${files.length} files reviewed` : "",
+      TEST_FILES.length ? `${tests} of ${plural(TEST_FILES.length, "test file", "test files")}` : "",
+      steps.length ? `${steps.filter(stepRead).length} of ${plural(steps.length, "step", "steps")} read` : ""].filter(Boolean).join(" · ");
   }
 
   // Lays marks over the page's, where each maps a path to its reason, or to nothing when the file is not reviewed.
@@ -3669,6 +3773,8 @@
     const parsed = hash ? parseLoc(hash) : home;
     const start = parsed.level === ROOT && !parsed.view && hash !== ROOT ? home : parsed;
     state.trail = [{ level: ROOT }];
+    // A change of tests alone opens on the Tests switch, whose badges the first drawing of the map already shows.
+    if (TESTS_ONLY) state.panel = "tests";
     if (start.leaf) { for (const anc of ancestors(parentOf(start.leaf))) state.trail.push({ level: anc }); state.trail.push(start); }
     else { for (const anc of ancestors(start.level)) state.trail.push({ level: anc }); if (start.view) state.trail.push({ level: start.level, view: start.view }); if (start.group) state.trail.push(start); }
     const m = await mount();

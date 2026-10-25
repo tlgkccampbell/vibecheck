@@ -269,8 +269,11 @@ The same changeset always gives the same path.
 
 **Then** holds every other changed leaf, largest change first within each level, and
 under each the decisions and the files with edits of their own that the first tier
-did not take. A leaf whose changed files are all set aside is not a step, since the
-third tier accounts for it. A changed file that no type binds comes last, on its own.
+did not take, and after them the changed test files whose subject the leaf holds, as
+[tests.md](tests.md) section 7.2 describes. A leaf whose changed files are all set
+aside is not a step, since the third tier accounts for it. A changed test file that
+no leaf's step lists, such as one of test infrastructure, comes last on its own, and
+a changed file that no type binds comes after it.
 
 **Set aside** holds the consequences, the trivial and generated files and the files
 already reviewed, as counts with the blocks they are in. A file that is both trivial
