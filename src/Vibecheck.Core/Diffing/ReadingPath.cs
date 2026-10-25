@@ -153,6 +153,30 @@ public static class ReadingPath
             named.Add(fanIn.Block);
         }
 
+        // Each test type with a signal that touches changed code is a step after the decisions, the widest reach of the
+        // decisions its signals touch first, and every other signal is gathered into one closing step of the tier. See
+        // docs/tests.md section 7.2.
+        var typeOf = cs.Tests.SelectMany(t => t.Methods.Select(m => (m.Symbol, Type: t))).DistinctBy(x => x.Symbol).ToDictionary(x => x.Symbol, x => x.Type, StringComparer.Ordinal);
+        var signals = cs.Hunks.SelectMany(f => f.Hunks.SelectMany(h => h.Signals ?? [])).Where(s => typeOf.ContainsKey(s.Method)).ToList();
+        var decisionOf = cs.Decisions.SelectMany(d => d.Declarations.Select(x => (x.Symbol, d))).DistinctBy(x => x.Symbol).ToDictionary(x => x.Symbol, x => x.d, StringComparer.Ordinal);
+        (int Blocks, int Files) SignalReach(TestSignal s) => s.Touches.Select(t => decisionOf.TryGetValue(t.Symbol, out var d) ? Reach(d) : (0, 0, 0))
+            .Select(r => (r.Item1, r.Item2)).DefaultIfEmpty((0, 0)).Max();
+        var testSteps = signals.Where(s => s.Touches.Count > 0).GroupBy(s => typeOf[s.Method].Name, StringComparer.Ordinal)
+            .Select(g => (Type: typeOf[g.First().Method], Signals: g.ToList(), Reach: g.Select(SignalReach).Max()))
+            .OrderByDescending(x => x.Reach.Blocks).ThenByDescending(x => x.Reach.Files).ThenBy(x => x.Type.Name, StringComparer.Ordinal)
+            .Select(x => new PathStep($"test:{x.Type.Name}", "first", "test", x.Type.Name, string.Join("; ", x.Signals.Select(SignalText)), x.Type.Files))
+            .ToList();
+        first.AddRange(testSteps);
+        var unexplained = signals.Where(s => s.Touches.Count == 0).ToList();
+        if (unexplained.Count > 0)
+        {
+            var methods = unexplained.GroupBy(s => s.Method, StringComparer.Ordinal).ToList();
+            first.Add(new PathStep("tests:other", "first", "tests", "other",
+                $"{Plural(methods.Count, "test", "tests")} changed in ways no changed declaration {(methods.Count == 1 ? "it references explains" : "they reference explains")}",
+                methods.SelectMany(g => typeOf[g.Key].Files).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList())
+            { Members = methods.Select(g => $"{DeclarationDiff.ShortName(g.Key, "method")}: {string.Join(", ", g.Select(s => KindText(s.Kind)).Distinct())}").ToList() });
+        }
+
         // Set aside: files whose edits are trivial or generated, and files whose hunks are all consequences. They are
         // found first, so that the second tier lists neither them nor a block that holds nothing else.
         var trivial = changed.Where(f => hunksOf.GetValueOrDefault(f.Path)?.Reason is not null || (f.Status == "renamed" && f.BlobBase is not null && f.BlobBase == f.BlobHead)).Select(f => f.Path).ToList();
@@ -190,6 +214,8 @@ public static class ReadingPath
             if (decisions.Count > 0) parts.Add(Plural(decisions.Count, "decision", "decisions"));
             if (own.Count > 0) parts.Add($"{Plural(own.Count, "file", "files")} with edits on their own");
             if (tests.Count > 0) parts.Add(Plural(tests.Count, "test file", "test files"));
+            var testSignals = tests.Sum(p => hunksOf.GetValueOrDefault(p)?.Hunks.Sum(h => h.Signals?.Count ?? 0) ?? 0);
+            if (testSignals > 0) parts.Add(Plural(testSignals, "test signal", "test signals"));
             listedTests.UnionWith(tests);
             var step = new PathStep($"node:{leaf}", "then", "node", leaf, $"{Name(leaf)}: {string.Join(" · ", parts)}", [.. files, .. tests]) { Under = level == Identifiers.Root ? null : level };
             leafSteps.Add(step);
@@ -228,13 +254,14 @@ public static class ReadingPath
         // The path holds at most forty steps in its first two tiers. Files go first, then decisions, then whole blocks,
         // which are kept as one count so that their files still count toward the progress.
         var dropped = new List<PathStep>();
-        foreach (var pool in new[] { fileSteps, decisionSteps, leafSteps })
+        foreach (var pool in new[] { fileSteps, testSteps, decisionSteps, leafSteps })
         {
             while (first.Count + then.Count > MostSteps && pool.Count > 0)
             {
                 var last = pool[^1];
                 pool.RemoveAt(pool.Count - 1);
                 then.Remove(last);
+                first.Remove(last);
                 if (last.Kind == "node") dropped.Add(last);
             }
         }
@@ -310,6 +337,39 @@ public static class ReadingPath
         x.Previous is not null ? $"{DeclarationDiff.ShortName(x.Previous, x.Kind)} → {DeclarationDiff.ShortName(x.Symbol, x.Kind)}" : DeclarationDiff.ShortName(x.Symbol, x.Kind);
 
     private static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
+
+    /// <summary>Returns the words for a kind of <see cref="TestSignal"/>.</summary>
+    private static string KindText(string kind) => kind switch
+    {
+        TestSignal.Removed => "removed",
+        TestSignal.Skipped => "skipped",
+        TestSignal.AssertionRemoved => "assertion removed",
+        TestSignal.ExpectedChanged => "expected value changed",
+        _ => "assertion changed",
+    };
+
+    /// <summary>
+    /// Returns a test signal as a fact, naming its method and, when it touches changed code, the first changed declaration
+    /// the method references, such as "assertion removed from SessionTests.Require_Succeeds, which references
+    /// Session.Require, rewritten".
+    /// </summary>
+    private static string SignalText(TestSignal s)
+    {
+        var method = DeclarationDiff.ShortName(s.Method, "method");
+        var what = s.Kind switch
+        {
+            TestSignal.Removed => $"{method} removed",
+            TestSignal.Skipped => $"{method} skipped",
+            TestSignal.AssertionRemoved => $"assertion removed from {method}",
+            TestSignal.ExpectedChanged => $"expected value changed in {method}",
+            _ => $"assertion changed in {method}",
+        };
+        if (s.Touches.Count == 0) return what;
+        var lead = s.Touches[0];
+        var change = lead.Change == "reshaped" ? "signature changed" : lead.Change;
+        var others = s.Touches.Count - 1;
+        return $"{what}, which references {DeclarationDiff.ShortName(lead.Symbol, lead.Kind)}, {change}" + (others > 0 ? $", and {Plural(others, "other changed declaration", "other changed declarations")}" : "");
+    }
 
     /// <summary>Returns the last segment of a path.</summary>
     private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];

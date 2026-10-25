@@ -33,7 +33,7 @@ public static class ChangesetBuilder
         var declarations = DeclarationDiff.Diff(baseFacts.Declarations, headFacts.Declarations);
         var marked = texts is null ? hunks ?? [] : TrivialEdits.Mark(hunks ?? [], texts, baseFacts, headFacts, declarations, files);
         var (decisions, clustered) = Clustering.Apply(baseFacts, headFacts, files, marked, declarations);
-        var (tests, tested) = TestChanges.Build(baseFacts, headFacts, files, clustered, declarations, decisions);
+        var (tests, tested, signalled) = TestChanges.Build(baseFacts, headFacts, files, clustered, declarations, decisions);
         var changeset = new Changeset
         {
             Base = baseFacts.Commit,
@@ -47,7 +47,7 @@ public static class ChangesetBuilder
             Metrics = DiffMetrics(baseFacts, headFacts),
             Levels = headFacts.Levels,
             Views = headFacts.Views,
-            Hunks = clustered,
+            Hunks = signalled,
             Decisions = tested,
             Tests = tests,
         };

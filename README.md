@@ -17,8 +17,8 @@ Directing the reviewer's attention, with decisions and their consequences, seman
 triviality, a reading path, new concepts and a glossary, is designed in
 [docs/attention.md](docs/attention.md); its first four phases, decisions and their
 consequences, semantic triviality, the reading path and the glossary, are built.
-Tests in a review are designed in [docs/tests.md](docs/tests.md); its first two phases,
-test types and tests on decisions, are built.
+Tests in a review are designed in [docs/tests.md](docs/tests.md); all three of its
+phases, test types, tests on decisions and test signals, are built.
 
 ## Layout
 
@@ -308,6 +308,14 @@ one names its helper. A hunk in a test file can follow from a decision, as an up
 call site does, and the decision counts its consequences in tests apart. In the Tests
 face, each changed test method names the changed declarations it references, each
 opening its decision.
+
+A change to a test also gives **test signals**, stated as facts and never as a
+judgment of the test: a test method removed or skipped, an assertion removed, or an
+assertion changed, worded "expected value changed" when only its literals differ. A
+test file's header shows its signals as chips. A test type whose signals touch code
+the change also changed, such as an assertion removed from a test of a rewritten
+method, has a step of its own in the path's first tier after the decisions, and the
+other signals share one closing step.
 
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a

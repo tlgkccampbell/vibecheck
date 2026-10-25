@@ -14,12 +14,13 @@ public sealed record TestTypeChange(string Name, string Status, SubjectFact? Sub
 /// <summary>
 /// A test method that a change added, removed or changed, with that status: <c>added</c>, <c>removed</c> or
 /// <c>changed</c> when a hunk changes one of its lines. The declarations are those it references, at either end and in
-/// either way of <see cref="TestReferences"/>, that the declaration diff lists as changed.
+/// either way of <see cref="TestReferences"/>, that the declaration diff lists as changed. The signals are the kinds of
+/// <see cref="TestSignal"/> the change gives the method.
 /// </summary>
-public sealed record TestMethodChange(string Symbol, string Status, List<TestedDeclaration> Declarations);
+public sealed record TestMethodChange(string Symbol, string Status, List<TestedDeclaration> Declarations, List<string> Signals);
 
-/// <summary>A changed declaration that a test method references: its symbol, as <see cref="DeclarationChange.Symbol"/> gives it, and how it changed.</summary>
-public sealed record TestedDeclaration(string Symbol, string Change);
+/// <summary>A changed declaration that a test method references: its symbol, as <see cref="DeclarationChange.Symbol"/> gives it, how it changed, and its kind.</summary>
+public sealed record TestedDeclaration(string Symbol, string Change, string Kind);
 
 /// <summary>
 /// A test method that references a decision's declarations: its symbol, its status in the change, which is
@@ -28,20 +29,20 @@ public sealed record TestedDeclaration(string Symbol, string Change);
 /// </summary>
 public sealed record DecisionTest(string Method, string Status, string Way, string? Helper = null);
 
-/// <summary>Lists the test types a changeset changes, and the test methods that reference each decision.</summary>
+/// <summary>Lists the test types a changeset changes, the test methods that reference each decision, and the test signals of each hunk.</summary>
 public static class TestChanges
 {
     private static readonly string[] StatusOrder = ["removed", "added", "changed", "unchanged"];
 
     /// <summary>
-    /// Returns the test types with a changed file at either end, ordered by name, and the decisions with the test
-    /// methods that reference them. A test method references a decision when it references one of the decision's
+    /// Returns the test types with a changed file at either end, ordered by name, the decisions with the test methods
+    /// that reference them, and the hunks with their test signals, as <see cref="TestSignals"/> finds them. A test method references a decision when it references one of the decision's
     /// declarations at head, or at base when the declaration was there, in either way of <see cref="TestReferences"/>.
     /// A test method at both ends is changed when a hunk adds a line within its lines at head or removes one within its
     /// lines at base.
     /// </summary>
-    public static (List<TestTypeChange> Types, List<Decision> Decisions) Build(Facts baseFacts, Facts headFacts, IReadOnlyList<FileChange> files,
-        IReadOnlyList<FileHunks> hunks, IReadOnlyList<DeclarationChange> declarations, IReadOnlyList<Decision> decisions)
+    public static (List<TestTypeChange> Types, List<Decision> Decisions, List<FileHunks> Hunks) Build(Facts baseFacts, Facts headFacts, IReadOnlyList<FileChange> files,
+        List<FileHunks> hunks, IReadOnlyList<DeclarationChange> declarations, IReadOnlyList<Decision> decisions)
     {
         var statuses = MethodStatuses(baseFacts, headFacts, files, hunks);
         var baseReferences = TestReferences.Of(baseFacts.Tests);
@@ -74,14 +75,21 @@ public static class TestChanges
             };
         }).ToList();
 
+        List<TestedDeclaration> DeclarationsOf(string? baseMethod, string? headMethod) => declarations
+            .Where(c => (baseMethod is not null && ReferenceOf(baseMethod, c.BaseSymbol, null) is not null) || (headMethod is not null && ReferenceOf(headMethod, null, c.HeadSymbol) is not null))
+            .Select(c => new TestedDeclaration(c.Symbol, c.Change, c.Kind)).ToList();
+        var signals = TestSignals.Find(baseFacts, headFacts, files, hunks, DeclarationsOf);
+        var signalled = hunks.Select(f => f with
+        {
+            Hunks = f.Hunks.Select((h, i) => signals.TryGetValue((f.Path, i), out var list) ? h with { Signals = list } : h).ToList(),
+        }).ToList();
+        var signalsOf = signals.Values.SelectMany(s => s).ToLookup(s => s.Method, s => s.Kind, StringComparer.Ordinal);
+
         var changed = files.Where(f => f.Test && f.Status != "unchanged").ToList();
-        if (changed.Count == 0) return ([], tested);
+        if (changed.Count == 0) return ([], tested, signalled);
         // Each changed test file's path in the changeset, by its path at each end.
         var atHead = changed.Where(f => f.Status != "removed").ToDictionary(f => f.Path, f => f.Path, StringComparer.Ordinal);
         var atBase = changed.Where(f => f.Status != "added").ToDictionary(f => f.PreviousPath ?? f.Path, f => f.Path, StringComparer.Ordinal);
-        List<TestedDeclaration> DeclarationsOf(string method) => declarations
-            .Where(c => ReferenceOf(method, c.BaseSymbol, c.HeadSymbol) is not null)
-            .Select(c => new TestedDeclaration(c.Symbol, c.Change)).ToList();
 
         var baseTypes = baseFacts.Tests.Types.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var headTypes = headFacts.Tests.Types.ToDictionary(t => t.Name, StringComparer.Ordinal);
@@ -95,11 +103,11 @@ public static class TestChanges
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
             if (touched.Count == 0) continue;
             var methods = (b?.Methods ?? []).Concat(h?.Methods ?? []).Select(m => m.Symbol).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
-                .Where(m => statuses[m] != "unchanged").Select(m => new TestMethodChange(m, statuses[m], DeclarationsOf(m))).ToList();
+                .Where(m => statuses[m] != "unchanged").Select(m => new TestMethodChange(m, statuses[m], DeclarationsOf(m, m), signalsOf[m].Distinct().ToList())).ToList();
             var status = b is null ? "added" : h is null ? "removed" : "modified";
             types.Add(new TestTypeChange(name, status, (h ?? b)!.Subject, touched, methods));
         }
-        return (types, tested);
+        return (types, tested, signalled);
     }
 
     /// <summary>Returns the status of every test method at either end: <c>added</c>, <c>removed</c>, <c>changed</c> or <c>unchanged</c>.</summary>

@@ -62,7 +62,7 @@ public static class TestTypes
         foreach (var test in tests)
         {
             var methods = methodsOf[test.Name].OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.FirstLine)
-                .Select(d => new TestMethodFact(d.Symbol, d.File, d.FirstLine, d.LastLine)).ToList();
+                .Select(d => new TestMethodFact(d.Symbol, d.File, d.FirstLine, d.LastLine, d.Skipped == true, d.Assertions ?? [])).ToList();
             SubjectFact? subject = null;
             if (methods.Count > 0)
             {
@@ -85,7 +85,7 @@ public static class TestTypes
                 .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => g.Key).FirstOrDefault();
             files.Add(new FileFact(file.Path, file.Hash, [], file.Generator) { Test = true, Subject = subject });
         }
-        return (new TestFacts(types, exercises, calls), files);
+        return (new TestFacts(types, exercises, calls, declarations), files);
     }
 
     /// <summary>

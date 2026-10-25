@@ -270,6 +270,11 @@ The same changeset always gives the same path.
 - A changed block with the highest fan-in at head, meaning the sum of references into
   it from other blocks of its level, since decisions in it reach the most.
 - A new concept of section 7, whether or not the reviewer has decided on it.
+- After the decisions, a step for each test type with a test signal that touches
+  changed code, such as an assertion removed from a test of a rewritten method, the
+  widest reach first, and last one step that gathers every other test signal, as
+  [tests.md](tests.md) section 7.2 describes. A leaf's step in the next tier counts
+  the signals of its test files.
 
 **Then** holds every other changed leaf, largest change first within each level, and
 under each the decisions and the files with edits of their own that the first tier

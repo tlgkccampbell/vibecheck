@@ -557,7 +557,8 @@ viewer consumes two of these and never reads the code or the map directly.
   "tests": {
     "types": [ { "name": "Example.Auth.Tests.SessionTests", "assembly": "Example.Auth.Tests", "files": ["tests/Auth/SessionTests.cs"],
       "subject": { "type": "Example.Auth.Session", "leaf": "auth", "by": "name" },
-      "methods": [ { "symbol": "Example.Auth.Tests.SessionTests.Require_Succeeds", "file": "tests/Auth/SessionTests.cs", "first": 18, "last": 31 } ] } ],
+      "methods": [ { "symbol": "Example.Auth.Tests.SessionTests.Require_Succeeds", "file": "tests/Auth/SessionTests.cs", "first": 18, "last": 31,
+        "skipped": false, "assertions": [ { "first": 24, "last": 24 } ] } ] } ],
     "exercises": [ { "from": "Example.Auth.Tests.SessionTests", "method": "Example.Auth.Tests.SessionTests.Require_Succeeds",
       "symbol": "Example.Auth.Session.Require", "file": "tests/Auth/SessionTests.cs", "line": 24 } ],
     "calls": [ { "from": "Example.Auth.Tests.SessionTests.Require_Fails_WhenExpired", "to": "Example.Auth.Tests.SessionBuilder.Expired",
@@ -579,7 +580,9 @@ dependencies and from the declarations, and are not counted in `excluded`. The
 `tests` member lists them instead, each with its files, its test methods and its
 subject, with the references they make into the system as `exercises` and the
 references among their own members as `calls`, as [tests.md](tests.md) section 3.2
-describes. A file that declares test types and no
+describes. Each test method says whether it is skipped and gives the lines of its
+assertion calls, and `tests.declarations` keeps the test types' declarations so that a
+renamed test method is not taken for a removed one. A file that declares test types and no
 system type is listed in `files` with no leaves, `test` set, and the leaf of its
 test types' subject as `subject`. Dependencies are listed per reference, since
 each one is evidence the viewer can show, and once more aggregated per pair of
@@ -668,10 +671,18 @@ as the differences:
   that reference its declarations, directly or through a helper, with the way, the
   helper, and the method's status in the change, as [tests.md](tests.md) section 5.1
   describes.
+- **Test signals**: each hunk of a test file carries as `signals` the facts it shows
+  about a test method: removed, skipped, an assertion removed, or an assertion
+  changed, worded "expected value changed" when every changed assertion line differs
+  from its pair only in literals. Each signal names its method and the changed
+  declarations the method references, and touches changed code when there are any,
+  as [tests.md](tests.md) section 6 describes. Each changed test method in the
+  changeset's tests lists its signals.
 - **Path**: the order in which to read the changeset, as [attention.md](attention.md)
   section 6 plans it: the surprises first, each with the signal that put it there,
   then the other changed leaves with the decisions, files and test files under them,
-  and last what is set aside. Each step names what it opens and the changed files it covers.
+  and last what is set aside. The first tier ends with a step for each test type whose
+  signals touch changed code and one step for every other test signal. Each step names what it opens and the changed files it covers.
 - **Glossary**: the names the changeset introduces, as [attention.md](attention.md)
   section 8 lists them: added types and members, renamed declarations, nodes, views
   and externals added to the map, and assemblies referenced at head and not at base.

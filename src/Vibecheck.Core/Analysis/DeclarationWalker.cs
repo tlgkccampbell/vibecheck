@@ -136,6 +136,32 @@ internal sealed class DeclarationWalker : CSharpSyntaxWalker
             bodies.Count == 0 ? null : Hash(body.ToString()),
             DocSummary.FirstSentence(symbol.GetDocumentationCommentXml()),
             test ? TestAttributeOf(symbol) : null));
+        if (test && Declarations[^1].Test is not null)
+            Declarations[^1] = Declarations[^1] with { Skipped = IsSkipped(symbol), Assertions = AssertionsIn(syntax) };
+    }
+
+    /// <summary>Returns a value indicating whether a test method carries an attribute that skips it, as <see cref="TestFrameworks.Skips"/> says.</summary>
+    private static bool IsSkipped(ISymbol symbol) => symbol.GetAttributes().Any(a => a.AttributeClass is { ContainingAssembly: { } assembly } type
+        && TestFrameworks.Skips(assembly.Name, type.Name, a.NamedArguments.Where(n => n.Value.Value is string { Length: > 0 }).Select(n => n.Key)));
+
+    /// <summary>
+    /// Returns the lines of each assertion in a method: each call into an assertion library that no other such call holds
+    /// within the same function, so that a chain such as <c>x.Should().Be(3)</c> or a constraint such as
+    /// <c>Is.EqualTo(3)</c> inside <c>Assert.That</c> counts once, and each assertion in a lambda counts on its own.
+    /// </summary>
+    private List<LineRange> AssertionsIn(SyntaxNode method)
+    {
+        bool IsAssertion(InvocationExpressionSyntax call) => model.GetSymbolInfo(call).Symbol is IMethodSymbol m
+            && m.ContainingAssembly is { } assembly && TestFrameworks.IsAssertion(assembly.Name, m.ContainingType.Name);
+        var result = new List<LineRange>();
+        foreach (var call in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (!IsAssertion(call)) continue;
+            var held = call.Ancestors().TakeWhile(n => n != method && n is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax)
+                .OfType<InvocationExpressionSyntax>().Any(IsAssertion);
+            if (!held) result.Add(new LineRange(LineOf(call.SpanStart), LineOf(Math.Max(call.SpanStart, call.Span.End - 1))));
+        }
+        return result;
     }
 
     /// <summary>

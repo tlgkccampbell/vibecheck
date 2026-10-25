@@ -169,6 +169,9 @@ public sealed partial record Hunk(string Header, List<string[]> Lines, bool? Tri
     /// </summary>
     public List<string>? Follows { get; init; }
 
+    /// <summary>Gets the test signals the hunk shows, as <see cref="TestSignals"/> finds them, or <see langword="null"/> when it shows none.</summary>
+    public List<TestSignal>? Signals { get; init; }
+
     /// <summary>Reads the base and head line ranges of the hunk's header, such as <c>@@ -12,7 +12,9 @@</c>, as zero-based first lines and counts.</summary>
     public bool TryRanges(out (int Start, int Count) old, out (int Start, int Count) now)
     {

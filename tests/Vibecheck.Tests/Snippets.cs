@@ -47,6 +47,7 @@ internal static class Snippets
                     public static void Equal<T>(T expected, T actual) { }
                     public static void True(bool condition) { }
                     public static void NotNull(object? value) { }
+                    public static void All<T>(System.Collections.Generic.IEnumerable<T> items, System.Action<T> check) { }
                 }
             }
             """);
@@ -55,6 +56,9 @@ internal static class Snippets
             {
                 public sealed class TestAttribute : System.Attribute { }
                 public sealed class TestFixtureAttribute : System.Attribute { }
+                public sealed class IgnoreAttribute : System.Attribute { public IgnoreAttribute(string reason) { } }
+                public static class Assert { public static void That(object? actual, object constraint) { } }
+                public static class Is { public static object EqualTo(object? expected) => new object(); }
             }
             """);
         var skippable = Compile("Xunit.SkippableFact", """

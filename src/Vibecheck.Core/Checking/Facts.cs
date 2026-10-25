@@ -75,10 +75,14 @@ public sealed record FileFact(string Path, string Hash, IReadOnlyList<string> Le
 /// <param name="Types">The test types, ordered by name.</param>
 /// <param name="Exercises">The references from test types to declarations of the system, ordered by file and line.</param>
 /// <param name="Calls">The references from members of test types to members of test types, ordered by file and line.</param>
-public sealed record TestFacts(List<TestTypeFact> Types, List<ExerciseFact> Exercises, List<CallFact> Calls)
+/// <param name="Declarations">
+/// The declarations of the test types, as <see cref="AnalysisResult.Declarations"/> lists them, which tell a renamed or
+/// moved test method from a removed one.
+/// </param>
+public sealed record TestFacts(List<TestTypeFact> Types, List<ExerciseFact> Exercises, List<CallFact> Calls, List<Declaration> Declarations)
 {
     /// <summary>The test facts of a commit that has no test types.</summary>
-    public static TestFacts Empty => new([], [], []);
+    public static TestFacts Empty => new([], [], [], []);
 }
 
 /// <summary>
@@ -98,9 +102,10 @@ public sealed record SubjectFact(string Type, string Leaf, string By);
 
 /// <summary>
 /// A test method: a method of a test type that carries a test framework attribute, as <see cref="Declaration.Test"/>
-/// names it. The symbol is the method's, and the lines are those its declaration covers in its file, one-based.
+/// names it. The symbol is the method's, the lines are those its declaration covers in its file, one-based, and the
+/// assertions are the lines of its assertion calls, as <see cref="Declaration.Assertions"/> gives them.
 /// </summary>
-public sealed record TestMethodFact(string Symbol, string File, int First, int Last);
+public sealed record TestMethodFact(string Symbol, string File, int First, int Last, bool Skipped, IReadOnlyList<LineRange> Assertions);
 
 /// <summary>
 /// An exercise: a reference from a test type to a declaration of the system, kept apart from the dependencies so that

@@ -154,7 +154,7 @@ public class TestChangesTests
         var cs = TestsOnly();
         var leaf = cs.Path.Single(s => s.Target == "a" && s.Kind == "node");
         Assert.Equal(["tests/SessionTests.cs"], leaf.Files);
-        Assert.Equal("A: 1 test file", leaf.Signal);
+        Assert.Equal("A: 1 test file · 1 test signal", leaf.Signal);
         Assert.Empty(cs.Decisions);
     }
 }

@@ -114,7 +114,7 @@ public class TestReferencesTests
         // A rewritten declaration is no decision, but the changed test method that references it names it.
         var method = cs.Tests.Single(t => t.Name == "A.Tests.SessionTests").Methods.Single();
         Assert.Equal((Method + "Require_Succeeds", "changed"), (method.Symbol, method.Status));
-        Assert.Equal([new TestedDeclaration("A.Session.Require", "rewritten")], method.Declarations);
+        Assert.Equal([new TestedDeclaration("A.Session.Require", "rewritten", "method")], method.Declarations);
     }
 
     [Fact]

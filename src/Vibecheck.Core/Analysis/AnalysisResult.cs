@@ -52,11 +52,24 @@ public sealed record AnalysisResult
 /// The name of the test framework attribute that makes a method a test method, without its <c>Attribute</c> suffix, such
 /// as <c>Fact</c>, or <see langword="null"/> for any other declaration. <see cref="TestFrameworks"/> lists the attributes.
 /// </param>
-public sealed record Declaration(string Symbol, string Type, string? Container, string Kind, string Accessibility, bool Exposed, string File, int FirstLine, int LastLine, int? BodyLine, string Shape, string? Body, string? Summary = null, string? Test = null)
+/// <param name="Skipped">Whether a test method is skipped, as <see cref="TestFrameworks"/> defines it, or <see langword="null"/> for any other declaration.</param>
+/// <param name="Assertions">
+/// The lines of a test method's assertions, one range for each call into an assertion library that no other such call
+/// holds, or <see langword="null"/> for any other declaration. <see cref="TestFrameworks.IsAssertion"/> decides which calls count.
+/// </param>
+public sealed record Declaration(string Symbol, string Type, string? Container, string Kind, string Accessibility, bool Exposed, string File, int FirstLine, int LastLine, int? BodyLine, string Shape, string? Body, string? Summary = null, string? Test = null,
+    bool? Skipped = null, IReadOnlyList<LineRange>? Assertions = null)
 {
     /// <summary>Gets the member's name without its containing type, or the whole symbol for a top-level type.</summary>
     [JsonIgnore]
     public string Name => Container is null ? Symbol : Symbol[(Container.Length + 1)..];
+}
+
+/// <summary>A range of one-based lines of a file, from the first to the last, both included.</summary>
+public sealed record LineRange(int First, int Last)
+{
+    /// <summary>Returns a value indicating whether the range holds a line.</summary>
+    public bool Holds(int line) => First <= line && line <= Last;
 }
 
 /// <summary>A reference to a declaration in the solution: the declaration's symbol, the type that makes the reference, the top-level type that declares the symbol, and where the reference is.</summary>

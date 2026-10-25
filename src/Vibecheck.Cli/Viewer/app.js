@@ -46,6 +46,15 @@
   const TESTS = "~tests";
   const TEST_FILES = CS.files.filter((f) => f.test && f.status !== "unchanged");
   const TEST_TYPES = CS.tests || [];
+  // A test signal is a fact about what a change did to a test method, never a judgment of the test. Each hunk of a test
+  // file carries the signals it shows. See docs/tests.md section 6.
+  const SIGNAL_TEXT = { removed: "removed", skipped: "skipped", "assertion-removed": "assertion removed", "assertion-changed": "assertion changed", "expected-changed": "expected value changed" };
+  // Returns the signals of a file's hunks.
+  const signalsOf = (path) => (HUNKS.get(path) || []).flatMap((h) => h.signals || []);
+  // Returns a signal as a chip that names its kind, with its method and the changed declarations it references on hover.
+  const signalChip = (s, withMethod) => el("span", { class: "chip chip-signal" + (s.touches.length ? " touches" : ""),
+    title: s.method + (s.touches.length ? "\nReferences " + s.touches.map((t) => `${memberName(t.symbol, t.kind)}, ${t.change}`).join("; ") : "\nReferences no changed declaration") },
+    SIGNAL_TEXT[s.kind] || s.kind, withMethod ? ` · ${memberName(s.method, "method").split(".").pop()}` : "");
   // Returns the changed test files whose subject binds to a leaf, or those without a subject for the test infrastructure leaf.
   const testFilesOf = (leaf) => TEST_FILES.filter((f) => leaf === TESTS ? !f.subject : f.subject === leaf);
 
@@ -852,8 +861,8 @@
     return g;
   }
 
-  // The advance of one character of the monospaced text in a block: 0.6 em, plus any letter spacing.
-  const MONO = { meta: 10.5 * 0.6, title: 12 * 0.6 + 12 * 0.08, badge: 9 * 0.6 + 9 * 0.08 };
+  // The advance of one character of the monospaced text in a block and in a level's frame: 0.6 em, plus any letter spacing.
+  const MONO = { meta: 10.5 * 0.6, title: 12 * 0.6 + 12 * 0.08, badge: 9 * 0.6 + 9 * 0.08, frameTitle: 12 * 0.6 + 12 * 0.12, frameMeta: 10.5 * 0.6 + 10.5 * 0.06 };
   // Returns text cut to fit a width in the monospaced font, ending in an ellipsis when it was cut.
   const fitText = (str, width, advance) => truncate(str, Math.max(1, Math.floor(width / advance)));
 
@@ -975,8 +984,13 @@
     const root = svg("g", { class: "level" });
     const f = frameOf(layout);
     root.append(svg("rect", { x: f.x, y: f.y, width: f.w, height: f.h, class: "frame" }));
-    root.append(text(f.x, f.y - 34, locName(level.loc).toUpperCase(), { class: "frame-title" }));
-    root.append(text(f.x + f.w, f.y - 34, `${level.children.length} blocks · ${level.edges.length} edges, ${changedText(level.edges)} · ${level.cycles.length} cycle${level.cycles.length === 1 ? "" : "s"}`, { class: "frame-meta", "text-anchor": "end" }));
+    // The title stands at the frame's left and the counts at its right. A frame too narrow for both on one line, as a
+    // level of two or three blocks can be, puts the counts on a line of their own under the title.
+    const title = locName(level.loc).toUpperCase();
+    const meta = `${level.children.length} blocks · ${level.edges.length} edges, ${changedText(level.edges)} · ${level.cycles.length} cycle${level.cycles.length === 1 ? "" : "s"}`;
+    const stacked = title.length * MONO.frameTitle + 24 + meta.length * MONO.frameMeta > f.w;
+    root.append(text(f.x, f.y - 34, title, { class: "frame-title" }));
+    root.append(text(stacked ? f.x : f.x + f.w, stacked ? f.y - 16 : f.y - 34, meta, { class: "frame-meta", "text-anchor": stacked ? "start" : "end" }));
 
     // Edges.
     const edgeLayer = svg("g", { class: "edges" }), labelLayer = svg("g", { class: "edge-labels" });
@@ -1044,7 +1058,9 @@
       g.append(text(titleX, r.y + 19, fitText(nameOf(c.id).toUpperCase(), r.x + r.w - 32 - titleX, MONO.title), { class: "title" }));
       const m = metricsOf(c.key), content = c.kind === "group" ? groupContent(c) : contentOf(c.key);
       const changedFiles = content.added + content.removed + content.modified;
-      // The badge on the top edge says what happened, with the count of changed files when there is one.
+      // The status pill on the block's top edge says what happened to it, with the count of changed files when there is
+      // one. The pills on its bottom edge count what lies under it: the unresolved threads, the check problems, the
+      // decisions and, while the Tests switch is on, the changed test files. The two edges never share a pill.
       const badge = st === "added" ? "added" : st === "removed" ? "removed"
         : st === "modified" ? (changedFiles ? plural(changedFiles, "file changed", "files changed") : "modified")
         : st === "children" ? (changedFiles ? `${changedFiles} changed inside` : "changes inside")
@@ -1057,47 +1073,28 @@
         g.append(bg);
       }
       const talk = openThreadsUnder(c.key).length, problems = problemsUnder(c.key).length;
-      let left = r.x + 8;
-      if (talk) {
-        const tw = String(talk).length * MONO.badge + 26, tx = r.x + 8;
-        const tg = svg("g", { class: "talk-badge" });
-        tg.append(svg("rect", { x: tx, y: r.y - 8, width: tw, height: 15, rx: 7.5, class: "talk-bg" }));
-        tg.append(svg("path", { d: `M${tx + 7},${r.y - 4} h9 v6 h-5 l-2.5,2.5 v-2.5 h-1.5 z`, class: "talk-icon" }));
-        tg.append(text(tx + 19, r.y + 3, String(talk), { class: "talk-text" }));
-        tg.append(svg("title", {}, `${plural(talk, "unresolved review thread", "unresolved review threads")} on files under ${nameOf(c.id)}`));
-        g.append(tg);
-        left = tx + tw + 6;
-      }
-      if (problems) {
-        const label = "✕ " + problems, pw = label.length * MONO.badge + 12;
-        const pg = svg("g", { class: "problem-badge" });
-        pg.append(svg("rect", { x: left, y: r.y - 8, width: pw, height: 15, rx: 7.5, class: "problem-bg" }));
-        pg.append(text(left + pw / 2, r.y + 3, label, { class: "problem-text", "text-anchor": "middle" }));
-        pg.append(svg("title", {}, `${plural(problems, "check failure or warning", "check failures and warnings")} on files under ${nameOf(c.id)}`));
-        g.append(pg);
-        left += pw + 6;
-      }
-      // The decision badge says how many decisions the block's files hold, so that the map shows where the causes are
-      // before any decision is selected.
       const decisions = decisionsUnder(c.leaves);
-      if (decisions.length) {
-        const label = "◆ " + decisions.length, dw = label.length * MONO.badge + 12;
-        const dg = svg("g", { class: "decision-badge" });
-        dg.append(svg("rect", { x: left, y: r.y - 8, width: dw, height: 15, rx: 7.5, class: "decision-bg" }));
-        dg.append(text(left + dw / 2, r.y + 3, label, { class: "decision-text", "text-anchor": "middle" }));
-        dg.append(svg("title", {}, `${plural(decisions.length, "decision", "decisions")} in files under ${nameOf(c.id)}`));
-        g.append(dg);
-        left += dw + 6;
-      }
-      // While the Tests switch is on, the tests badge counts the changed test files whose subjects the block holds.
       const tests = state.panel === "tests" ? TEST_FILES.filter((f) => f.subject && c.leaves.includes(f.subject)).length : 0;
-      if (tests) {
-        const label = "✓ " + tests, tw = label.length * MONO.badge + 12;
-        const tg = svg("g", { class: "tests-badge" });
-        tg.append(svg("rect", { x: left, y: r.y - 8, width: tw, height: 15, rx: 7.5, class: "tests-bg" }));
-        tg.append(text(left + tw / 2, r.y + 3, label, { class: "tests-text", "text-anchor": "middle" }));
-        tg.append(svg("title", {}, `${plural(tests, "changed test file", "changed test files")} of types under ${nameOf(c.id)}`));
-        g.append(tg);
+      const pills = [];
+      if (talk) pills.push({ cls: "talk", label: String(talk), w: String(talk).length * MONO.badge + 26,
+        title: `${plural(talk, "unresolved review thread", "unresolved review threads")} on files under ${nameOf(c.id)}` });
+      if (problems) pills.push({ cls: "problem", label: "✕ " + problems,
+        title: `${plural(problems, "check failure or warning", "check failures and warnings")} on files under ${nameOf(c.id)}` });
+      if (decisions.length) pills.push({ cls: "decision", label: "◆ " + decisions.length, title: `${plural(decisions.length, "decision", "decisions")} in files under ${nameOf(c.id)}` });
+      if (tests) pills.push({ cls: "tests", label: "✓ " + tests, title: `${plural(tests, "changed test file", "changed test files")} of types under ${nameOf(c.id)}` });
+      const bottom = r.y + r.h - 7;
+      let left = r.x + 8;
+      for (const p of pills) {
+        const w = p.w || p.label.length * MONO.badge + 12;
+        const pg = svg("g", { class: p.cls + "-badge" });
+        pg.append(svg("rect", { x: left, y: bottom, width: w, height: 15, rx: 7.5, class: p.cls + "-bg" }));
+        if (p.cls === "talk") {
+          pg.append(svg("path", { d: `M${left + 7},${bottom + 4} h9 v6 h-5 l-2.5,2.5 v-2.5 h-1.5 z`, class: "talk-icon" }));
+          pg.append(text(left + 19, bottom + 11, p.label, { class: "talk-text" }));
+        } else pg.append(text(left + w / 2, bottom + 11, p.label, { class: p.cls + "-text", "text-anchor": "middle" }));
+        pg.append(svg("title", {}, p.title));
+        g.append(pg);
+        left += w + 6;
       }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
@@ -1574,6 +1571,7 @@
     const chip = fs !== "reviewed" && consequenceOnly(path) ? "consequence" : fs;
     head.append(el("span", { class: "chip chip-" + chip }, chip), el("span", { class: "file-path" }, path));
     if (f && f.previousPath) head.append(el("span", { class: "file-note" }, "renamed from " + f.previousPath));
+    if (f && f.test) head.append(...signalsOf(path).map((s) => signalChip(s, true)));
     if (done) head.append(reasonNote(path, REVIEWED.get(path)) || "");
     const talk = threadsOf(path), notes = annotationsOf(path);
     const problems = [...notes.lines.values()].flat().concat(notes.top).filter(isProblem).length;
@@ -1619,7 +1617,8 @@
     const reviewed = files.filter((p) => REVIEWED.has(p)).length;
     const box = el("details", { class: "tests-section", open: state.testsOpen.has(id),
       ontoggle: (ev) => { if (ev.target.open) state.testsOpen.add(id); else state.testsOpen.delete(id); } },
-      el("summary", {}, `Tests: ${plural(files.length, "changed test file", "changed test files")} · ${reviewed} reviewed`, help(HELP.testsSection)));
+      el("summary", {}, `Tests: ${plural(files.length, "changed test file", "changed test files")}`, (() => { const n = files.flatMap(signalsOf).length; return n ? ` · ${plural(n, "signal", "signals")}` : ""; })(),
+        ` · ${reviewed} reviewed`, help(HELP.testsSection)));
     const card = el("section", { class: "typecard" });
     for (const path of files) card.append(fileBlock(path));
     box.append(card);
@@ -1805,7 +1804,7 @@
       const d = DECISIONS.get(s.target);
       return d ? openDecision(d) : undefined;
     }
-    if (s.kind === "file") return openFile(s.target);
+    if (s.kind === "file" || s.kind === "test" || s.kind === "tests") return s.files.length ? openFile(s.files[0]) : renderChanges();
     if (s.kind === "aside" || s.kind === "more") return s.files.length ? openFile(s.files[0]) : renderChanges();
     const loc = s.location || ROOT;
     rememberView();
@@ -1863,6 +1862,7 @@
         const li = el("li", {}, el("button", { class: "row step" + (done ? " read" : "") + (current ? " current" : ""), onclick: () => openStep(s),
           title: s.files.length ? `${plural(s.files.length, "file", "files")}, ${reviewed} reviewed` : "" },
           el("span", { class: "step-kind " + s.kind }, s.kind === "node" ? "block" : s.kind === "aside" ? "aside" : s.kind), text, meta));
+        if (current && s.members && s.kind === "tests") li.append(el("ul", { class: "step-members" }, ...s.members.map((m) => el("li", {}, m))));
         if (current && s.files.length && tier !== "aside") li.append(stepFiles(s));
         ul.append(li);
       }
@@ -1916,6 +1916,7 @@
           el("span", { class: "row-meta" }, t.methods.length ? plural(t.methods.length, "method", "methods") : t.status)));
         if (t.methods.length) li.append(el("ul", { class: "test-methods" }, ...t.methods.map((m) =>
           el("li", { class: "st-" + METHOD_STATUS[m.status] }, el("span", { class: "row-change" }, m.status + " "), el("code", {}, memberName(m.symbol, "method")),
+            ...t.files.flatMap(signalsOf).filter((s) => s.method === m.symbol).map((s) => signalChip(s, false)),
             (m.declarations || []).length ? el("span", { class: "tested" }, "references ", ...m.declarations.flatMap((x, i) => [i ? ", " : "", testedDeclaration(x)])) : ""))));
         ul.append(li);
       }
