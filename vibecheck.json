@@ -1,0 +1,42 @@
+{
+  "version": 0,
+  "solution": "Vibecheck.slnx",
+  "exclude": ["System.**"],
+  "tests": ["Vibecheck.Tests::**"],
+  "nodes": {
+    "cli": { "name": "Vibecheck.Cli", "bind": ["Vibecheck.Cli.**"] },
+    "core": { "name": "Vibecheck.Core" },
+    "core.analysis": { "name": "Analysis", "bind": ["Vibecheck.Analysis.**"] },
+    "core.assist": { "name": "Assist", "bind": ["Vibecheck.Assist.**"] },
+    "core.bootstrap": { "name": "Bootstrap", "bind": ["Vibecheck.Bootstrap.**"] },
+    "core.checking": { "name": "Checking", "bind": ["Vibecheck.Checking.**"] },
+    "core.diffing": { "name": "Diffing", "bind": ["Vibecheck.Diffing.**"] },
+    "core.format": { "name": "Format", "bind": ["Vibecheck.Format.**"] },
+    "core.github": { "name": "GitHub", "bind": ["Vibecheck.GitHub.**"] },
+    "core.intents": { "name": "Intents", "bind": ["Vibecheck.Intents.**"] },
+    "core.model": { "name": "Model", "bind": ["Vibecheck.Model.**"] },
+    "core.reviewing": { "name": "Reviewing", "bind": ["Vibecheck.Reviewing.**"] }
+  },
+  "views": {},
+  "externals": {
+    "framework": { "name": "Framework", "purpose": "Framework assemblies other than the core library.", "bind": ["System.*", "Microsoft.Win32.*", "Microsoft.VisualBasic*", "netstandard", "mscorlib", "WindowsBase"] },
+    "microsoft-aspnetcore": { "name": "Microsoft.AspNetCore", "bind": ["Microsoft.AspNetCore"] },
+    "microsoft-aspnetcore-hosting-server-abstractions": { "name": "Microsoft.AspNetCore.Hosting.Server.Abstractions", "bind": ["Microsoft.AspNetCore.Hosting.Server.Abstractions"] },
+    "microsoft-aspnetcore-http-abstractions": { "name": "Microsoft.AspNetCore.Http.Abstractions", "bind": ["Microsoft.AspNetCore.Http.Abstractions"] },
+    "microsoft-aspnetcore-http-features": { "name": "Microsoft.AspNetCore.Http.Features", "bind": ["Microsoft.AspNetCore.Http.Features"] },
+    "microsoft-aspnetcore-http-results": { "name": "Microsoft.AspNetCore.Http.Results", "bind": ["Microsoft.AspNetCore.Http.Results"] },
+    "microsoft-aspnetcore-routing": { "name": "Microsoft.AspNetCore.Routing", "bind": ["Microsoft.AspNetCore.Routing"] },
+    "microsoft-aspnetcore-server-kestrel": { "name": "Microsoft.AspNetCore.Server.Kestrel", "bind": ["Microsoft.AspNetCore.Server.Kestrel"] },
+    "microsoft-aspnetcore-server-kestrel-core": { "name": "Microsoft.AspNetCore.Server.Kestrel.Core", "bind": ["Microsoft.AspNetCore.Server.Kestrel.Core"] },
+    "microsoft-build-locator": { "name": "Microsoft.Build.Locator", "bind": ["Microsoft.Build.Locator"] },
+    "microsoft-codeanalysis": { "name": "Microsoft.CodeAnalysis", "bind": ["Microsoft.CodeAnalysis"] },
+    "microsoft-codeanalysis-csharp": { "name": "Microsoft.CodeAnalysis.CSharp", "bind": ["Microsoft.CodeAnalysis.CSharp"] },
+    "microsoft-codeanalysis-workspaces": { "name": "Microsoft.CodeAnalysis.Workspaces", "bind": ["Microsoft.CodeAnalysis.Workspaces"] },
+    "microsoft-codeanalysis-workspaces-msbuild": { "name": "Microsoft.CodeAnalysis.Workspaces.MSBuild", "bind": ["Microsoft.CodeAnalysis.Workspaces.MSBuild"] },
+    "microsoft-extensions-dependencyinjection-abstractions": { "name": "Microsoft.Extensions.DependencyInjection.Abstractions", "bind": ["Microsoft.Extensions.DependencyInjection.Abstractions"] },
+    "microsoft-extensions-features": { "name": "Microsoft.Extensions.Features", "bind": ["Microsoft.Extensions.Features"] },
+    "microsoft-extensions-hosting-abstractions": { "name": "Microsoft.Extensions.Hosting.Abstractions", "bind": ["Microsoft.Extensions.Hosting.Abstractions"] },
+    "microsoft-extensions-logging": { "name": "Microsoft.Extensions.Logging", "bind": ["Microsoft.Extensions.Logging"] },
+    "microsoft-extensions-primitives": { "name": "Microsoft.Extensions.Primitives", "bind": ["Microsoft.Extensions.Primitives"] }
+  }
+}
