@@ -72,10 +72,10 @@ public static class IntentResolver
         intents.Select(i => new ResolvedIntent(i.Line, i.Claim, i.Why, i.Alternative, i.Note, i.Anchors.Select(scope.Resolve).ToList())).ToList();
 
     /// <summary>
-    /// Returns a changeset with the intents resolved against it and the coverage of its reading path's surprises. Each
-    /// surprise carries the indices of the intents that cover it, or is marked uncovered when none does. A changeset
-    /// given no intents keeps its path as it is, since a change with no intent section is not missing one. The path's
-    /// order never changes. See <c>docs/intent.md</c> section 4.2.
+    /// Returns a changeset with the intents resolved against it, the intents that cover each decision, and the coverage
+    /// of its reading path's surprises. Each surprise carries the indices of the intents that cover it, or is marked
+    /// uncovered when none does. A changeset given no intents keeps its decisions and path as they are, since a change
+    /// with no intent section is not missing one. The path's order never changes. See <c>docs/intent.md</c> section 4.2.
     /// </summary>
     /// <param name="changeset">The changeset to resolve against, which is left as it is.</param>
     /// <param name="intents">The intents, as <see cref="IntentReader.Parse"/> reads them.</param>
@@ -86,13 +86,16 @@ public static class IntentResolver
         var scope = new Scope(changeset, root, ownMap);
         var resolved = Resolve(scope, intents);
         if (resolved.Count == 0) return changeset with { Intents = resolved };
+        List<int>? Covering(Func<ResolvedAnchor, bool> covers) =>
+            Enumerable.Range(0, resolved.Count).Where(i => resolved[i].Anchors.Any(covers)).ToList() is { Count: > 0 } found ? found : null;
+        var decisions = changeset.Decisions.Select(d => d with { Intents = Covering(a => scope.Covers(a, d)) }).ToList();
         var path = changeset.Path.Select(step =>
         {
             if (!IsSurprise(step)) return step;
-            var covering = Enumerable.Range(0, resolved.Count).Where(i => resolved[i].Anchors.Any(a => scope.Covers(a, step))).ToList();
-            return step with { Intents = covering.Count > 0 ? covering : null, Uncovered = covering.Count == 0 };
+            var covering = Covering(a => scope.Covers(a, step));
+            return step with { Intents = covering, Uncovered = covering is null };
         }).ToList();
-        return changeset with { Intents = resolved, Path = path };
+        return changeset with { Intents = resolved, Decisions = decisions, Path = path };
     }
 
     /// <summary>
@@ -126,8 +129,10 @@ public static class IntentResolver
         private readonly Dictionary<string, List<TypeChange>> bySimpleName = new(StringComparer.Ordinal);
         private readonly List<EdgeChange> changedEdges;
 
-        // What each resolved anchor covers among the path's surprises, by the anchor itself. A node anchor covers none.
+        // What each resolved anchor covers, by the anchor itself: the edge and cycle steps of the path for an edge anchor,
+        // and the decisions for a file or type anchor. A node anchor covers nothing.
         private readonly Dictionary<ResolvedAnchor, Func<PathStep, bool>> covers = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<ResolvedAnchor, Func<Decision, bool>> decides = new(ReferenceEqualityComparer.Instance);
 
         public Scope(Changeset changeset, string root, bool ownMap)
         {
@@ -166,12 +171,19 @@ public static class IntentResolver
         };
 
         /// <summary>Gets a value indicating whether a resolved anchor covers a surprise: it is touched, and names the surprise as <c>docs/intent.md</c> section 4.2 lists.</summary>
-        public bool Covers(ResolvedAnchor anchor, PathStep step) => anchor.State == Touched && covers.TryGetValue(anchor, out var f) && f(step);
+        public bool Covers(ResolvedAnchor anchor, PathStep step) => step.Kind == "decision"
+            ? DecisionOf(step) is { } d && Covers(anchor, d)
+            : anchor.State == Touched && covers.TryGetValue(anchor, out var f) && f(step);
 
-        private ResolvedAnchor Make(IntentAnchor anchor, string? target, bool touched, Func<PathStep, bool>? covering = null)
+        /// <summary>Gets a value indicating whether a resolved anchor covers a decision: it is touched, and is the file that holds the decision's hunk or a type the decision declares.</summary>
+        public bool Covers(ResolvedAnchor anchor, Decision decision) => anchor.State == Touched && decides.TryGetValue(anchor, out var f) && f(decision);
+
+        private ResolvedAnchor Make(IntentAnchor anchor, string? target, bool touched, Func<PathStep, bool>? covering = null, Func<Decision, bool>? deciding = null)
         {
             ResolvedAnchor resolved = target is null ? new(anchor.Text, KindOf(anchor), Unknown) : new(anchor.Text, KindOf(anchor), touched ? Touched : Untouched) { Target = target };
-            if (target is not null && covering is not null) covers[resolved] = covering;
+            if (target is null) return resolved;
+            if (covering is not null) covers[resolved] = covering;
+            if (deciding is not null) decides[resolved] = deciding;
             return resolved;
         }
 
@@ -266,9 +278,9 @@ public static class IntentResolver
         {
             if (ReviewPipeline.ChangesetPath(anchor.Name, root) is not { } path) return Make(anchor, null, false);
             // A file covers the decision whose hunk it holds.
-            bool Covering(PathStep step) => DecisionOf(step)?.File == path;
-            if (files.TryGetValue(path, out var file)) return Make(anchor, path, file.Status != "unchanged", Covering);
-            return Make(anchor, declared.Contains(path) ? path : null, false, Covering);
+            bool Holds(Decision d) => d.File == path;
+            if (files.TryGetValue(path, out var file)) return Make(anchor, path, file.Status != "unchanged", deciding: Holds);
+            return Make(anchor, declared.Contains(path) ? path : null, false, deciding: Holds);
         }
 
         /// <summary>
@@ -283,7 +295,7 @@ public static class IntentResolver
             // A type covers a decision that declares it or one of its members.
             var names = types.Select(t => Bare(t.Name)).ToHashSet(StringComparer.Ordinal);
             bool Declares(string? symbol) => symbol is not null && names.Any(n => symbol == n || symbol.StartsWith(n + ".", StringComparison.Ordinal));
-            return Make(anchor, types[0].Name, touched, step => DecisionOf(step)?.Declarations.Any(x => Declares(x.Symbol) || Declares(x.Previous)) == true);
+            return Make(anchor, types[0].Name, touched, deciding: d => d.Declarations.Any(x => Declares(x.Symbol) || Declares(x.Previous)));
         }
 
         /// <summary>

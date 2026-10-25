@@ -982,8 +982,6 @@
     opts: { threshold: "1", externals: false, dim: true, mute: true, talk: false },
     // The tab the page shows: "map" or "conversation".
     tab: "map",
-    // A value indicating whether the details panel shows the Intent list above the selection.
-    intentList: false,
     // The lines selected to comment on: a path, a hunk index, a side, and the first and last line indexes, or null.
     compose: null,
     // The files whose diffs the reader has shown (true) or hidden (false), by path. A file without an entry shows its
@@ -1495,6 +1493,16 @@
     return head;
   }
 
+  // Returns the intents that cover a decision, shown under its header in the diff: each claim with its why, labeled as
+  // the author's, or null when none covers it. IntentResolver decides coverage by the rule the reading path uses.
+  function decisionIntents(d) {
+    const list = (d.intents || []).map((i) => INTENTS[i]).filter(Boolean);
+    if (!list.length) return null;
+    return el("div", { class: "decision-intent" }, ...list.map((i) => el("p", {},
+      el("span", { class: "intent-label" }, "Author's intent: "), el("span", { class: "intent-claim" }, ...richText(i.claim)),
+      i.why ? el("span", {}, " ", el("span", { class: "intent-label" }, "Why "), ...richText(i.why)) : null)));
+  }
+
   // ---------- Tests of decisions ----------
   // A decision lists the test methods that reference its declarations, directly or through a helper, each with its
   // status in the change. The header counts the two ways apart, since a shared fixture would otherwise make every
@@ -1572,7 +1580,7 @@
   function hunkBlock(path, hunk, index, threads, notes) {
     const table = () => diffTable(path, hunk, index, threads, notes);
     const key = hunkId(path, index), d = DECISIONS.get(key);
-    if (d) return el("div", { class: "decision", "data-hunk": key }, decisionHead(d), table());
+    if (d) return el("div", { class: "decision", "data-hunk": key }, decisionHead(d), decisionIntents(d) || "", table());
     if (hunk.follows && DECISIONS.has(hunk.follows[0])) {
       const flagged = [threads, notes].some((m) => m && [...m.keys()].some((k) => k.startsWith(index + ":")));
       return consequenceBlock(path, hunk, index, table, flagged);
@@ -2613,7 +2621,7 @@
     document.addEventListener("scroll", () => { if (shown) hide(); }, { capture: true, passive: true });
   }
 
-  const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
+  const PANEL_TITLE = { path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
   // The panels that put badges on the blocks, so that switching to or from one draws the map again.
   const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
@@ -2632,9 +2640,9 @@
       "The patterns come from the code before this change, and a type joins one when it carries every key. A norm is what four in five of five or more instances share. " +
       "A departure is a norm that a new instance lacks, or that a changed instance had and no longer has. A departure is a difference to read, not a fault. Click an instance to open its type.",
     narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
-    intent: "These are the intents the pull request's author stated for this part, in the Intent section of its description. " +
+    intentSection: "These are the intents the pull request's author stated for this part, in the Intent section of its description. " +
       "Each anchor says whether the change touches what it names. The review does not check that an intent is true; read it beside Claude's explanation and the code.",
-    intentList: "This list holds every intent the pull request's description states, in order. An intent that names nothing this change touches, " +
+    intent: "Intent lists every intent the pull request's description states, in order. An intent that names nothing this change touches, " +
       "and an anchor that names nothing in the map or the code, are flagged. After them come the surprises on the reading path, such as new edges, " +
       "new cycles and decisions, that no intent names. A flag says what the description names, not that the intent is false.",
     patterns: "Patterns lists the roles that the change's new and changed types play, such as consumers or controllers, the most departures first. " +
@@ -2678,7 +2686,7 @@
     // and otherwise on the path when the changeset has one. Switching to or from the tests or the patterns draws the map
     // again, for their badges.
     const patterns = PATTERNS.size + NEW_PATTERNS.length;
-    if (PATH.length || GLOSSARY.length || TEST_FILES.length || patterns) {
+    if (PATH.length || INTENTS.length || GLOSSARY.length || TEST_FILES.length || patterns) {
       if (state.panel === undefined) state.panel = TESTS_ONLY ? "tests" : PATH.length ? "path" : "changes";
       const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => {
         const badges = state.panel !== name && (BADGE_PANELS.has(state.panel) || BADGE_PANELS.has(name));
@@ -2686,9 +2694,10 @@
         if (badges) redraw(); else renderChanges();
       } }, label);
       title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
-        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Concepts") : null,
+        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), INTENTS.length ? tab("intent", "Intent") : null, GLOSSARY.length ? tab("glossary", "Concepts") : null,
         patterns ? tab("patterns", "Patterns") : null, TEST_FILES.length ? tab("tests", "Tests") : null)));
       if (state.panel === "path") { renderPath(box, head); return; }
+      if (state.panel === "intent") { renderIntents(box); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }
       if (state.panel === "tests") { renderTests(box); return; }
       if (state.panel === "patterns") { renderPatterns(box); return; }
@@ -2759,7 +2768,6 @@
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
     if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
-    if (state.intentList && INTENTS.length) box.append(intentListPanel());
     const l = loc();
     const cur = state.current;
     if (l.leaf) {
@@ -3542,7 +3550,7 @@
   // null when none does. It stands apart from Claude's narrative and is never merged into it.
   function intentBlock(list) {
     if (!list.length) return null;
-    return el("section", { class: "intents" }, el("h3", {}, "Author's intent", help(HELP.intent)), ...list.map(intentItem),
+    return el("section", { class: "intents" }, el("h3", {}, "Author's intent", help(HELP.intentSection)), ...list.map(intentItem),
       el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
   }
 
@@ -3563,34 +3571,21 @@
     return s.uncovered ? el("span", { class: "step-intent intent-flag" }, "no stated intent") : null;
   }
 
-  // Shows the line under the top bar that counts the description's intents and their discrepancies, and opens the
-  // Intent list. A changeset with no intents shows nothing, since a change with no intent section is not missing one.
-  function renderIntentLine() {
-    const box = $("#intents");
-    if (!INTENTS.length) { box.hidden = true; return; }
+  // Renders the Intent panel: how many intents the description states and the discrepancies among them, every intent in
+  // order with its parts, and the surprises on the reading path that no intent covers, each a link to its step. The
+  // details panel shows only the intents that name the selection, so the two never repeat each other.
+  function renderIntents(box) {
     const d = intentDiscrepancies();
-    const parts = [`${plural(INTENTS.length, "intent", "intents")} from the description`,
-      d.unbacked ? `${d.unbacked} ${d.unbacked === 1 ? "names" : "name"} nothing changed` : "",
-      d.unknown ? `${plural(d.unknown, "anchor names", "anchors name")} nothing` : "",
-      d.uncovered ? `${plural(d.uncovered, "surprise", "surprises")} with no stated intent` : ""].filter(Boolean);
-    box.replaceChildren(el("span", { class: "summary-label" }, "Intent"), el("span", {}, parts.join(" · ")),
-      d.unbacked || d.unknown || d.uncovered ? el("span", { class: "intent-flag" }, "check these") : null,
-      el("button", { class: "link", onclick: () => { state.intentList = !state.intentList; renderDetails(); } }, state.intentList ? "Hide the list" : "Show the list"));
-    box.hidden = false;
-  }
-
-  // Returns the details panel's Intent list: every intent of the description in order, with its parts, and after them
-  // the surprises on the reading path that no intent covers, each a link to its step.
-  function intentListPanel() {
-    const box = el("section", { class: "decision-panel intent-list" },
-      el("div", { class: "decision-panel-head" }, el("h2", {}, "Intent", help(HELP.intentList)),
-        el("button", { class: "link", onclick: () => { state.intentList = false; renderDetails(); renderIntentLine(); } }, "Close")),
-      ...INTENTS.map(intentItem), el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
+    const flags = [d.unbacked ? `${d.unbacked} ${d.unbacked === 1 ? "names" : "name"} nothing this change touches` : "",
+      d.unknown ? `${plural(d.unknown, "anchor names", "anchors name")} nothing in the map or the code` : "",
+      d.uncovered ? `${plural(d.uncovered, "surprise", "surprises")} on the path ${d.uncovered === 1 ? "has" : "have"} no stated intent` : ""].filter(Boolean);
+    box.append(el("p", { class: "hint" }, `${plural(INTENTS.length, "intent", "intents")} from the pull request description` + (flags.length ? ":" : ".")));
+    if (flags.length) box.append(el("ul", { class: "intent-flags" }, ...flags.map((f) => el("li", { class: "intent-flag" }, f))));
+    box.append(...INTENTS.map(intentItem), el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
     const uncovered = PATH.filter((s) => s.uncovered);
     if (uncovered.length) box.append(el("h3", {}, "Surprises with no stated intent"),
       el("ul", { class: "list" }, ...uncovered.map((s) => el("li", {}, el("button", { class: "row step", onclick: () => openStep(s) },
         el("span", { class: "step-kind " + s.kind }, s.kind), el("span", { class: "step-text" }, stepSignal(s)))))));
-    return box;
   }
 
   // Records an intents event, which follows an edit of the description: the intents, and which surprises on the path
@@ -3604,10 +3599,14 @@
       s.intents = c && c.intents || null;
       s.uncovered = !!(c && c.uncovered);
     }
-    if (!INTENTS.length) state.intentList = false;
-    renderIntentLine();
+    const decided = new Map((e.decisions || []).map((c) => [c.id, c.intents]));
+    for (const d of DECISIONS.values()) d.intents = decided.get(d.id) || null;
+    // A description whose intent section is gone takes its tab with it.
+    if (!INTENTS.length && state.panel === "intent") state.panel = PATH.length ? "path" : "changes";
     renderDetails();
-    if (state.panel === "path") renderChanges();
+    renderChanges();
+    // An open leaf shows its decisions' intents in the diff, which is drawn again.
+    if (loc().leaf) redraw();
   }
 
   // Shows an edge's narrative, or its counts until the narrative arrives, in a tooltip that follows the pointer.
@@ -4456,7 +4455,6 @@
       $("#pr").title = [META.title, "Map: " + META.map, ...(META.warnings || [])].filter(Boolean).join("\n");
     }
     renderSummary();
-    renderIntentLine();
     renderPull();
     installTip();
     installTermTips();

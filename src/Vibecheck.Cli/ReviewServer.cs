@@ -392,10 +392,10 @@ public sealed class ReviewServer : IAsyncDisposable
     }
 
     /// <summary>
-    /// Sends a review's pages an <c>intents</c> event with the intents of its pull request's description, resolved
-    /// against the current result, and the coverage of each surprise on the reading path, when the description differs
-    /// from the one they were last resolved from. A review with no result yet is sent nothing, since its page reads the
-    /// intents with the changeset.
+    /// Sends a review's pages an <c>intents</c> event when the description differs from the one they were last resolved
+    /// from. The event holds the intents of the pull request's description resolved against the current result, the
+    /// intents that cover each decision, and the coverage of each surprise on the reading path. A review with no result
+    /// yet is sent nothing, since its page reads the intents with the changeset.
     /// </summary>
     private static void PublishIntents(Review review, PullSnapshot snapshot)
     {
@@ -408,7 +408,8 @@ public sealed class ReviewServer : IAsyncDisposable
         }
         var changeset = ResolveIntents(snapshot, result);
         var coverage = changeset.Path.Where(IntentResolver.IsSurprise).Select(s => new { id = s.Id, intents = s.Intents, uncovered = s.Uncovered });
-        review.Add(new { type = "intents", run, intents = changeset.Intents, coverage });
+        var decisions = changeset.Decisions.Where(d => d.Intents is not null).Select(d => new { id = d.Id, intents = d.Intents });
+        review.Add(new { type = "intents", run, intents = changeset.Intents, coverage, decisions });
     }
 
     /// <summary>Returns a review's changeset with the intents of its pull request's description, which a cached changeset never carries.</summary>

@@ -55,11 +55,12 @@ review of a range or of uncommitted work has no intents.
 
 ## 2. The reviewer's path
 
-1. The changeset opens on the map as it does now. The summary under the top bar gains
-   a line such as "5 intents from the description · 2 surprises with no stated
-   intent", which opens the **Intent** list in the details panel.
+1. The changeset opens on the map as it does now. The left panel gains an **Intent**
+   tab beside the path and the changes, which lists every intent and counts the
+   discrepancies, such as "2 surprises on the path have no stated intent".
 2. Selecting an edge or a block shows, above Claude's narrative, each intent that
-   names it: the claim, its why, and what it was chosen instead of.
+   names it: the claim, its why, and what it was chosen instead of. A decision that an
+   intent covers shows the intent's claim and why under its header in the diff.
 3. Each anchor of an intent is a link to what it names, with a mark that says whether
    the change touches it. An intent none of whose anchors the change touches carries
    a warning flag, "names nothing this change touches".
@@ -193,7 +194,8 @@ The changeset gains `Intents`, the list of resolved intents, each with its claim
 alternative, note and anchors, and each anchor with its text, kind, the
 identifier of what it resolved to and its state. Path steps gain `Intents`, the
 indices of the intents that cover them, and `Uncovered`, true for a surprise that none
-covers.
+covers. Decisions gain `Intents` too, the indices of the intents that cover them,
+whether or not they are steps of the path.
 
 The description changes without a commit, so the intents are not part of the cached
 changeset. The server resolves them when the review loads, and again when a `pull`
@@ -213,9 +215,15 @@ each marked touched, untouched or unknown. The section is labeled as the author'
 the same way that narratives are labeled as written by a model, and it is never merged
 into the narrative's text.
 
-The **Intent** list, opened from the summary, shows every intent in order with the
-same parts, and after them the surprises that no intent covers, each a link to its
-step.
+The **Intent** tab of the left panel, beside the path, the changes and the
+concepts, shows every intent in order with the same parts, and after them the
+surprises that no intent covers, each a link to its step. The left panel lists the
+whole change and the details panel shows the selection, as for concepts, so the two
+never repeat each other. The tab appears only when the changeset has intents.
+
+A decision covered by an intent, by the rule of section 4.2 for decisions, shows
+the claim and why of each covering intent under its header in the diff, whether or
+not the decision is a step of the path.
 
 ### 5.2 Discrepancies
 
@@ -225,10 +233,11 @@ checks:
 
 - An unbacked intent, flagged on the intent wherever it is shown.
 - An unknown anchor, flagged on the anchor, with what it was read as.
-- An uncovered surprise, flagged on its path step and listed in the Intent list.
+- An uncovered surprise, flagged on its path step and listed in the Intent tab.
 
-The summary's intent line counts the discrepancies, such as "5 intents · 1 names
-nothing changed · 2 surprises with no stated intent". The flags are facts about what
+The Intent tab counts the discrepancies at its top, such as "1 names nothing this
+change touches" and "2 surprises on the path have no stated intent". No line under
+the top bar repeats them, since the counts do not justify the room. The flags are facts about what
 the description names and what the change touches. They never say that an intent is
 false, and a discrepancy that needs reading the code to see, such as an intent that
 says the ledger no longer references messaging while it still does, is left for the
@@ -382,7 +391,7 @@ Each phase ends with the tool usable, and with tests that state its new behavior
    guide's new section and rename, and the new note. Agents can start writing intents
    before the review reads them, and the command keeps their format honest.
 2. **Intents in a review.** The `body` field, `IntentResolver`, the `intents` event,
-   the details panel's section, the Intent list, and the flags for unbacked intents
+   the details panel's section, the Intent tab, and the flags for unbacked intents
    and unknown anchors.
-3. **Coverage.** Coverage of surprises, the path's covered and uncovered steps, their
-   flags, and the summary's counts.
+3. **Coverage.** Coverage of surprises and decisions, the path's covered and
+   uncovered steps, their flags and counts, and intents under decision headers.

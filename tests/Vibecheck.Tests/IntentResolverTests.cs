@@ -224,11 +224,24 @@ public class IntentResolverTests
     }
 
     [Fact]
+    public void EveryDecisionListsTheIntentsThatCoverItByTheRuleThePathUses()
+    {
+        var intents = IntentReader.Parse("## Intent\n- **A.** `billing.api`\n- **B.** `App.Billing.Ledger.Ledger`\n- **C.** `RefundsController`, `src/Billing/Api/RefundsController.cs`\n").Intents;
+
+        var cs = IntentResolver.Apply(Billing, intents, "src", ownMap: true);
+
+        // The ledger's decision is named only by an untouched type, which covers nothing.
+        Assert.Equal([[2], null], cs.Decisions.Select(d => d.Intents));
+        Assert.Equal([2], cs.Path.Single(s => s.Id == "decision:Billing/Api/RefundsController.cs#0").Intents);
+    }
+
+    [Fact]
     public void AChangesetWithNoIntentsFlagsNoStep()
     {
         var cs = IntentResolver.Apply(Billing, [], "src", ownMap: true);
 
         Assert.Empty(cs.Intents);
+        Assert.Same(Billing.Decisions, cs.Decisions);
         Assert.Same(Billing.Path, cs.Path);
         Assert.All(cs.Path, s => Assert.False(s.Uncovered));
     }

@@ -757,7 +757,8 @@ as the differences:
   alternative, note and anchors, and each anchor with its text, its kind, what it
   resolved to and whether the change touches it. The description changes without a
   commit, so a cached changeset has none, and the server sets them when it serves the
-  changeset and sends them anew when the description changes.
+  changeset and sends them anew when the description changes. Each decision then
+  carries the indices of the intents that cover it.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a

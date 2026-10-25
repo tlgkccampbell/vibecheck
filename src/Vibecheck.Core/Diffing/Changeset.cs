@@ -321,6 +321,12 @@ public sealed record Decision(string Id, string File, int Hunk, bool Public, Lis
     /// first, then the added, the changed and the unchanged, as <see cref="TestChanges"/> finds them.
     /// </summary>
     public List<DecisionTest> Tests { get; init; } = [];
+
+    /// <summary>
+    /// Gets the indices into <see cref="Changeset.Intents"/> of the intents that cover the decision, as
+    /// <see cref="Intents.IntentResolver.Apply"/> finds them, or <see langword="null"/> when none does.
+    /// </summary>
+    public List<int>? Intents { get; init; }
 }
 
 /// <summary>
