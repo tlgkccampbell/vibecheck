@@ -18,8 +18,8 @@ public class SampleIntegrationTests(SampleFixture sample)
     public void AnalysisListsTypesAndFilesIncludingGeneratedOnes()
     {
         // The test project adds three types in two files.
-        Assert.Equal(34, sample.Analysis.Types.Count);
-        Assert.Equal(18, sample.Analysis.Files.Count(f => f.Generator is null));
+        Assert.Equal(41, sample.Analysis.Types.Count);
+        Assert.Equal(25, sample.Analysis.Files.Count(f => f.Generator is null));
         Assert.Equal(2, sample.Analysis.Types.Count(t => t.Name.StartsWith("System.Text.RegularExpressions.Generated.")));
         Assert.Contains(sample.Analysis.Files, f => f.Path.StartsWith("src/Orchard.Billing/Generated/") && f.Generator!.Contains("JsonSourceGenerator"));
         Assert.Empty(sample.Analysis.Warnings);
@@ -36,7 +36,7 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Empty(facts.Warnings);
         Assert.DoesNotContain(facts.Types, t => t.Leaf == ArchitectureMap.Unsorted);
         Assert.Equal(new ExcludedCounts(2, 0), facts.Excluded);
-        Assert.Equal(29, facts.Types.Count);
+        Assert.Equal(36, facts.Types.Count);
         Assert.DoesNotContain(facts.Dependencies, d => d.To.StartsWith("System."));
     }
 
