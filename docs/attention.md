@@ -2,7 +2,7 @@
 
 This document describes five features that tell a reviewer where to look in a large
 changeset and what they can set aside: cause and consequence clustering, semantic
-triviality, the reading path, new concepts as a review event, and the glossary. It
+triviality, the reading path, new concepts as a review event, and the Concepts panel. It
 builds on the changeset of [vibecheck-spec.md](vibecheck-spec.md), the narratives of
 [review-workflow.md](review-workflow.md) and the reviewed marks of
 [pull-requests.md](pull-requests.md), and it lists, in section 11, the changes it makes
@@ -43,9 +43,10 @@ opinion of it.
    describe. Each entry names the types, shows what they reference and what references
    them, and carries Claude's proposal for a home with the reviewer's choice to accept
    it, place the types elsewhere, or leave them unsorted for now.
-3. The **Glossary** lists the names the change introduces, grouped by block, with
-   where each is declared and how often it is used. Hovering an introduced name in any
-   diff table shows its entry.
+3. The **Concepts** panel lists the concepts the change touches, such as "Command Handler":
+   runs of words that the names of several unrelated types share, new ones first, each
+   with the types the change touched under it. Hovering a term within a type's name in
+   any diff table shows its entry.
 4. In the leaf view, a hunk that changes a declaration is a **decision**, and carries a
    count of the hunks that follow from it. Those hunks are **consequences**: each is
    collapsed, says which decision it follows from, and expands on demand. Selecting a
@@ -390,50 +391,86 @@ Placements into existing leaves are applied at once. New leaves wait.
 A concept stays in the first tier of the path until the reviewer chooses, and the
 choice is logged with the Claude calls, since it changes the map.
 
-## 8. The glossary
+## 8. Concepts
 
 ### 8.1 Terms
 
-The vocabulary a change introduces is the set of names it adds, which the
-declaration diff knows exactly:
+A list of every name a change declares is too long to read: a change of
+fifty files declares a hundred names, most of them members. What a reviewer needs is
+the vocabulary the change speaks, the concepts that recur across the system's names,
+such as "Command Handler" in a system that uses Mediator, in the way that a pattern is
+a role that recurs across the system's types.
 
-- Added types, with their leaf at head.
-- Added members of any accessibility, public first.
-- Renamed declarations, as "`Old` is now `New`".
-- Nodes, views and externals the change adds to the map.
-- Assemblies referenced at head that were not referenced at base, from the external
-  references.
+The Concepts panel shows that vocabulary, which the glossary finds in the names of the
+system's types, deterministically and without configuration, by these rules.
 
-Each term carries its kind, its block, the file and line of its declaration, its
-documentation summary when it has one, the number of sites that use it at head, the
-file and line of the first use outside its declaring type, and the decision of
-section 4 that introduced it, when one did. An added type also carries the patterns
-that report it as an instance, as [patterns.md](patterns.md) section 7.6 describes. A
-term with no documentation comment says so, which is itself worth a reviewer's
-attention in code a model wrote.
+- A type's simple name splits into **words** at each capital that begins a word, so
+  `HTTPClient` is "HTTP Client". The `I` that begins an interface's name is dropped, and
+  a plain plural is matched as its singular, so `FileHunks` and `Hunk` share "Hunk".
+- A type's **family** is the type with the fewest words whose name begins its own, so
+  `CreateOrderCommandHandler` belongs to the family of `CreateOrderCommand`, and an
+  interface and its implementation are one family.
+- A **term** is a run of up to three words that the names of at least two families
+  hold. A name that one type holds, or one type and the types named after it, is never
+  a term, and neither is a run of words that name nothing on their own, such as "Base",
+  "Helper", "Service" or "Get".
+- A run that joins a subject to a term, such as "Order Command Handler", is left out in
+  favor of its parts, "Order" and "Command Handler". A word is a subject when more
+  names begin with it than end with it.
+- A shorter term is left out when every type that holds it also holds a longer term
+  that contains it, so "Handler" is listed only when some handler is neither a command
+  handler nor a query handler.
 
-The glossary is carried in the changeset as `Glossary`, grouped by block and ordered
-by use count, so that the names a reviewer will meet most come first.
+The terms are found at head and at base. A term that the names at base do not make is
+**new** in the change, which is worth a reviewer's attention in the way a new pattern
+is.
 
-### 8.2 In the viewer
+### 8.2 What the changeset carries
 
-The Glossary opens from the summary and from a block's details panel, where it shows
-the block's terms alone. Each term opens its declaration in the leaf view. In every
-diff table, an introduced name is marked with a dotted underline, and hovering it
-shows the entry. The match is by name within the changed lines, which is enough for
-a hover.
+The changeset's `Glossary` holds the terms the change touches. A term is touched when
+the change added or changed a type that it reports under the term, as the patterns
+mark their instances. A type is reported under each term its name holds, except a term
+that is part of a longer one the name also holds, so `CreateOrderCommandHandler` is
+reported under "Command Handler" and "Order", and not under "Command" or "Handler".
 
-### 8.3 Claude's part
+Each term carries its name, as the names spell it most often or in the singular when
+some name spells it so, its words, the number of families that hold it, the types the
+change touched under it with their leaves and how each was touched, and the other types
+that hold it. A term that a type's whole name spells, such as "Consumer" for
+`IConsumer`, takes that type's documentation summary, with the type it came from. New
+terms come first, then those with the most touched types.
+
+Terms are found only in the names of types, not of members, and not of test types or
+types that a generator wrote.
+
+### 8.3 In the viewer
+
+The Concepts panel opens from the Changes panel's switch, beside Patterns, with the new terms
+first and then the others the change touches. Each entry gives the term's name, how
+many types hold it in how many blocks, what it means, and how many types the change
+added and changed under it. Those types follow, grouped by block, with each block's
+name on a line of its own and the type names wrapping across the panel's width beneath
+it, colored by status as blocks are on the map, so that no name is cut short. Each type
+opens in the leaf view, and the other types are listed the same way on request. Hovering an entry outlines
+the blocks that hold its types, as the Patterns switch does. A block's details panel
+lists the terms that its own touched types hold, and opens the Concepts panel on them.
+
+In every diff, a term within the name of a type in a changed line is marked with a
+dotted underline, so that "CommandHandler" is marked in `CreateOrderCommandHandler`,
+and hovering it shows the entry. Other identifiers, comments and context lines are left
+alone.
+
+### 8.4 Claude's part
 
 A term with no documentation summary gets a one-sentence definition from Claude,
 requested through the narrative pipeline as a narrative kind of its own, keyed
-`term:<symbol>`, in batches by block after the levels and views. The request gives
-the declaration's lines and the lines of up to four sites, and asks for one sentence
-that says what the thing is, citing the declaring file. A definition that cites any
-other file, or that is empty, is discarded, and the entry says "no documentation" in
-its place. The definition is marked as Claude's and has the same **regenerate**
-action as any narrative. This is a description of what the code declares, with the
-declaration beside it, and not a judgment of it.
+`term:<words>`, such as `term:command-handler`, in batches after the levels and views.
+The request gives the number of types and families that hold the term and up to five of
+them, the touched ones first, each with its file, its leaf and its documentation
+summary, and asks what the solution means by the term. The definition cites files of
+those types, and one that cites any other file, or none, that is empty, or that
+describes the names that hold the term rather than the concept, is discarded, and the entry says that no type documents the term. The definition is
+marked as Claude's and has the same **regenerate** action as any narrative.
 
 ## 9. The API and the viewer
 
@@ -476,8 +513,9 @@ snippets, which keeps them in the sub-second unit suite. The tests state:
   and marks a step read when its files are reviewed.
 - Placement into an existing leaf applies at once, a new leaf waits, each choice
   produces the map it should, and writing the map refuses outside the working tree.
-- The glossary lists each added or renamed name once with its uses and first use, and
-  a term definition that cites another file is discarded.
+- The glossary finds a term only across two families, leaves out a subject joined to a
+  term and a term that longer ones cover, reports a type under its longest terms, and
+  discards a definition that cites a file of no type listed for it.
 
 The `Sample` suite checks the declaration lists and sites on the sample solution, so
 that the Roslyn pass is covered once per run where it already costs the compilation.

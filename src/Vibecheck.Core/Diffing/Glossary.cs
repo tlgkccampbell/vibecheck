@@ -1,147 +1,275 @@
 using Vibecheck.Analysis;
 using Vibecheck.Checking;
-using Vibecheck.Model;
 
 namespace Vibecheck.Diffing;
 
 /// <summary>
-/// One name a changeset introduces, as <c>docs/attention.md</c> section 8 describes it: a type or member added, a
-/// declaration renamed, a node, view or external added to the map, or an assembly referenced for the first time. The
-/// key files the term wherever one thing per term is kept, such as Claude's definition of it. The kind is the
-/// declaration's kind for a type or member, or <see cref="Node"/>, <see cref="View"/>, <see cref="External"/> or
-/// <see cref="Assembly"/>. The block is the leaf that holds the term at head, and null for a term the map holds
-/// rather than a block. The uses are the sites that reference the term at head.
+/// A concept of a system's vocabulary, as <see cref="Glossary"/> finds them: a run of words that the names of several
+/// families of types share, such as "Command Handler" in <c>CreateOrderCommandHandler</c> and
+/// <c>CancelOrderCommandHandler</c>. See <c>docs/attention.md</c> section 8.
 /// </summary>
-public sealed record Term(string Key, string Name, string Symbol, string Kind, string? Block, int Uses)
+/// <param name="Key">The key that files the term wherever one thing per term is kept, such as Claude's definition of it, as <see cref="KeyOf"/> forms it.</param>
+/// <param name="Name">The term's words, separated by spaces, as the names spell them most often, or in the singular when some name spells them so.</param>
+/// <param name="Words">The term's words as <see cref="Glossary.StemOf"/> forms them, by which a name is matched against the term.</param>
+/// <param name="Families">The number of families at head whose names hold the term, as <see cref="Glossary"/> defines a family.</param>
+/// <param name="Instances">The types the change added or changed that the glossary reports under the term, ordered by name.</param>
+/// <param name="Others">The other types at head whose names hold the term, with their leaves, ordered by name.</param>
+public sealed record Term(string Key, string Name, IReadOnlyList<string> Words, int Families, List<TermInstance> Instances, List<PatternOther> Others)
 {
-    /// <summary>The kind of a node added to the map.</summary>
-    public const string Node = "node";
+    /// <summary>Gets a value indicating whether the term is new in the change, which is when the names at base do not make it a term.</summary>
+    public bool New { get; init; }
 
-    /// <summary>The kind of a view added to the map.</summary>
-    public const string View = "view";
-
-    /// <summary>The kind of an external added to the map.</summary>
-    public const string External = "external";
-
-    /// <summary>The kind of an assembly that head references and base did not.</summary>
-    public const string Assembly = "assembly";
-
-    /// <summary>Gets the symbol a renamed declaration had at base, or <see langword="null"/> for any other term.</summary>
-    public string? Previous { get; init; }
-
-    /// <summary>Gets a declaration's accessibility as C# writes it, or <see langword="null"/> for a term that is not a declaration.</summary>
-    public string? Accessibility { get; init; }
-
-    /// <summary>Gets a value indicating whether code outside the assembly can see the declaration.</summary>
-    public bool Exposed { get; init; }
-
-    /// <summary>Gets the file that declares the term at head, or <see langword="null"/> for a term the map or an assembly introduces.</summary>
-    public string? File { get; init; }
-
-    /// <summary>Gets the one-based line the declaration starts on, or <see langword="null"/> for a term with no file.</summary>
-    public int? Line { get; init; }
-
-    /// <summary>Gets the first sentence of the declaration's documentation summary, or a map part's purpose, or <see langword="null"/> when there is none.</summary>
+    /// <summary>Gets the first sentence of the documentation summary of a type whose whole name is the term, or <see langword="null"/> when no such type has one.</summary>
     public string? Summary { get; init; }
 
-    /// <summary>Gets the first site outside the declaring type that uses the term at head, by file and line, or <see langword="null"/> when none does.</summary>
-    public SiteRef? FirstUse { get; init; }
+    /// <summary>Gets the type whose documentation <see cref="Summary"/> comes from, or <see langword="null"/> when the term has no summary.</summary>
+    public string? SummaryOf { get; init; }
 
-    /// <summary>Gets the identifier of the decision that introduced the term, or <see langword="null"/> when no decision holds its declaration.</summary>
-    public string? Decision { get; init; }
-
-    /// <summary>
-    /// Gets the identifiers of the patterns that report an added type as an instance, those found at base as
-    /// <see cref="Changeset.Patterns"/> lists them and then those new in the change as <see cref="Changeset.NewPatterns"/>
-    /// lists them, or <see langword="null"/> for a term that no pattern reports.
-    /// </summary>
-    public List<string>? Patterns { get; init; }
-
-    /// <summary>Returns the key of a declaration's term, such as <c>term:A.Clock.Now</c>.</summary>
-    public static string KeyOf(string symbol) => "term:" + symbol;
-
-    /// <summary>Returns a value indicating whether a kind is a declaration's rather than a map part's or an assembly's.</summary>
-    public static bool IsDeclaration(string kind) => kind is not (Node or View or External or Assembly);
+    /// <summary>Returns the key of the term with some words, such as <c>term:command-handler</c>.</summary>
+    public static string KeyOf(IEnumerable<string> words) => "term:" + string.Join('-', words);
 }
 
-/// <summary>A place in a file at head, by its path and one-based line.</summary>
-public sealed record SiteRef(string File, int Line);
+/// <summary>A type that the change added or changed and that the glossary reports under a term.</summary>
+/// <param name="Type">The type's name.</param>
+/// <param name="Leaf">The leaf the type binds to at head.</param>
+/// <param name="Status">How the change touched the type, as <see cref="TouchedTypes"/> names it.</param>
+public sealed record TermInstance(string Type, string Leaf, string Status);
 
 /// <summary>
-/// Lists the vocabulary a changeset introduces, as <c>docs/attention.md</c> section 8 describes it, from the
-/// declaration diff and the map diff. Each added or renamed name is listed once: a renamed type is one term, and its
-/// members are listed again only when their own names changed. Constructors are not terms, since a type's name covers
-/// them. The list is grouped by block, in the order of their identifiers, and within a block the most used terms come
-/// first, so that the names a reviewer will meet most come first.
+/// Finds the vocabulary of a system in the names of its types, and lists the terms that a change touches, as
+/// <c>docs/attention.md</c> section 8 describes. The question it answers is which concepts recur across the system's
+/// names, such as "Command Handler", rather than which names a change declares.
 /// </summary>
+/// <remarks>
+/// <para>
+/// A name splits into words, as <see cref="WordsOf"/> splits it. A type's <b>family</b> is the type with the fewest
+/// words whose name begins its own, so that <c>CreateOrderCommandHandler</c> belongs to the family of
+/// <c>CreateOrderCommand</c>. An interface and its implementation, such as <c>IOrderStore</c> and <c>OrderStore</c>,
+/// are one family.
+/// </para>
+/// <para>
+/// A <b>term</b> is a run of up to <see cref="MaximumWords"/> words that the names of at least
+/// <see cref="MinimumFamilies"/> families hold. A name that one type holds, or one type and the types named after it,
+/// is therefore never a term. A run of words that name nothing on their own, such as "Base" or "Helper", is not a
+/// term either.
+/// </para>
+/// <para>
+/// A run that joins a subject to a term, such as "Order Command Handler", is left out in favor of its parts. A word is
+/// a subject when more names begin with it than end with it. A shorter term is left out when every type that holds it
+/// also holds a longer term that contains it, so "Handler" is listed only when some handler is neither a command
+/// handler nor a query handler.
+/// </para>
+/// </remarks>
 public static class Glossary
 {
-    /// <summary>Returns the terms of a changeset, grouped by block and ordered by use.</summary>
-    /// <param name="cs">The changeset, with its decisions and its structural diff.</param>
-    /// <param name="baseFacts">The facts at base, whose external references tell which assemblies are new at head.</param>
-    /// <param name="headFacts">The facts at head, whose declarations, sites and types give each term its place and its uses.</param>
-    /// <param name="changes">The declaration diff of the two ends.</param>
-    public static List<Term> Build(Changeset cs, Facts baseFacts, Facts headFacts, IReadOnlyList<DeclarationChange> changes)
+    /// <summary>The most words a term has.</summary>
+    public const int MaximumWords = 3;
+
+    /// <summary>The number of families whose names must hold a run of words for it to be a term.</summary>
+    public const int MinimumFamilies = 2;
+
+    /// <summary>The words, as <see cref="StemOf"/> forms them, that name nothing on their own. A term may hold them, but not only them.</summary>
+    private static readonly HashSet<string> Generic = new(StringComparer.Ordinal)
     {
-        var terms = new List<Term>();
-        var declared = headFacts.Declarations.GroupBy(d => d.Symbol, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.FirstLine).ToList(), StringComparer.Ordinal);
-        var leafOf = headFacts.Types.ToDictionary(t => t.Name, t => t.Leaf, StringComparer.Ordinal);
-        var sites = new Dictionary<string, List<(string From, string File, int Line)>>(StringComparer.Ordinal);
-        void AddSite(string symbol, string from, string file, int line)
-        {
-            if (!sites.TryGetValue(symbol, out var list)) sites[symbol] = list = [];
-            list.Add((from, file, line));
-        }
-        foreach (var d in headFacts.Dependencies) AddSite(d.Symbol, d.From, d.File, d.Line);
-        foreach (var s in headFacts.Sites) AddSite(s.Symbol, s.FromType, s.File, s.Line);
-        var decisionOf = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var d in cs.Decisions) foreach (var x in d.Declarations) decisionOf.TryAdd(x.Symbol, d.Id);
-        var patternsOf = cs.Patterns.SelectMany(p => p.Instances.Where(i => i.Status == "added").Select(i => (i.Type, p.Id)))
-            .Concat(cs.NewPatterns.SelectMany(p => p.Instances.Select(i => (i.Type, p.Id))))
-            .GroupBy(x => x.Type, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList(), StringComparer.Ordinal);
+        "abstract", "add", "async", "attribute", "base", "common", "config", "core", "create", "data", "default", "delete",
+        "exception", "extension", "find", "generic", "get", "helper", "impl", "implementation", "info", "internal", "item",
+        "list", "load", "manager", "model", "new", "object", "remove", "save", "service", "set", "shared", "test", "type",
+        "update", "util", "utility", "value", "wrapper",
+    };
 
-        foreach (var c in changes)
+    /// <summary>The words, as <see cref="StemOf"/> forms them, that join other words, which neither begin nor end a term.</summary>
+    private static readonly HashSet<string> Joining = new(StringComparer.Ordinal)
+    {
+        "a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with",
+    };
+
+    /// <summary>
+    /// Returns the words of a type's simple name, without its namespace, containing types or type parameters. A word
+    /// begins at a capital that follows a lowercase letter or a digit, or at the last capital of a run that a lowercase
+    /// letter follows. An underscore or any other character that is not a letter or a digit ends a word. The
+    /// <c>I</c> that begins an interface's name is dropped, so <c>IOrderRepository</c> has the words "Order" and
+    /// "Repository".
+    /// </summary>
+    public static List<string> WordsOf(string typeName)
+    {
+        var name = TypeNames.Plain(typeName);
+        var cut = name.IndexOfAny(['<', '`']);
+        if (cut >= 0) name = name[..cut];
+        name = name[(name.LastIndexOfAny(['.', '+']) + 1)..];
+
+        var words = new List<string>();
+        var start = -1;
+        for (var i = 0; i <= name.Length; i++)
         {
-            if (c.Kind == "constructor" || !declared.TryGetValue(c.Symbol, out var parts)) continue;
-            if (c.Change == "renamed" && c.Previous is not null && DeclarationDiff.SimpleName(c.Previous) == DeclarationDiff.SimpleName(c.Symbol)) continue;
-            if (c.Change is not ("added" or "renamed")) continue;
-            var first = parts[0];
-            var all = sites.GetValueOrDefault(c.Symbol, []);
-            var outside = all.Where(s => s.From != first.Type).OrderBy(s => s.File, StringComparer.Ordinal).ThenBy(s => s.Line).FirstOrDefault();
-            terms.Add(new Term(Term.KeyOf(c.Symbol), DeclarationDiff.ShortName(c.Symbol, c.Kind), c.Symbol, c.Kind, leafOf.GetValueOrDefault(first.Type), all.Count)
+            var c = i < name.Length ? name[i] : '\0';
+            if (!char.IsLetterOrDigit(c))
             {
-                Previous = c.Previous,
-                Accessibility = first.Accessibility,
-                Exposed = first.Exposed,
-                File = first.File,
-                Line = first.FirstLine,
-                Summary = parts.Select(p => p.Summary).FirstOrDefault(s => s is not null),
-                FirstUse = outside.File is null ? null : new SiteRef(outside.File, outside.Line),
-                Decision = decisionOf.GetValueOrDefault(c.Symbol),
-                Patterns = c.Kind == "type" ? patternsOf.GetValueOrDefault(c.Symbol) : null,
-            });
+                if (start >= 0) words.Add(name[start..i]);
+                start = -1;
+                continue;
+            }
+            var begins = start >= 0 && char.IsUpper(c)
+                && (!char.IsUpper(name[i - 1]) || i + 1 < name.Length && char.IsLower(name[i + 1]));
+            if (begins) words.Add(name[start..i]);
+            if (start < 0 || begins) start = i;
         }
+        if (words.Count > 1 && words[0] == "I") words.RemoveAt(0);
+        return words;
+    }
 
-        var map = cs.Map;
-        foreach (var n in cs.Structural.Nodes.Where(n => n.Op == "added"))
+    /// <summary>
+    /// Returns the form of a word by which the glossary matches it: the word in lower case, made singular when it ends
+    /// in a plain plural, so that "Changes" and "Change" are one word. A word of three letters or fewer, and one that
+    /// ends in "ss", "us" or "is", is left as it is.
+    /// </summary>
+    public static string StemOf(string word)
+    {
+        var w = word.ToLowerInvariant();
+        if (w.Length <= 3 || !w.EndsWith('s') || w.EndsWith("ss", StringComparison.Ordinal) || w.EndsWith("us", StringComparison.Ordinal) || w.EndsWith("is", StringComparison.Ordinal)) return w;
+        return w.EndsWith("ies", StringComparison.Ordinal) && w.Length > 4 ? w[..^3] + "y" : w[..^1];
+    }
+
+    /// <summary>One term found among the names of some types.</summary>
+    /// <param name="Words">The term's words as <see cref="StemOf"/> forms them.</param>
+    /// <param name="Name">The term's words as <see cref="Term.Name"/> spells them.</param>
+    /// <param name="Types">The names of the types that hold the term, ordered by name.</param>
+    /// <param name="Families">The number of families whose names hold the term.</param>
+    public sealed record Found(IReadOnlyList<string> Words, string Name, IReadOnlyList<string> Types, int Families);
+
+    /// <summary>Returns the terms among the names of some types, ordered by name, by the rules that <see cref="Glossary"/> sets out.</summary>
+    public static List<Found> Find(IEnumerable<TypeFact> types)
+    {
+        var named = types.Select(t => (t.Name, Words: WordsOf(t.Name))).Where(t => t.Words.Count > 0)
+            .OrderBy(t => t.Name, StringComparer.Ordinal).ToList();
+        var stems = named.ToDictionary(t => t.Name, t => t.Words.Select(StemOf).ToList(), StringComparer.Ordinal);
+
+        // A family is named by its first type with the fewest words, and each type joins the family of the shortest
+        // name that begins its own.
+        var byWords = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, _) in named) byWords.TryAdd(string.Join(' ', stems[name]), name);
+        var familyOf = named.ToDictionary(t => t.Name, t =>
         {
-            if (n.Kind == "external" && map.Externals.TryGetValue(n.Id, out var x))
-                terms.Add(new Term("term:external:" + n.Id, x.Name, n.Id, Term.External, null, headFacts.ExternalRefs.Where(r => r.External == n.Id).Sum(r => r.Count)) { Summary = x.Purpose });
-            else if (map.Nodes.TryGetValue(n.Id, out var node))
-                terms.Add(new Term("term:node:" + n.Id, node.Name, n.Id, Term.Node, n.Id, 0) { Summary = node.Purpose });
-        }
-        foreach (var v in cs.Structural.Views.Where(v => v.Op == "added"))
-            if (map.Views.TryGetValue(v.Id, out var view)) terms.Add(new Term("term:view:" + v.Id, view.Name, v.Id, Term.View, null, 0) { Summary = view.Purpose });
+            var words = stems[t.Name];
+            return Enumerable.Range(1, words.Count).Select(n => byWords.GetValueOrDefault(string.Join(' ', words.Take(n)))).First(f => f is not null)!;
+        }, StringComparer.Ordinal);
 
-        var before = baseFacts.ExternalRefs.Select(r => r.Assembly).ToHashSet(StringComparer.Ordinal);
-        foreach (var g in headFacts.ExternalRefs.Where(r => !before.Contains(r.Assembly)).GroupBy(r => r.Assembly, StringComparer.Ordinal))
+        // How many names of more than one word begin and end with each word, which tells a subject from a role.
+        var begins = new Dictionary<string, int>(StringComparer.Ordinal);
+        var ends = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var words in stems.Values.Where(w => w.Count > 1))
         {
-            var use = g.OrderBy(r => r.File, StringComparer.Ordinal).ThenBy(r => r.Line).First();
-            terms.Add(new Term("term:assembly:" + g.Key, g.Key, g.Key, Term.Assembly, null, g.Sum(r => r.Count)) { FirstUse = new SiteRef(use.File, use.Line) });
+            begins[words[0]] = begins.GetValueOrDefault(words[0]) + 1;
+            ends[words[^1]] = ends.GetValueOrDefault(words[^1]) + 1;
         }
 
-        return terms.OrderBy(t => t.Block is null ? 1 : 0).ThenBy(t => t.Block, StringComparer.Ordinal)
-            .ThenByDescending(t => t.Uses).ThenByDescending(t => t.Exposed).ThenBy(t => t.Name, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal).ToList();
+        var runs = new Dictionary<string, (List<string> Words, SortedSet<string> Types, HashSet<string> Families, Dictionary<string, int> Spellings)>(StringComparer.Ordinal);
+        foreach (var (name, original) in named)
+        {
+            var words = stems[name];
+            for (var i = 0; i < words.Count; i++)
+            {
+                for (var n = 1; n <= MaximumWords && i + n <= words.Count; n++)
+                {
+                    var key = string.Join(' ', words.Skip(i).Take(n));
+                    if (!runs.TryGetValue(key, out var run)) runs[key] = run = (words.Skip(i).Take(n).ToList(), new(StringComparer.Ordinal), new(StringComparer.Ordinal), new(StringComparer.Ordinal));
+                    run.Types.Add(name);
+                    run.Families.Add(familyOf[name]);
+                    var spelled = string.Join(' ', original.Skip(i).Take(n));
+                    run.Spellings[spelled] = run.Spellings.GetValueOrDefault(spelled) + 1;
+                }
+            }
+        }
+
+        bool Names(string w) => w.Length >= 3 && w.Any(char.IsLetter) && !Generic.Contains(w);
+        bool Qualifies(List<string> words) => words.Any(Names) && !Joining.Contains(words[0]) && !Joining.Contains(words[^1]);
+        var candidates = runs.Values.Where(r => r.Families.Count >= MinimumFamilies && Qualifies(r.Words))
+            .ToDictionary(r => string.Join(' ', r.Words), StringComparer.Ordinal);
+        bool Subject(string w) => begins.GetValueOrDefault(w) > ends.GetValueOrDefault(w);
+        var joined = candidates.Where(c => c.Value.Words.Count > 1 && Subject(c.Value.Words[0]) && candidates.ContainsKey(string.Join(' ', c.Value.Words.Skip(1))))
+            .Select(c => c.Key).ToList();
+        foreach (var key in joined) candidates.Remove(key);
+
+        // The longest terms are kept first, so that a shorter one can be left out when they cover every type that holds it.
+        var keptOf = new Dictionary<string, List<List<string>>>(StringComparer.Ordinal);
+        var kept = new List<Found>();
+        foreach (var r in candidates.Values.OrderByDescending(r => r.Words.Count).ThenBy(r => string.Join(' ', r.Words), StringComparer.Ordinal))
+        {
+            if (r.Types.All(t => keptOf.TryGetValue(t, out var longer) && longer.Any(l => l.Count > r.Words.Count && Contains(l, r.Words)))) continue;
+            foreach (var t in r.Types)
+            {
+                if (!keptOf.TryGetValue(t, out var list)) keptOf[t] = list = [];
+                list.Add(r.Words);
+            }
+            var stem = string.Join(' ', r.Words);
+            var spelling = r.Spellings.OrderBy(s => s.Key.Equals(stem, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenByDescending(s => s.Value).ThenBy(s => s.Key, StringComparer.Ordinal).First().Key;
+            kept.Add(new Found(r.Words, spelling, r.Types.ToList(), r.Families.Count));
+        }
+        return kept.OrderBy(f => f.Name, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Returns the terms that a change touches, which are those under which it reports a type it added or changed. A
+    /// type is reported under each term its name holds, except a term that is part of a longer one the name also
+    /// holds, so that <c>CreateOrderCommandHandler</c> is reported under "Command Handler" and not under "Handler". New
+    /// terms come first, then those with the most reported types.
+    /// </summary>
+    /// <param name="baseFacts">The facts at base, whose terms tell which terms are new.</param>
+    /// <param name="headFacts">The facts at head, whose types the terms are found among.</param>
+    /// <param name="files">Every file of the changeset, with its status.</param>
+    public static List<Term> Build(Facts baseFacts, Facts headFacts, IReadOnlyList<FileChange> files)
+    {
+        static List<TypeFact> CandidatesOf(Facts facts) =>
+            PatternDiscovery.Candidates(facts.Types, facts.Files.Where(f => f.Generator is not null).Select(f => f.Path).ToHashSet(StringComparer.Ordinal));
+        var types = CandidatesOf(headFacts);
+        var found = Find(types);
+        var atBase = Find(CandidatesOf(baseFacts)).Select(f => string.Join(' ', f.Words)).ToHashSet(StringComparer.Ordinal);
+        var statusOf = TouchedTypes.StatusOf(baseFacts, files);
+        var typeOf = types.ToDictionary(t => t.Name, StringComparer.Ordinal);
+
+        var held = new Dictionary<string, List<Found>>(StringComparer.Ordinal);
+        foreach (var f in found)
+            foreach (var t in f.Types)
+            {
+                if (!held.TryGetValue(t, out var list)) held[t] = list = [];
+                list.Add(f);
+            }
+        var reported = new Dictionary<Found, List<TermInstance>>();
+        foreach (var (name, terms) in held)
+        {
+            if (statusOf(typeOf[name]) is not { } status) continue;
+            foreach (var f in terms.Where(f => !terms.Any(o => o.Words.Count > f.Words.Count && Contains(o.Words, f.Words))))
+            {
+                if (!reported.TryGetValue(f, out var list)) reported[f] = list = [];
+                list.Add(new TermInstance(name, typeOf[name].Leaf, status));
+            }
+        }
+
+        var summaries = headFacts.Declarations.Where(d => d.Kind == "type" && d.Summary is not null)
+            .GroupBy(d => d.Symbol, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Summary!, StringComparer.Ordinal);
+        return reported.Select(r =>
+            {
+                var (f, instances) = (r.Key, r.Value.OrderBy(i => i.Type, StringComparer.Ordinal).ToList());
+                var mine = instances.Select(i => i.Type).ToHashSet(StringComparer.Ordinal);
+                // A type whose whole name is the term, such as IConsumer for "Consumer", documents it.
+                var anchor = f.Types.FirstOrDefault(t => summaries.ContainsKey(TypeNames.Plain(t)) && WordsOf(t).Select(StemOf).SequenceEqual(f.Words));
+                return new Term(Term.KeyOf(f.Words), f.Name, f.Words, f.Families, instances,
+                    f.Types.Where(t => !mine.Contains(t)).Select(t => new PatternOther(t, typeOf[t].Leaf)).ToList())
+                {
+                    New = !atBase.Contains(string.Join(' ', f.Words)),
+                    Summary = anchor is null ? null : summaries[TypeNames.Plain(anchor)],
+                    SummaryOf = anchor,
+                };
+            })
+            .OrderByDescending(t => t.New).ThenByDescending(t => t.Instances.Count).ThenByDescending(t => t.Families)
+            .ThenBy(t => t.Name, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Returns a value indicating whether a run of words holds another run, in order and adjacent.</summary>
+    private static bool Contains(IReadOnlyList<string> words, IReadOnlyList<string> part)
+    {
+        for (var i = 0; i + part.Count <= words.Count; i++)
+            if (part.Select((w, j) => (w, j)).All(x => words[i + x.j] == x.w)) return true;
+        return false;
     }
 }

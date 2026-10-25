@@ -459,7 +459,7 @@ tier counts it, as "2 new consumers".
 
 ### 7.5 The Patterns switch
 
-The Changes panel's title gains **Patterns** beside Path, Changes, Glossary and Tests.
+The Changes panel's title gains **Patterns** beside Path, Changes, Concepts and Tests.
 It lists the patterns of the changeset, most departures first, each with its new and
 changed instances, their departures and their leaves. Hovering a pattern outlines the
 blocks that hold its instances, new and changed ones apart from the rest, since a
@@ -477,9 +477,6 @@ a review.
 
 ### 7.6 Elsewhere
 
-- In the glossary, an added type that is an instance of a pattern names it, and
-  opens it in the details panel. One that is an instance of a pattern new in this
-  change names that pattern too, and opens the Patterns switch.
 - In the new concepts notice, an `unsorted` type that is an instance of a pattern
   names the leaf of its nearest example, and placement receives that leaf as a hint.
   The hint names the pattern the type would be reported under, and its nearest
@@ -513,7 +510,7 @@ The facts gain `traits` on each type and aggregate `externalRefs` by referenced 
 as section 3.3 describes, and list the patterns found among their types as
 `patterns`, each with its norms and the mean number of norms its own instances lack, so that the check and the changeset read them from one place, and their declarations gain `attributes`, as section 3.4
 does. The map schema gains `patterns`. The changeset gains `Patterns` and
-`NewPatterns`, the path gains pattern steps, the glossary's terms gain `patterns`, and
+`NewPatterns`, the path gains pattern steps, and
 a changeset published as an artifact carries all of it, since none of it needs the
 server. Claude's names arrive as narrative events, which carry a `name` for a
 pattern, so a published changeset names its patterns from their first keys.
@@ -616,7 +613,7 @@ Each phase ends with the tool usable, and with tests that state its new behavior
    in the changeset, and the compare view with its member alignment and picker.
 4. **The Patterns switch and Claude's names.** The switch with its badges, block
    outlines and patterns new in this change, Claude's names and purposes, and the
-   glossary's and placement's use of patterns.
+   placement's use of patterns.
 5. **Member norms.** Declarations' attributes, role members, member norms and their
    departures, in the details panel, on the path and on the compare view's rows. It
    comes last because it needs the compare view to show what a member norm cannot,

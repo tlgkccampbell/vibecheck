@@ -17,9 +17,9 @@ Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull
 all five of its phases are built: reviewed files and the full diff, opening pull requests,
 reading the discussion, writing, and checks in detail.
 Directing the reviewer's attention, with decisions and their consequences, semantic
-triviality, a reading path, new concepts and a glossary, is designed in
+triviality, a reading path, new concepts and a Concepts panel, is designed in
 [docs/attention.md](docs/attention.md); its first four phases, decisions and their
-consequences, semantic triviality, the reading path and the glossary, are built.
+consequences, semantic triviality, the reading path and the Concepts panel, are built.
 Tests in a review are designed in [docs/tests.md](docs/tests.md); all three of its
 phases, test types, tests on decisions and test signals, are built.
 Patterns, the roles many types play, such as controllers, handlers and consumers, and the
@@ -29,7 +29,7 @@ comparison of a new instance with the existing ones, are designed in
 pattern and counts its departures, the pattern's norms in the details panel, a step on the reading path for
 each instance that departs, a compare view that sets an instance beside its nearest or typical example, member
 by member, a Patterns switch that lists the patterns, outlines their blocks and lists the patterns new in a change,
-Claude's names and purposes for patterns, and patterns in the glossary and as hints for placing unsorted types.
+Claude's names and purposes for patterns, and patterns as hints for placing unsorted types.
 
 ## Layout
 
@@ -310,16 +310,18 @@ every file it names is reviewed. The forward arrow opens the next unread step, a
 the back arrow returns to the step before. The bar counts the steps read beside the
 files.
 
-The **Glossary**, a third face of the same panel, lists the names the change introduces:
-added types and members, renamed declarations as "`Old` is now `New`", parts added to
-the map, and assemblies referenced for the first time. The terms are grouped by block
-and the most used come first, and each says where it is declared, how often it is used
-and where first outside its own type, and which decision introduced it, each opening in
-the leaf view. A term shows its documentation summary, and one without says so, which
-in code a model wrote is worth a look; when Claude is available it writes a one-sentence
-definition in its place, checked to cite the declaring file and marked as Claude's. A
-block's details panel lists its own terms. In every diff, an introduced name carries a
-dotted underline, hovering it shows its entry, and clicking it opens the Glossary.
+**Concepts**, a third face of the same panel, lists the concepts the change touches:
+runs of words, such as "Command Handler", that the names of several unrelated types
+share. A word that one type holds, or one type and the types named after it, is not a
+concept, and neither is a word such as "Helper" that names nothing on its own. Concepts
+new in the change come first, and each lists the types the change added or changed
+under it, opening in the leaf view, with the other types on request. A concept that a
+type's whole name spells, such as "Consumer" for `IConsumer`, shows that type's
+documentation; when Claude is available it defines the others in one sentence, checked
+to cite the files of the types it was shown and marked as Claude's. A block's details
+panel lists the concepts its own changed types hold. In every diff, a concept within the
+name of a type in a changed line carries a dotted underline, hovering it shows its
+entry, and clicking it opens Concepts.
 
 Tests are never drawn on the map. The map's `tests` list names the test types, which
 bind to no block and create no edges, and each is placed by its **subject**, the type

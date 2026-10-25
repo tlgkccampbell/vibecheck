@@ -44,10 +44,7 @@ public static class PatternChanges
         Func<IReadOnlyCollection<string>, IReadOnlyDictionary<string, string>>? read = null)
     {
         if (baseFacts.Patterns.Count == 0) return [];
-        var leafAtBase = baseFacts.Types.ToDictionary(t => t.Name, t => t.Leaf, StringComparer.Ordinal);
-        var changed = files.Where(f => f.Status != "unchanged").Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
-        string? StatusOf(TypeFact t) =>
-            !leafAtBase.TryGetValue(t.Name, out var leaf) ? "added" : leaf != t.Leaf || t.Files.Any(changed.Contains) ? "changed" : null;
+        var statusOf = TouchedTypes.StatusOf(baseFacts, files);
 
         var generated = headFacts.Files.Where(f => f.Generator is not null).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
         var candidates = PatternDiscovery.Candidates(headFacts.Types, generated);
@@ -59,7 +56,7 @@ public static class PatternChanges
         var reported = new Dictionary<string, List<PatternInstance>>(StringComparer.Ordinal);
         foreach (var type in candidates)
         {
-            if (StatusOf(type) is not { } status) continue;
+            if (statusOf(type) is not { } status) continue;
             var of = baseFacts.Patterns.Where(p => instances[p.Id].Contains(type)).ToList();
             foreach (var p in PatternDiscovery.ReportedUnder(of))
             {
@@ -86,7 +83,7 @@ public static class PatternChanges
 
         // The examples of every reported instance, and then the texts of every file that declares a type the patterns show,
         // read at once.
-        var added = candidates.Where(t => StatusOf(t) == "added").Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+        var added = candidates.Where(t => statusOf(t) == TouchedTypes.Added).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         var typeOf = candidates.ToDictionary(t => t.Name, StringComparer.Ordinal);
         var shown = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var p in baseFacts.Patterns.Where(p => reported.ContainsKey(p.Id)))

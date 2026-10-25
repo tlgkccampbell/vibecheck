@@ -58,21 +58,6 @@ public class PatternNamingTests
     }
 
     [Fact]
-    public void AnAddedTypeThatAPatternReportsNamesItInTheGlossary()
-    {
-        var before = Consumers(3);
-        var cs = Snippets.Changeset(before, new Dictionary<string, string>(before)
-        {
-            ["A/C4.cs"] = Consumer(4), ["A/H1.cs"] = Handler("H1"), ["A/H2.cs"] = Handler("H2"), ["A/H3.cs"] = Handler("H3"),
-        });
-        var term = Assert.Single(cs.Glossary, t => t.Symbol == "A.C4");
-        Assert.Equal(["implements:A.IConsumer<>"], term.Patterns!);
-        Assert.Null(Assert.Single(cs.Glossary, t => t.Symbol == "A.C4.Consume").Patterns);
-        // A pattern new in the change names its instances too.
-        Assert.Equal(["implements:A.IHandler<>"], Assert.Single(cs.Glossary, t => t.Symbol == "A.H1").Patterns!);
-    }
-
-    [Fact]
     public void ClaudeNamesEachPatternAfterTheSummaryUnlessTheMapNamesItAndTheRequestIsTheSameForEveryHeadOfOneBase()
     {
         var before = Consumers(3);

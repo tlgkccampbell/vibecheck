@@ -302,22 +302,28 @@
   .step-file { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
   .step-file.done .link { color: var(--muted); text-decoration: line-through; }
   .step-files .btn { align-self: flex-start; margin-top: 4px; font-size: 12px; }
-  /* The Glossary panel and the term entries it shares with the tooltip on an introduced name in a diff. */
+  /* The Concepts panel and the term entries it shares with the tooltip on a term in a diff. */
   .glossary li { padding: 5px 6px; border-radius: 3px; }
   .glossary li.current { background: var(--bg); box-shadow: inset 2px 0 0 var(--accent); }
   .term-entry { font-size: 12.5px; line-height: 1.4; }
   .term-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-  .term-head code, .term-name { font-family: var(--mono); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
-  .term-kind { flex: none; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .term-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
   .term-block { margin-left: auto; color: var(--muted); font-size: 11.5px; }
   .term-text { margin: 2px 0 0; }
   .term-text.undocumented { color: var(--warn); font-style: italic; }
   .term-text .by { font-style: normal; }
-  .term-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; }
-  .term-meta .link { font-family: inherit; font-size: inherit; }
+  .term-touched { margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+  .term-touched .st-added, .term-type.st-added { color: var(--added); }
+  .term-touched .st-changed, .term-type.st-changed { color: var(--modified); }
+  .term-types { margin: 2px 0 2px; }
+  .term-group { margin-top: 4px; }
+  .term-group-name { color: var(--muted); font-size: 11px; }
+  .term-group-types { display: flex; flex-wrap: wrap; gap: 1px 12px; }
+  .term-type { padding: 1px 0; border: 0; background: none; color: var(--fg); font: 500 12px var(--mono); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+  .term-type:hover { text-decoration: underline; }
+  .term-type:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .term-entry > .link { margin-top: 2px; font-size: 12px; }
   .glossary-section { margin: 10px 0; }
-  .glossary-section .row .term-kind { width: 54px; }
-  .glossary-section .row-name code { font-family: var(--mono); font-size: 12px; font-weight: 500; }
   .glossary-section > .link { margin-top: 4px; font-size: 12.5px; }
   .term { text-decoration: underline dotted var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; cursor: help; }
   .term-tip { position: fixed; z-index: 20; max-width: 420px; }
@@ -737,7 +743,7 @@
           <li>Changed edges carry labels and arrows. A change under 3 references or 1% is minor and unlabeled.</li>
           <li>Reviewed means every changed file beneath is set aside. A file whose edits touch only comments, whitespace or layout, and a file renamed without changes, start reviewed. Turn off Mute reviewed files to show them as they are.</li>
           <li>Other files holds the changed files that no type binds, such as project files, documents and workflows.</li>
-          <li>A dotted underline in a diff marks a name the change introduces. Hover it for its glossary entry, or click it to open the Glossary.</li>
+          <li>A dotted underline in a changed line marks a concept within the name of a type, such as Command Handler in CreateOrderCommandHandler. Hover it for its entry, or click it to open Concepts.</li>
           <li>Hover a block to trace its edges.</li>
         </ul>
       </details>
