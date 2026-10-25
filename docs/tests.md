@@ -47,7 +47,8 @@ it.
    edges. The Other files block no longer holds test files.
 2. A decision's header gains a line on its tests, such as "referenced by 6 tests
    directly and 31 through helpers: 1 added, 2 changed", or "no test references it"
-   for a public decision. The line names the changed test methods. Its consequence
+   for a public decision. The line names up to two changed test methods and counts
+   the rest. Its consequence
    count names the tests it reaches apart from the rest: "14 consequences in 9 files,
    and 4 in tests".
 3. The path's first tier holds a step for each test type with a test signal of
@@ -191,9 +192,10 @@ change: `added`, `removed`, `changed` when a hunk touches its lines, or `unchang
 
 The decision's header in the leaf view counts the direct and helper references apart,
 since a shared fixture that builds the whole application would otherwise make every
-decision "referenced by 400 tests". It counts the methods by status and names the
-changed ones, since a test method's name, such as `Require_Throws_WhenExpired`, is
-often the sentence a reviewer needs. Each count opens a list of the methods in the
+decision "referenced by 400 tests". It counts the methods by status and names up to
+two changed ones, since a test method's name, such as `Require_Throws_WhenExpired`, is
+often the sentence a reviewer needs. It counts the rest as "and 28 more", since a
+change to many tests would otherwise push the code down the page. Each count opens a list of the methods in the
 details panel, and hovering a method referenced through a helper names the helper. A
 public decision, in the sense of attention.md section 4.1, that no test method
 references at either end says "no test references it". That line states what the

@@ -153,9 +153,12 @@ In the leaf view, a decision's hunk is drawn with a header: the kind of change, 
 declaration, the public mark where it applies, and "n consequences in m files,
 across k blocks", with its consequences in test files counted apart as ", and 4 in
 tests". The header also says which test methods reference the decision, directly and
-through helpers, and names the changed ones, or says "no test references it" for a
-public decision that none does, as [tests.md](tests.md) section 5.1 describes; the
-counts open the lists of the methods in the details panel. Consequences are collapsed to one line each, with "follows from"
+through helpers, and names up to two of the changed ones and counts the rest, or says
+"no test references it" for a public decision that none does, as [tests.md](tests.md)
+section 5.1 describes; the counts open the lists of the methods in the details panel.
+The header stays one line of bounded length that counts and does not list, so that it
+never pushes the code down the page; every list and every action on a decision is in
+the details panel. Consequences are collapsed to one line each, with "follows from"
 and the decision's declaration as a link, and open on a click like a reviewed file's
 diff. A file whose hunks are all consequences sorts after files with decisions and
 before reviewed files, and its chip says `consequence`.
@@ -181,7 +184,7 @@ that draws the source and the reach as separate blocks, unless the level on scre
 already does. A decision in `shared.kernel` with consequences in six blocks is a
 change whose reach the map was built to show.
 
-A decision's header offers **Mark consequences reviewed**. It marks every file whose
+A decision's details panel offers **Mark consequences reviewed**. It marks every file whose
 changed hunks are all consequences of this decision, or trivial, and reports how many
 it marked and how many it left because they also carry other edits. A reviewed mark
 is a property of a file, as pull-requests.md section 5.2 defines it, and this design

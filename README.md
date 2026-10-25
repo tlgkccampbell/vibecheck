@@ -299,7 +299,7 @@ with the number of its changed test files. A change of tests alone opens there.
 pattern that names only test projects, which belongs in `tests`.
 
 A decision's header says which tests reference it, as "referenced by 6 tests directly
-and 31 through helpers: 1 added, 2 changed", and names the changed test methods, or
+and 31 through helpers: 1 added, 2 changed", and names up to two changed test methods, or
 says "no test references it" for a public decision that none does. A test reaches a
 declaration through a helper when a member of a test type that it calls, such as a
 builder, references it; calls are followed through test code and never into the
