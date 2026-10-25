@@ -577,13 +577,40 @@ public sealed class ReviewServer : IAsyncDisposable
     {
         var result = review.Result;
         if (result is null || result.Info.MapKind != "generated") return Results.BadRequest(new { message = "Only a generated map can be saved." });
-        var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
-        var relative = result.Target.Root == "." ? MapLocator.FileName : result.Target.Root + "/" + MapLocator.FileName;
+        var (top, relative) = MapFile(result);
         var path = Path.Combine(top, relative);
         if (File.Exists(path)) return Results.Conflict(new { message = $"{relative} already exists. Delete it, or compare it with the generated map, before saving." });
         File.WriteAllText(path, Format.MapWriter.Write(result.Changeset.Map));
         options.Log?.Invoke($"  {review.Id} saved the generated map to {relative}");
-        return Results.Json(new { message = $"Saved {relative}. Commit it to make it the repository's map." }, FactsJson.Options);
+        // The page previews the note, and the file it goes in, before anything is written.
+        var file = AgentNote.Target(top);
+        var note = new { file, present = AgentNote.IsPresent(top), create = !File.Exists(Path.Combine(top, file)), text = AgentNote.Text(relative) };
+        return Results.Json(new { message = $"Saved {relative}. Commit it to make it the repository's map.", note }, FactsJson.Options);
+    }
+
+    /// <summary>
+    /// Adds the note that names the saved map, and the guide for keeping it in sync, to the instructions file at the
+    /// repository's top that <see cref="AgentNote.Target"/> chooses. The map must be saved first, and the request
+    /// names the file the page previewed, so that a file that changed since then is not written unseen.
+    /// </summary>
+    private IResult AddNote(Review review, string? previewed)
+    {
+        if (review.Result is not { } result) return Results.NotFound();
+        var (top, relative) = MapFile(result);
+        if (!File.Exists(Path.Combine(top, relative))) return Results.BadRequest(new { message = $"Save {relative} before adding the note about it." });
+        var file = AgentNote.Target(top);
+        if (previewed != file) return Results.Conflict(new { message = $"The note now belongs in {file}, not {previewed}. Save the map again to preview it." });
+        var created = !File.Exists(Path.Combine(top, file));
+        if (!AgentNote.AddTo(top, file, relative)) return Results.Json(new { message = "The repository's instructions already tell agents about the map." }, FactsJson.Options);
+        options.Log?.Invoke($"  {review.Id} added the map's note to {file}");
+        return Results.Json(new { message = $"{(created ? "Created" : "Added the note to")} {file}. Commit it with the map." }, FactsJson.Options);
+    }
+
+    /// <summary>Returns the repository's top and the path, relative to it, at which a review's map is saved.</summary>
+    private (string Top, string Relative) MapFile(ReviewResult result)
+    {
+        var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
+        return (top, result.Target.Root == "." ? MapLocator.FileName : result.Target.Root + "/" + MapLocator.FileName);
     }
 
     /// <summary>
@@ -718,8 +745,10 @@ public sealed class ReviewServer : IAsyncDisposable
                     return Results.Accepted();
                 case "save":
                     return SaveMap(review);
+                case "note":
+                    return AddNote(review, body?.File);
                 default:
-                    return Results.BadRequest(new { message = "the action must be switch or save" });
+                    return Results.BadRequest(new { message = "the action must be switch, save or note" });
             }
         });
 
@@ -1061,7 +1090,7 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private sealed record BeginBody(string? Range, string? Label, int? Pull, string? From);
 
-    private sealed record MapBody(string? Action);
+    private sealed record MapBody(string? Action, string? File);
 
     private sealed record NarrativesBody(string? Key);
 

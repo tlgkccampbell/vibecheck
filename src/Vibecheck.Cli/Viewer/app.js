@@ -4038,8 +4038,8 @@
       box.replaceChildren(...kids, el("button", { class: "close", title: "Dismiss", "aria-label": "Dismiss", onclick: () => { dismissed = shown; box.hidden = true; } }, "×"));
       box.hidden = false;
     }
-    async function post(action) {
-      const r = await fetch(`${api}/map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+    async function post(action, extra = {}) {
+      const r = await fetch(`${api}/map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }) });
       return { ok: r.ok, body: await r.json().catch(() => ({})) };
     }
     function switchMap() {
@@ -4047,9 +4047,23 @@
       show("busy", "switch", spinner(), el("span", {}, "Switching to the concept map…"));
       post("switch");
     }
+    // A saved map is offered a note in the repository's agent instructions, which tells coding agents to keep it in
+    // sync. The note is previewed, with the file it goes in, before anything is written.
     async function save() {
       const r = await post("save");
-      show(r.ok ? "info" : "error", "save", el("span", {}, r.body.message || "The map could not be saved."));
+      const note = r.ok && r.body.note && !r.body.note.present ? r.body.note : null;
+      show(r.ok ? "info" : "error", "save", el("span", {}, r.body.message || "The map could not be saved."),
+        ...(note ? [el("button", { class: "btn", onclick: () => previewNote(note) }, `Add a note to ${note.file}…`)] : []));
+    }
+    function previewNote(note) {
+      const where = note.create ? `Creates ${note.file} with this note` : `Adds this note to the end of ${note.file}`;
+      show("info", "preview", el("span", {}, `${where}, which tells coding agents to keep the map in sync:`,
+        el("pre", { class: "note-preview" }, note.text)),
+        el("button", { class: "btn", onclick: () => addNote(note.file) }, note.create ? `Create ${note.file}` : `Add to ${note.file}`));
+    }
+    async function addNote(file) {
+      const r = await post("note", { file });
+      show(r.ok ? "info" : "error", "note", el("span", {}, r.body.message || "The note could not be added."));
     }
     // Shows what the page has when no job has news: the generated map's version and the save action, or nothing.
     function settle() {

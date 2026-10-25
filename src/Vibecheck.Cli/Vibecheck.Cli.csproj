@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Viewer\*" LogicalName="viewer/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\docs\keeping-the-map-in-sync.md" LogicalName="guide.md" />
   </ItemGroup>
 
   <ItemGroup>

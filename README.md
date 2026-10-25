@@ -7,7 +7,10 @@ the code and reports it per pair of components, and a viewer renders changesets 
 schematic that reviewers drill into. The map is proposed by a language model from a
 listing of the code's types and verified against the dependency graph.
 
-The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). The one-step review
+The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). Coding agents that change
+code in a repository with a `vibecheck.json` follow
+[docs/keeping-the-map-in-sync.md](docs/keeping-the-map-in-sync.md), which `vibecheck guide`
+prints; see [Telling coding agents about the map](#telling-coding-agents-about-the-map). The one-step review
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
 Pull request reviews and reviewed files are in [docs/pull-requests.md](docs/pull-requests.md);
@@ -182,6 +185,7 @@ vibecheck fmt       [--map <vibecheck.json>] [--check]
 vibecheck facts     [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
 vibecheck diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
 vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
+vibecheck guide
 ```
 
 The map defaults to `./vibecheck.json`, and the layout file sits beside it. The
@@ -217,6 +221,30 @@ behind one edge.
    type name where it does not.
 4. `vibecheck check` answers with cycles, unsorted types and, in the facts, the
    references inside and across each node. `vibecheck why a b` explains an edge. Revise and repeat.
+
+## Telling coding agents about the map
+
+A map stays useful only while changes keep it in sync, and in a repository where coding
+agents write the changes, the agents have to know that. `vibecheck guide` prints the
+guide for them, [docs/keeping-the-map-in-sync.md](docs/keeping-the-map-in-sync.md),
+which is embedded in the tool so that it always matches the installed version. A short
+note in the repository's `CLAUDE.md` or `AGENTS.md` sends agents to it:
+
+```markdown
+## Architecture map
+
+This repository has an architecture map, `vibecheck.json`, that the vibecheck review tool draws changes with.
+Before finishing a change that adds, moves, renames or deletes types, namespaces, projects or package
+references, run `vibecheck guide` and follow it to keep the map in sync.
+```
+
+`vibecheck init` prints this note, with the map's path, after writing a map inside the
+repository. In the viewer, **Save to repository** offers to add the note when neither
+`CLAUDE.md` nor `AGENTS.md` at the repository's top mentions `vibecheck guide`. The note
+goes in `AGENTS.md` when `CLAUDE.md` imports it with an `@AGENTS.md` line or is missing
+while `AGENTS.md` exists, and in `CLAUDE.md` otherwise. The viewer shows the note and the
+file it goes in before writing anything. It appends the note, or creates the file, and
+changes nothing else; commit it with the map.
 
 ## Viewer
 

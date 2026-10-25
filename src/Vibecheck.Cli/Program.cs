@@ -28,6 +28,7 @@ public static class Program
           vibecheck facts     [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
           vibecheck diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
           vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
+          vibecheck guide
 
         vibecheck with no command, or vibecheck review, opens the viewer in the browser on a range of the repository
         that the current directory is in. Without a range it opens on a picker. The map is --map when given, then the
@@ -39,6 +40,8 @@ public static class Program
         which the map's solution path and every reported path are relative to, defaults to the map's
         directory; pass --root when the map is kept outside the repository. changeset takes two
         revisions or one range (a..b, or a...b for a pull request), and the head defaults to HEAD.
+
+        vibecheck guide prints the guide for coding agents: what the map is and how to keep it in sync with a change.
         """;
 
     public static async Task<int> Main(string[] args)
@@ -60,6 +63,7 @@ public static class Program
                 "facts" => await FactsAsync(options),
                 "diff" => Diff(positional, options),
                 "changeset" => await ChangesetAsync(positional, options),
+                "guide" => Guide(),
                 "--help" or "-h" or "help" => Help(),
                 _ => Unknown(args[0]),
             };
@@ -77,6 +81,8 @@ public static class Program
     }
 
     private static int Help() { Console.WriteLine(Usage); return 0; }
+
+    private static int Guide() { Console.Out.Write(AgentNote.Guide()); return 0; }
 
     private static int Unknown(string command)
     {
@@ -153,7 +159,18 @@ public static class Program
         var factsPath = options.GetValueOrDefault("facts", Path.Combine(Path.GetDirectoryName(mapPath)!, "vibecheck.facts.json"));
         File.WriteAllText(factsPath, FactsJson.Serialize(facts));
         Console.WriteLine($"wrote {factsPath}");
-        return Report(facts, strict: false);
+        var code = Report(facts, strict: false);
+
+        // A map inside the repository can be named to the coding agents that work there.
+        var mapInRoot = Path.GetRelativePath(root, mapPath);
+        if (!mapInRoot.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(mapInRoot))
+        {
+            Console.WriteLine();
+            Console.WriteLine($"To have coding agents keep the map in sync, add this to the repository's {AgentNote.Claude} or {AgentNote.Agents}:");
+            Console.WriteLine();
+            Console.Write(AgentNote.Text(mapInRoot.Replace(Path.DirectorySeparatorChar, '/')));
+        }
+        return code;
     }
 
     private static async Task<int> UnitsAsync(Dictionary<string, string> options)
