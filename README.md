@@ -143,8 +143,8 @@ Blocks with unresolved threads carry a count. Your pending review is read back, 
 comments are marked pending. Bodies are GitHub's HTML, sanitized again in the page,
 which runs under a Content-Security-Policy.
 
-Click a line number in a diff to comment on that line, and Shift-click another on the same
-side to comment on the lines between. **Add single comment** posts at once, and **Start a
+Click a line number in a diff to comment on that line. Drag across line numbers, or
+Shift-click another on the same side, to comment on a range of lines. **Add single comment** posts at once, and **Start a
 review** gathers comments in a pending review, as on GitHub. Threads take replies and can be
 resolved, comment boxes preview through GitHub's Markdown renderer, and **Suggest change**
 fills in a suggestion block. **Review** in the bar submits the pending review as a comment,

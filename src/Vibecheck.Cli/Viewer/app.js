@@ -1268,15 +1268,16 @@
     const body = el("tbody");
     const lit = highlightHunk(path, hunk.lines);
     const text = (i) => i === null ? null : hunk.lines[i][1];
-    // While the pull request takes comments, a line number selects its line to comment on, and Shift extends the selection.
+    // While the pull request takes comments, a line number selects its line to comment on. Dragging from a line number
+    // or Shift-clicking one selects a range of lines on the same side of the hunk, as on GitHub.
     const writable = canWrite() && index !== undefined;
     const c = state.compose && state.compose.path === path && state.compose.hunk === index ? state.compose : null;
     const picked = (side, i) => c && c.side === side && i !== null && i >= c.first && i <= c.last;
     const number = (side, i, n, kind) => {
       const td = el("td", { class: "ln " + kind + (writable && i !== null ? " pick" : "") + (picked(side, i) ? " picked" : "") }, i === null ? "" : String(n));
       if (writable && i !== null) {
-        td.title = "Comment on this line. Shift-click to select a range.";
-        td.addEventListener("click", (ev) => pick(path, index, side, i, ev.shiftKey));
+        td.title = "Comment on this line. Drag or Shift-click to select a range.";
+        td.addEventListener("mousedown", (ev) => startPick(ev, table, path, index, side, i));
       }
       return td;
     };
@@ -1287,7 +1288,7 @@
       if (picked("LEFT", row.l)) left.classList.add("picked");
       if (picked("RIGHT", row.r)) right.classList.add("picked");
       if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) c.number = c.side === "LEFT" ? la : lb;
-      body.append(el("tr", {}, number("LEFT", row.l, la, lk), left, number("RIGHT", row.r, lb, rk), right));
+      body.append(el("tr", { "data-l": row.l, "data-r": row.r }, number("LEFT", row.l, la, lk), left, number("RIGHT", row.r, lb, rk), right));
       if (row.l !== null) la++;
       if (row.r !== null) lb++;
       if (c && (c.side === "LEFT" ? row.l : row.r) === c.last) body.append(el("tr", { class: "thread-row" }, el("td", { class: "thread-cell", colspan: 4 }, lineComposer(path, hunk))));
@@ -1336,6 +1337,7 @@
     if (d.public) head.append(el("span", { class: "public-mark", title: "Callers outside the solution may exist that the changeset cannot show." }, "public"));
     head.append(el("button", { class: "link", onclick: () => selectDecision(d.id), title: "List the consequences by block and mark them on the map" },
       d.consequences.length ? reachText(d) : "no consequences"));
+    head.append(el("button", { class: "link", onclick: () => revealDecision(d), title: "Select this decision and show it in the Changes panel" }, "Show in Changes"));
     if (d.consequences.length) head.append(el("button", { class: "btn", onclick: () => markConsequences(d) }, "Mark consequences reviewed"));
     if (state.decisionNote && state.decisionNote.id === d.id) head.append(el("span", { class: "file-note" }, state.decisionNote.text));
     return head;
@@ -1372,6 +1374,15 @@
     const t = table();
     t.dataset.hunk = key;
     return t;
+  }
+
+  // Selects a decision and scrolls the Changes panel to its row in the list of decisions, switching the panel from the
+  // path or the glossary to the changes. The panel scrolls once it is drawn again.
+  function revealDecision(d) {
+    state.decision = d.id;
+    state.panel = "changes";
+    state.revealDecision = d.id;
+    redraw();
   }
 
   // Selects a decision, or clears the selection when it is already selected or when the identifier is null.
@@ -1426,7 +1437,7 @@
   // the blocks that hold them, each opening its hunk.
   function decisionPanel(d) {
     const box = el("section", { class: "decision-panel" });
-    box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Decision"), el("button", { class: "link", onclick: () => selectDecision(null) }, "Close")));
+    box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Decision", help(HELP.decision)), el("button", { class: "link", onclick: () => selectDecision(null) }, "Close")));
     box.append(el("p", { class: "ident" }, el("button", { class: "link", onclick: () => openHunk(d.file, d.hunk) }, `${d.file} · hunk ${d.hunk + 1}`),
       loc().leaf && d.consequences.length ? el("span", {}, " · ", el("button", { class: "link", onclick: () => showDecision(d) }, "Show reach on the map")) : null));
     for (const x of d.declarations) {
@@ -1544,7 +1555,7 @@
     // Changed types with their files and hunks, the reviewed ones last.
     const types = typesOf(id);
     const touched = byRank(types.filter(typeTouched), typeRank);
-    wrap.append(el("h3", {}, touched.length ? `${touched.length} of ${types.length} types changed` : `No changes among ${types.length} types`));
+    wrap.append(el("h3", {}, touched.length ? `${touched.length} of ${types.length} types changed` : `No changes among ${types.length} types`, help(HELP.types)));
     for (const t of touched) {
       const ts = typeStatus(t);
       const card = el("section", { class: "typecard" + statusClass(ts) });
@@ -1575,6 +1586,7 @@
       return box;
     };
     const cols = el("div", { class: "edge-cols" }, col("Uses", out, (e) => e.to), col("Used by", inn, (e) => e.from));
+    cols.querySelector("h3").append(help(HELP.uses));
     wrap.append(cols);
     if (self) {
       const d = el("details", {}, el("summary", {}, `Internal references: ${self.base === self.head ? self.head : self.base + " → " + self.head}`));
@@ -1901,7 +1913,7 @@
   function glossarySection(id) {
     const terms = termsUnder(id);
     if (!terms.length) return null;
-    const box = el("section", { class: "glossary-section" }, el("h3", {}, `Glossary: ${plural(terms.length, "new name", "new names")}`));
+    const box = el("section", { class: "glossary-section" }, el("h3", {}, `Glossary: ${plural(terms.length, "new name", "new names")}`, help(HELP.terms)));
     const ul = el("ul", { class: "list" });
     for (const t of terms.slice(0, 6)) {
       ul.append(el("li", {}, el("button", { class: "row", onclick: () => openTerm(t), title: t.summary || (isDeclarationTerm(t) ? "No documentation." : "") },
@@ -1959,14 +1971,63 @@
     if (!tip || !span || !span.isConnected) { termTip = null; if (tip) tip.hidden = true; return; }
     const terms = span.dataset.term.split(" ").map((k) => TERMS.get(k)).filter(Boolean);
     tip.replaceChildren(...terms.slice(0, 3).map((t) => termEntry(t, true)));
+    showBeside(tip, span);
+  }
+  // Shows a fixed tooltip below an element, or above it when there is no room below, kept inside the window.
+  function showBeside(tip, target) {
     tip.hidden = false;
-    const r = span.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const r = target.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
     const top = r.bottom + 6 + h > window.innerHeight ? r.top - 6 - h : r.bottom + 6;
     tip.style.left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4)) + "px";
     tip.style.top = Math.max(4, top) + "px";
   }
+  // Shows the explanation of a question mark made by help in a tooltip while the pointer is over the mark or the mark
+  // has the keyboard focus. Scrolling, a click elsewhere and Escape hide it.
+  function installHelpTips() {
+    const tip = el("div", { class: "tip help-tip", role: "tooltip", hidden: true });
+    document.body.append(tip);
+    let shown = null;
+    const show = (mark) => {
+      if (mark === shown) return;
+      shown = mark;
+      tip.textContent = mark.dataset.help;
+      showBeside(tip, mark);
+    };
+    const hide = () => { shown = null; tip.hidden = true; };
+    const markAt = (ev) => ev.target instanceof Element ? ev.target.closest(".help[data-help]") : null;
+    document.addEventListener("mouseover", (ev) => { const m = markAt(ev); if (m) show(m); else if (shown && shown !== document.activeElement) hide(); });
+    document.addEventListener("focusin", (ev) => { const m = markAt(ev); if (m) show(m); else if (shown) hide(); });
+    document.addEventListener("focusout", (ev) => { if (markAt(ev) === shown) hide(); });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && shown) { hide(); ev.stopImmediatePropagation(); } });
+    document.addEventListener("scroll", () => { if (shown) hide(); }, { capture: true, passive: true });
+  }
 
   const PANEL_TITLE = { path: "Path", changes: "Changes", glossary: "Glossary" };
+  // The explanations that the question marks beside the page's major sections show on hover, by section.
+  const HELP = {
+    path: "The reading path lists the parts of the change in the order to read them. Read first holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
+      "Then holds the other changed blocks. Set aside counts the consequences, trivial files and files already reviewed. A step is read once all its files are reviewed.",
+    changes: "This panel lists every changed block and its changed files. Below them are the decisions, the edges whose reference counts changed, and the changes to the map itself.",
+    glossary: "The Glossary lists the names this change introduces, such as new types, new members and renamed declarations, grouped by block. Click a name to go to its declaration. " +
+      "A name without a doc comment gets a definition from Claude.",
+    decisions: "A decision is a hunk that adds, removes, renames or changes the signature of a declaration. Its consequences are other hunks whose changes all follow from it, such as updated call sites. " +
+      "Decisions that reach the most blocks come first. Hover a row to see its reach on the map, and click it to go there.",
+    edges: "An edge is the set of references from one block to another. This list shows the edges whose reference counts changed, with new and removed edges first. Click an edge to show it on the map.",
+    map: "This list shows the blocks and views that were added, removed or changed in the map, and the types that moved to a different block.",
+    decision: "This section shows the selected decision's declarations and the hunks that follow from it, grouped by block. Click a hunk to open it.",
+    narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
+    terms: "These are the names this block introduces. The Glossary lists the names from the whole change.",
+    types: "These are the types in this block whose files changed, with the hunks of each file. Files with decisions or their own edits come first, " +
+      "then files that only follow from decisions, then reviewed files.",
+    uses: "Uses lists the blocks this block references, and Used by lists the blocks that reference it. Each count is the number of references at base and at head. " +
+      "Click a row to see the type pairs behind it.",
+    threads: "These review threads on files in this block are not resolved yet. Click one to go to its lines.",
+    problems: "The pull request's checks reported these problems on lines in this block's files. Click one to go to its line.",
+    checks: "These are the pull request's checks on its latest commit. A failing check lists the problems it found and can show its log.",
+  };
+  // Returns a question mark that shows an explanation of a section of the page on hover or focus, in the tooltip that
+  // installHelpTips draws.
+  function help(text) { return el("span", { class: "help", tabindex: 0, "data-help": text, "aria-label": text }, "?"); }
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
@@ -1978,11 +2039,11 @@
     if (PATH.length || GLOSSARY.length) {
       if (state.panel === undefined) state.panel = PATH.length ? "path" : "changes";
       const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => { state.panel = name; renderChanges(); } }, label);
-      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel]), el("span", { class: "seg", role: "tablist" },
+      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
         PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), GLOSSARY.length ? tab("glossary", "Glossary") : null)));
       if (state.panel === "path") { renderPath(box, head); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }
-    }
+    } else title.replaceChildren(PANEL_TITLE.changes, help(HELP.changes));
     const talk = openThreadsUnder(ROOT).length;
     if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
       el("input", { type: "checkbox", checked: state.opts.talk, onchange: (ev) => { state.opts.talk = ev.target.checked; renderChanges(); } }), ` Only unresolved threads (${talk})`));
@@ -1993,14 +2054,14 @@
     // it is drawn from and reaches, and a click selects it and shows it on the map.
     if (DECISION_LIST.length) {
       const t = hunkTally();
-      box.append(el("h3", {}, `Decisions: ${DECISION_LIST.length}`));
+      box.append(el("h3", {}, `Decisions: ${DECISION_LIST.length}`, help(HELP.decisions)));
       box.append(el("p", { class: "hint tally" }, `Of ${plural(t.total, "changed hunk", "changed hunks")}: ${t.decisions} ${t.decisions === 1 ? "is a decision" : "are decisions"}, ` +
         `${t.consequences} ${t.consequences === 1 ? "follows" : "follow"} from them, ${t.trivial} ${t.trivial === 1 ? "is" : "are"} trivial, ${t.other} ${t.other === 1 ? "is an edit" : "are edits"} on ${t.other === 1 ? "its" : "their"} own.`));
       const dl = el("ul", { class: "list scroll" });
       for (const d of DECISION_LIST) {
         const lead = leadOf(d), others = d.declarations.length - 1, r = reachOf(d);
         dl.append(el("li", {}, el("button", { class: "row decision-row" + (REVIEWED.has(d.file) && state.opts.mute ? " st-reviewed" : "") + (state.decision === d.id ? " current" : ""),
-          onclick: () => showDecision(d), onmouseenter: () => hoverDecision(d), onmouseleave: () => hoverDecision(null),
+          "data-decision": d.id, onclick: () => showDecision(d), onmouseenter: () => hoverDecision(d), onmouseleave: () => hoverDecision(null),
           title: `${d.file} · hunk ${d.hunk + 1}\n${CHANGE_TEXT[lead.change]} ${lead.symbol}` + (others ? ` and ${plural(others, "other", "others")}` : "") +
             (d.public ? "\nPublic: callers outside the solution may exist that the changeset cannot show." : "") },
           // The diamond is hollow for a public decision, since the row has no room for the word.
@@ -2009,9 +2070,15 @@
           el("span", { class: "row-meta" }, d.consequences.length ? `${d.consequences.length} in ${plural(r.blocks.size, "block", "blocks")}` : "none"))));
       }
       box.append(dl);
+      const shown = state.revealDecision && dl.querySelector(`[data-decision="${CSS.escape(state.revealDecision)}"]`);
+      if (shown) {
+        state.revealDecision = null;
+        shown.scrollIntoView({ block: "nearest" });
+        shown.classList.add("flash");
+      }
     }
 
-    box.append(el("h3", {}, `Edges: ${changedText(CHANGED_EDGES)}`));
+    box.append(el("h3", {}, `Edges: ${changedText(CHANGED_EDGES)}`, help(HELP.edges)));
     const ul = el("ul", { class: "list scroll" });
     const rank = (e) => (e.status === "added" || e.status === "removed" ? 1e9 : 0) + (isMinor(e) ? 0 : 1e6) + Math.abs(e.head - e.base);
     for (const e of CHANGED_EDGES.slice().sort((a, b) => rank(b) - rank(a))) {
@@ -2021,7 +2088,7 @@
     }
     box.append(ul);
 
-    box.append(el("h3", {}, "Map"));
+    box.append(el("h3", {}, "Map", help(HELP.map)));
     const s = CS.structural;
     if (!s.nodes.length && !s.views.length && !s.types.length) box.append(el("p", { class: "hint" }, "The map did not change, and no type moved between leaves."));
     const sl = el("ul", { class: "list" });
@@ -2385,6 +2452,22 @@
   }
 
   function up() { if (state.trail.length > 1) goTo(state.trail.length - 2); }
+  // Returns the trail of the page's home, where it opens without a location in the address: the top level's first
+  // view, or the top level's tree when it has no view.
+  function homeTrail() {
+    const view = viewsAt(ROOT)[0];
+    return view ? [{ level: ROOT }, { level: ROOT, view }] : [{ level: ROOT }];
+  }
+  // Goes to the page's home, as homeTrail gives it, from wherever the page is. When the trail already passes through
+  // the home, it goes back along the trail, as a breadcrumb does.
+  async function toTop() {
+    const home = homeTrail(), at = home.length - 1;
+    if (state.trail.length > at && locKey(state.trail[at]) === locKey(home[at])) { if (state.trail.length > home.length) goTo(at); return; }
+    rememberView();
+    state.trail = home; state.selected = null;
+    const m = await mount();
+    if (m) setViewBox(arrive(m));
+  }
 
   async function switchView(view) {
     rememberView();
@@ -2635,7 +2718,7 @@
     if (NARR.state === "off" || (key && key.startsWith("node:" + OTHER))) return null;
     const busy = key && NARR.pending.has(key);
     if (!n && !busy && NARR.state !== "writing" && NARR.state !== "waiting") return key && NARR.errors.has(key) ? el("p", { class: "warn" }, NARR.errors.get(key)) : null;
-    const box = el("section", { class: "narrative" }, el("h3", {}, "Why it changed"));
+    const box = el("section", { class: "narrative" }, el("h3", {}, "Why it changed", help(HELP.narrative)));
     if (n) {
       box.append(el("p", { class: "narrative-text" }, ...richText(n.text)));
       if (n.cites.length) {
@@ -2959,7 +3042,7 @@
       ul.append(el("li", {}, el("button", { class: "row", onclick: () => openThread(t), title: path },
         el("span", { class: "row-name" }, path.slice(path.lastIndexOf("/") + 1)), el("span", { class: "row-meta" }, threadLines(t)))));
     }
-    return el("div", {}, el("h3", {}, plural(open.length, "unresolved thread", "unresolved threads")), ul);
+    return el("div", {}, el("h3", {}, plural(open.length, "unresolved thread", "unresolved threads"), help(HELP.threads)), ul);
   }
 
   // Opens the Map tab on the diff that shows a thread, and scrolls to the thread.
@@ -3139,7 +3222,7 @@
       ul.append(el("li", {}, el("button", { class: "row", onclick: () => openNote(a), title: `${a.check.name}: ${a.message}` },
         el("span", { class: "row-name" }, path.slice(path.lastIndexOf("/") + 1)), el("span", { class: "row-meta" }, `${a.level.toLowerCase()} · line ${a.endLine}`))));
     }
-    return el("div", {}, el("h3", {}, plural(problems.length, "check problem", "check problems")), ul);
+    return el("div", {}, el("h3", {}, plural(problems.length, "check problem", "check problems"), help(HELP.problems)), ul);
   }
 
   // Returns how long a check ran, such as "1m 24s", or nothing when it has not finished.
@@ -3184,7 +3267,7 @@
       if (away.length) box.append(el("div", { class: "check-notes" }, ...away.map((a) => annotationBox(a, { away: true }))));
       list.append(box);
     }
-    return el("section", { class: "card" }, el("header", {}, el("b", {}, "Checks"),
+    return el("section", { class: "card" }, el("header", {}, el("b", {}, "Checks"), help(HELP.checks),
       el("span", { class: failing ? "verb bad" : "verb" }, failing ? `${failing} of ${checks.length} failing` : plural(checks.length, "check", "checks"))), list);
   }
 
@@ -3272,6 +3355,40 @@
     const box = el("div", { class: "composer" }, tools, area, preview, row);
     requestAnimationFrame(() => { if (opts.focus && box.isConnected) area.focus(); });
     return box;
+  }
+
+  // Starts selecting lines to comment on from a line number pressed in a hunk's table. With Shift, it extends the
+  // current selection at once. Otherwise the selection follows the pointer over the hunk's rows on the same side until
+  // the button is released, and only then draws the comment box, so that the page is drawn once per selection.
+  function startPick(ev, table, path, hunk, side, line) {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    if (ev.shiftKey) { pick(path, hunk, side, line, true); return; }
+    const key = side === "LEFT" ? "l" : "r", at = side === "LEFT" ? 0 : 2;
+    let last = line;
+    const show = () => {
+      const lo = Math.min(line, last), hi = Math.max(line, last);
+      for (const tr of table.tBodies[0].rows) {
+        if (tr.dataset[key] === undefined) continue;
+        const on = +tr.dataset[key] >= lo && +tr.dataset[key] <= hi;
+        tr.cells[at].classList.toggle("picked", on);
+        tr.cells[at + 1].classList.toggle("picked", on);
+      }
+    };
+    const over = (e) => {
+      const tr = e.target.closest && e.target.closest("tr");
+      if (tr && tr.parentElement === table.tBodies[0] && tr.dataset[key] !== undefined) { last = +tr.dataset[key]; show(); }
+    };
+    const up = () => {
+      document.removeEventListener("mouseover", over);
+      document.removeEventListener("mouseup", up);
+      state.compose = { path, hunk, side, first: Math.min(line, last), last: Math.max(line, last) };
+      redraw();
+    };
+    for (const td of document.querySelectorAll("table.diff td.picked")) td.classList.remove("picked");
+    document.addEventListener("mouseover", over);
+    document.addEventListener("mouseup", up);
+    show();
   }
 
   // Selects a line of a diff to comment on, or extends the selection to it with Shift on the same side of the same
@@ -3500,6 +3617,7 @@
     renderPull();
     installTip();
     installTermTips();
+    installHelpTips();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
     $("#mute").addEventListener("change", (ev) => { state.opts.mute = ev.target.checked; redraw(); });
@@ -3510,11 +3628,13 @@
     $("#externals").addEventListener("change", async (ev) => { rememberView(); state.opts.externals = ev.target.checked; const m = await mount(); if (m) setViewBox(arrive(m)); });
     $("#threshold").addEventListener("change", async (ev) => { rememberView(); state.opts.threshold = ev.target.value; const m = await mount(); if (m) setViewBox(arrive(m)); });
     $("#up").addEventListener("click", up);
+    $("#top").addEventListener("click", toTop);
     $("#fit").addEventListener("click", zoomToFit);
     document.addEventListener("keydown", (ev) => {
       // Keys typed into a text field or a list belong to it. A checkbox or button does not take Escape or the arrows.
       if (ev.target.matches("input:not([type=checkbox]):not([type=radio]), select, textarea") || state.tab !== "map") return;
       if (ev.key === "Escape" || ev.key === "Backspace") { ev.preventDefault(); up(); }
+      else if (ev.key === "Home") { ev.preventDefault(); toTop(); }
       else if (ev.key === "Enter" && state.selected && state.current) {
         const c = state.current.level.children.find((x) => x.key === state.selected);
         if (c) enter(c);
@@ -3544,8 +3664,7 @@
     }).observe($("#stage"));
     // Without a location in the address, the page opens on the top level's first view, or on the tree when it has none.
     const hash = decodeURIComponent((location.hash || "").slice(1));
-    const rootView = viewsAt(ROOT)[0];
-    const home = rootView ? { level: ROOT, view: rootView } : { level: ROOT };
+    const home = homeTrail().at(-1);
     // parseLoc reads an address it does not recognize as the top level, so only "root" itself asks for the components.
     const parsed = hash ? parseLoc(hash) : home;
     const start = parsed.level === ROOT && !parsed.view && hash !== ROOT ? home : parsed;
