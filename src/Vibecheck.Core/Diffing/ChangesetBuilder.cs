@@ -50,6 +50,7 @@ public static class ChangesetBuilder
             Hunks = signalled,
             Decisions = tested,
             Tests = tests,
+            Patterns = PatternChanges.Build(baseFacts, headFacts, files),
         };
         return changeset with { Path = ReadingPath.Plan(changeset, baseFacts.Levels, baseFacts.Views), Glossary = Glossary.Build(changeset, baseFacts, headFacts, declarations) };
     }

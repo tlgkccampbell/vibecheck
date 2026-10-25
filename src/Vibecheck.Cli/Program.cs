@@ -178,7 +178,7 @@ public static class Program
         return Report(facts, options.ContainsKey("strict"));
     }
 
-    /// <summary>Prints the warnings, the cycles per level and view, a summary line, and how the test types were placed. Returns the exit code.</summary>
+    /// <summary>Prints the warnings, the cycles per level and view, a summary line, how the test types were placed, and the patterns found. Returns the exit code.</summary>
     private static int Report(Facts facts, bool strict)
     {
         foreach (var w in facts.Warnings) Console.Error.WriteLine("warning: " + w);
@@ -202,6 +202,7 @@ public static class Program
         var unsortedText = unsorted > 0 ? $", {unsorted} unsorted" : "";
         Console.WriteLine($"ok: {facts.Types.Count} types in {leaves} leaves{unsortedText}{excluded}; {facts.Dependencies.Count} dependencies, {facts.LeafEdges.Count} leaf edges, {facts.Warnings.Count} warning(s)");
         if (facts.Tests.Types.Count > 0) Console.WriteLine("tests: " + TestTypes.Placement(facts.Tests));
+        foreach (var line in PatternDiscovery.Report(facts.Patterns)) Console.WriteLine(line);
         if (strict && facts.Warnings.Count > 0) { Console.WriteLine("strict: warnings are failures"); return 1; }
         return 0;
     }

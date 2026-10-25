@@ -4,8 +4,8 @@ namespace Vibecheck.Model;
 
 /// <summary>
 /// The architecture map: the checked-in description of a system's nodes, the code
-/// each leaf binds, the views that regroup leaves, the types the map excludes, and the
-/// types it reads as tests.
+/// each leaf binds, the views that regroup leaves, the types the map excludes, the
+/// types it reads as tests, and the patterns it names, declares or ignores.
 /// Edges are never part of the map; they are read from the code. See
 /// <c>docs/vibecheck-spec.md</c>.
 /// </summary>
@@ -27,6 +27,9 @@ public sealed class ArchitectureMap
     /// but that the analysis keeps as evidence about the system. See <c>docs/tests.md</c> section 3.1.
     /// </summary>
     public List<string> Tests { get; init; } = [];
+
+    /// <summary>Gets the entries that name, declare or ignore patterns, in the order written. See <c>docs/patterns.md</c> section 4.4.</summary>
+    public List<PatternSpec> Patterns { get; init; } = [];
 
     public SortedDictionary<string, NodeSpec> Nodes { get; init; } = new(StringComparer.Ordinal);
 
@@ -74,7 +77,7 @@ public sealed class ArchitectureMap
     /// <summary>Returns a deep copy of the map.</summary>
     public ArchitectureMap Clone()
     {
-        var copy = new ArchitectureMap { Version = Version, Solution = Solution, Exclude = [.. Exclude], Tests = [.. Tests] };
+        var copy = new ArchitectureMap { Version = Version, Solution = Solution, Exclude = [.. Exclude], Tests = [.. Tests], Patterns = [.. Patterns] };
         foreach (var (k, v) in Nodes) copy.Nodes[k] = v;
         foreach (var (k, v) in Views) copy.Views[k] = v;
         foreach (var (k, v) in Externals) copy.Externals[k] = v;
@@ -121,6 +124,26 @@ public sealed record GroupSpec
     public required string Name { get; init; }
     public string? Purpose { get; init; }
     public required IReadOnlyList<string> Leaves { get; init; }
+}
+
+/// <summary>
+/// An entry of the map's patterns list. An entry with <see cref="Keys"/> names the pattern that discovery finds with those
+/// keys, or declares the pattern when discovery does not find it. An entry with <see cref="Ignore"/> drops the group of
+/// that key from discovery. See <c>docs/patterns.md</c> section 4.4.
+/// </summary>
+public sealed record PatternSpec
+{
+    /// <summary>Gets the pattern's identifier, a single segment, which an entry with keys requires.</summary>
+    public string? Id { get; init; }
+
+    public string? Name { get; init; }
+    public string? Purpose { get; init; }
+
+    /// <summary>Gets the keys of the pattern the entry names or declares, as <see cref="PatternKeys"/> writes them, or <see langword="null"/> for an entry that ignores a key.</summary>
+    public IReadOnlyList<string>? Keys { get; init; }
+
+    /// <summary>Gets the key whose group discovery drops, or <see langword="null"/> for an entry with keys.</summary>
+    public string? Ignore { get; init; }
 }
 
 /// <summary>An external assembly or family of assemblies, bound by assembly name patterns.</summary>

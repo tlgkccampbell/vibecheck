@@ -113,7 +113,7 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         {
             var assembly = target.ContainingAssembly;
             if (assembly is null || SymbolEqualityComparer.Default.Equals(assembly, coreLibrary)) return;
-            ExternalReferences.Add(new ExternalReference(fromName, assembly.Name, display, file, line));
+            ExternalReferences.Add(new ExternalReference(fromName, assembly.Name, RoslynAnalyzer.OpenName(target), KindOf(node, symbol), display, file, line));
             return;
         }
 

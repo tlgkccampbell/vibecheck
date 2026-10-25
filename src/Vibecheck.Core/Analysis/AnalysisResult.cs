@@ -85,9 +85,11 @@ public sealed record SourceFile(string Path, string Hash, string Project, string
 /// carries the attribute, and the first sentence of its documentation summary. When the same fully qualified name is declared in more than
 /// one assembly, the name is prefixed with the assembly and <c>::</c> so that each
 /// type keeps its own identity; patterns match the plain name together with the
-/// assembly.
+/// assembly. The traits are what the type declares about itself, or <see langword="null"/>
+/// when it declares none of them.
 /// </summary>
-public sealed record TypeInfo(string Name, string Assembly, IReadOnlyList<string> Files, string? Generator = null, string? Attribute = null, string? MisattributedNested = null, string? Summary = null)
+public sealed record TypeInfo(string Name, string Assembly, IReadOnlyList<string> Files, string? Generator = null, string? Attribute = null, string? MisattributedNested = null, string? Summary = null,
+    TypeTraits? Traits = null)
 {
     /// <summary>The name without any assembly prefix, which is what patterns match.</summary>
     [JsonIgnore]
@@ -128,8 +130,37 @@ public static class TypeNames
 /// </summary>
 public sealed record RawDependency(string FromType, string ToType, string Kind, string Symbol, string File, int Line);
 
-/// <summary>A reference from a type to a symbol that has no source in the solution, identified by its assembly.</summary>
-public sealed record ExternalReference(string FromType, string Assembly, string Symbol, string File, int Line);
+/// <summary>A reference from a type to a symbol that has no source in the solution.</summary>
+/// <param name="FromType">The top-level type that makes the reference.</param>
+/// <param name="Assembly">The assembly that declares the symbol.</param>
+/// <param name="Type">The top-level type that declares the symbol, in the open form that <see cref="TraitType"/> describes.</param>
+/// <param name="Kind">The kind of the reference, as <see cref="RawDependency"/> names the kinds.</param>
+/// <param name="Symbol">The symbol, as <see cref="RawDependency.Symbol"/> names it.</param>
+/// <param name="File">The file that holds the reference.</param>
+/// <param name="Line">The line of the reference, one-based.</param>
+public sealed record ExternalReference(string FromType, string Assembly, string Type, string Kind, string Symbol, string File, int Line);
+
+/// <summary>
+/// The traits of a top-level type: what it declares about itself, by which a pattern recognizes it. See
+/// <c>docs/patterns.md</c> section 3.1. Types from the solution's source and from referenced assemblies are recorded
+/// alike. An interface of the core library is not a trait, and neither is an injected type of the core library.
+/// </summary>
+/// <param name="Base">The class the type inherits, or <see langword="null"/> when it inherits <see cref="object"/> or is not a class.</param>
+/// <param name="Interfaces">The interfaces the type implements directly.</param>
+/// <param name="Attributes">The open names of the attributes applied to the type itself.</param>
+/// <param name="Injects">
+/// The open names of the parameter types of the type's primary constructor, or else of its constructor with the most
+/// parameters, in the order they are declared.
+/// </param>
+public sealed record TypeTraits(TraitType? Base, IReadOnlyList<TraitType> Interfaces, IReadOnlyList<string> Attributes, IReadOnlyList<string> Injects);
+
+/// <summary>
+/// A type that a trait names. The type is in open form, which is its namespace, containing types and name, followed for
+/// a generic type by angle brackets with one comma fewer than it has type parameters, such as
+/// <c>MassTransit.IConsumer&lt;&gt;</c>. The arguments are the type arguments the trait gives it, as
+/// <see cref="RawDependency.Symbol"/> formats a type, or <see langword="null"/> for a type that is not generic.
+/// </summary>
+public sealed record TraitType(string Type, IReadOnlyList<string>? Arguments = null);
 
 /// <summary>A reference to a symbol whose declaration is build output or lies outside the repository.</summary>
 public sealed record UnresolvableReference(string FromType, string Symbol, string Reason, string File, int Line);

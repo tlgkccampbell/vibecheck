@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.MSBuild;
 
 namespace Vibecheck.Analysis;
@@ -144,7 +145,8 @@ public static class RoslynAnalyzer
                 var generatorName = type.DeclaringSyntaxReferences.Select(r => resolver.GeneratorOf(r.SyntaxTree.FilePath)).FirstOrDefault(g => g is not null);
                 var key = (assembly, name);
                 if (types.ContainsKey(key)) continue;
-                types[key] = new TypeInfo(name, assembly, declFiles!, generatorName, AttributeLeaf(type), MisattributedNested(type), DocSummary.FirstSentence(type.GetDocumentationCommentXml(cancellationToken: ct)));
+                types[key] = new TypeInfo(name, assembly, declFiles!, generatorName, AttributeLeaf(type), MisattributedNested(type), DocSummary.FirstSentence(type.GetDocumentationCommentXml(cancellationToken: ct)),
+                    TraitsOf(type, compilation.ObjectType.ContainingAssembly));
             }
         }
 
@@ -186,6 +188,42 @@ public static class RoslynAnalyzer
             Declarations = declarationList.OrderBy(d => d.File, StringComparer.Ordinal).ThenBy(d => d.FirstLine).ThenBy(d => d.Symbol, StringComparer.Ordinal).ToList(),
             Sites = sites.OrderBy(s => s.File, StringComparer.Ordinal).ThenBy(s => s.Line).ThenBy(s => s.Symbol, StringComparer.Ordinal).ToList(),
         };
+    }
+
+    /// <summary>Returns the open form of a type, as <see cref="TraitType"/> describes it.</summary>
+    internal static string OpenName(INamedTypeSymbol type)
+    {
+        static string Generic(INamedTypeSymbol t) => t.Arity == 0 ? t.Name : t.Name + "<" + new string(',', t.Arity - 1) + ">";
+        type = type.OriginalDefinition;
+        var name = Generic(type);
+        for (var c = type.ContainingType; c is not null; c = c.ContainingType) name = Generic(c) + "." + name;
+        var ns = type.ContainingNamespace;
+        return ns is null || ns.IsGlobalNamespace ? name : ns.ToDisplayString() + "." + name;
+    }
+
+    /// <summary>
+    /// Returns the traits of a top-level type, as <see cref="TypeTraits"/> defines them, or <see langword="null"/> when it
+    /// has none. A type that does not resolve is not a trait.
+    /// </summary>
+    /// <param name="type">The type.</param>
+    /// <param name="coreLibrary">The assembly that declares <see cref="object"/>, whose interfaces and injected types are not traits.</param>
+    internal static TypeTraits? TraitsOf(INamedTypeSymbol type, IAssemblySymbol coreLibrary)
+    {
+        static bool Resolved(ITypeSymbol? t) => t is INamedTypeSymbol { TypeKind: not TypeKind.Error };
+        bool InCore(ISymbol s) => SymbolEqualityComparer.Default.Equals(s.ContainingAssembly, coreLibrary);
+        static TraitType Trait(INamedTypeSymbol t) =>
+            new(OpenName(t), t.IsGenericType ? t.TypeArguments.Select(a => a.ToDisplayString(DependencyWalker.SymbolFormat)).ToList() : null);
+
+        var baseType = type.TypeKind == TypeKind.Class && Resolved(type.BaseType) && type.BaseType!.SpecialType != SpecialType.System_Object ? Trait(type.BaseType) : null;
+        var interfaces = type.Interfaces.Where(i => Resolved(i) && !InCore(i)).Select(Trait).ToList();
+        var attributes = type.GetAttributes().Select(a => a.AttributeClass)
+            .Where(a => Resolved(a) && a!.ToDisplayString() != AttributeName).Select(a => OpenName(a!)).Distinct(StringComparer.Ordinal).ToList();
+        // A primary constructor is the one every other constructor calls, so it says what the type needs.
+        var constructor = type.InstanceConstructors.Where(c => !c.IsImplicitlyDeclared)
+            .OrderByDescending(c => c.DeclaringSyntaxReferences.Any(r => r.GetSyntax() is TypeDeclarationSyntax)).ThenByDescending(c => c.Parameters.Length).FirstOrDefault();
+        var injects = constructor is null ? [] : constructor.Parameters.Select(p => p.Type).OfType<INamedTypeSymbol>()
+            .Where(t => Resolved(t) && !InCore(t)).Select(OpenName).Distinct(StringComparer.Ordinal).ToList();
+        return baseType is null && interfaces.Count == 0 && attributes.Count == 0 && injects.Count == 0 ? null : new TypeTraits(baseType, interfaces, attributes, injects);
     }
 
     /// <summary>Returns the leaf named by the type's <c>[Vibecheck]</c> attribute, or <see langword="null"/>.</summary>

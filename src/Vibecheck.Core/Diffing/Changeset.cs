@@ -51,7 +51,30 @@ public sealed record Changeset
 
     /// <summary>Gets the test types with a changed file, ordered by name, as <see cref="TestChanges"/> lists them.</summary>
     public List<TestTypeChange> Tests { get; init; } = [];
+
+    /// <summary>Gets the patterns found at base that have an added or changed instance, as <see cref="PatternChanges"/> lists them.</summary>
+    public List<PatternChange> Patterns { get; init; } = [];
 }
+
+/// <summary>
+/// A pattern found at base, as <see cref="PatternFact"/> describes it, with the instances at head that the change added
+/// or changed. See <c>docs/patterns.md</c> section 5.7.
+/// </summary>
+/// <param name="Id">The pattern's identifier.</param>
+/// <param name="Name">The pattern's name.</param>
+/// <param name="Purpose">The pattern's purpose, or <see langword="null"/>.</param>
+/// <param name="By">What named the pattern, as <see cref="PatternFact.By"/> says.</param>
+/// <param name="Keys">The keys every instance carries.</param>
+/// <param name="Count">The number of instances at base.</param>
+/// <param name="Instances">The added and changed instances at head that the pattern reports, ordered by name.</param>
+/// <param name="Others">Every other instance at head, ordered by name.</param>
+public sealed record PatternChange(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, int Count, List<PatternInstance> Instances, List<PatternOther> Others);
+
+/// <summary>An instance of a pattern at head that the change added or changed. The status is <c>added</c> or <c>changed</c>.</summary>
+public sealed record PatternInstance(string Type, string Status);
+
+/// <summary>An instance of a pattern at head that the pattern does not report as added or changed, with the leaf it binds to at head.</summary>
+public sealed record PatternOther(string Type, string Leaf);
 
 public sealed record StructuralDiff
 {

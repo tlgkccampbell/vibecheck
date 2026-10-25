@@ -8,6 +8,8 @@ reviewer can compare it with them. It builds on the map and facts of
 [attention.md](attention.md), and the test subjects of [tests.md](tests.md), and it
 lists, in section 11, the changes it makes to those documents.
 
+Phase 1 of section 13, traits and discovery, is built. The other phases are not.
+
 The design rests on one principle. A pattern is evidence about the code, not part of
 the architecture. Controllers sit in every feature, and a pattern cuts across the
 leaves of the map the way tests do, so a pattern is never a node, a view or an edge.
@@ -83,9 +85,9 @@ Traits are recorded whether the referenced type is in the solution's source or i
 referenced assembly. This matters because most patterns are defined by a framework.
 Today a reference to a symbol with no source becomes an external reference with no
 kind, aggregated per type and assembly, so the fact that a type implements
-`IConsumer<>` is not kept anywhere. The dependency walker already knows the kind of
-every reference it visits, so traits cost no new pass: the walker records the traits
-of each type it walks, and external references gain their kind.
+`IConsumer<>` is not kept anywhere. The analysis reads the traits from each type's
+symbol, which it already holds, so traits cost no new pass, and the dependency walker
+gives each external reference the kind it already knows.
 
 References to the core library are not recorded as dependencies, since every type
 would carry them. Traits are an exception for base types and attributes, since a type
@@ -111,7 +113,6 @@ Each type in the facts gains `traits`:
 { "name": "Orchard.Billing.Consumers.OrderPlacedConsumer", "leaf": "billing.consumers", "by": "pattern",
   "files": ["src/Billing/Consumers/OrderPlacedConsumer.cs"],
   "traits": {
-    "base": null,
     "interfaces": [ { "type": "MassTransit.IConsumer<>", "arguments": ["Orchard.Billing.Events.OrderPlaced"] } ],
     "attributes": [],
     "injects": ["Orchard.Billing.IUnitOfWork", "Microsoft.Extensions.Logging.ILogger<>"]
@@ -122,8 +123,10 @@ Each type in the facts gains `traits`:
 referenced type. This is a change to the facts format, and every reader of external
 references aggregates by assembly itself when it needs to.
 
-Test types have no traits, since a test type is never an instance of a pattern, as
-section 4.3 says.
+A base class is written as an interface is, with its arguments when it is generic, and
+is absent when the type inherits `Object`. A type with no traits at all has no
+`traits`. Test types have no traits in the facts, since a test type is never an
+instance of a pattern, as section 4.3 says.
 
 ### 3.4 Member attributes
 
@@ -161,11 +164,15 @@ Patterns are discovered at base, in the system as it was before the change, sinc
 change is judged against the code it joins. Discovery is a pure function of the facts:
 
 1. Group the types the map holds by each key they carry.
-2. Keep each group with at least **three** instances.
-3. Merge groups with exactly the same instances into one pattern whose keys are all of
+2. Drop a group whose key the map ignores, as section 4.4 describes. This comes before
+   the merge, so that a marker interface that every consumer also carries does not
+   take the consumers with it.
+3. Keep each group with at least **three** instances.
+4. Merge groups with exactly the same instances into one pattern whose keys are all of
    theirs, so that a controller that inherits `ControllerBase` and carries
-   `[ApiController]` is one pattern with two keys, not two patterns.
-4. Drop a group whose key the map ignores, as section 4.4 describes.
+   `[ApiController]` is one pattern with two keys, not two patterns. The keys are
+   ordered by kind, inherits before implements before attribute, and the first names
+   the pattern.
 
 A type that carries the keys of several patterns is an instance of each. When one
 pattern's instances are all instances of another, as consumers deriving from a shared
@@ -197,8 +204,10 @@ The map gains an optional `patterns` list beside `tests`:
 ]
 ```
 
-An entry with `keys` names a pattern. When discovery finds a pattern with the same
-keys, the entry gives it its identifier, name and purpose. When it does not, the entry
+An entry with `keys` names a pattern. When discovery finds a pattern whose instances
+are exactly the types that carry the entry's keys, and whose keys include them, the
+entry gives it its identifier, name and purpose, and the pattern keeps every key that
+step 4 merged into it. When it does not, the entry
 declares the pattern, which then needs no minimum number of instances. An entry with
 `ignore` drops every discovered group whose keys include that key, such as a marker
 interface that every message carries.
@@ -210,7 +219,9 @@ could match nothing that discovery found.
 
 `vibecheck check` reports the patterns it found, each with its instance count, its
 number of norms, and the mean number of norms its own instances depart from, as
-"consumer: 14 instances, 4 norms, 0.3 departures each". The last figure is the measure
+"consumer: 14 instances, 4 norms, 0.3 departures each". Phase 1 reports the name, the
+instances and the keys, as "pattern implements IConsumer<>: 14 instances
+(implements:MassTransit.IConsumer<>)". The last figure is the measure
 of section 12: a pattern whose existing instances depart from more than about one
 norm each would fill the path with departures, and says that the thresholds of
 section 5.2 are too low for it. The check also warns for an entry whose keys no type carries.
@@ -338,8 +349,12 @@ instance:
   "sources": { "Orchard.Billing.Consumers.OrderPlacedConsumer": { "file": "…", "first": 8, "lines": ["…"] } } }
 ```
 
-`others` lists every instance at head that the change did not touch, with its leaf,
-so that the details panel and the map can show them. `sources` holds the text of each
+`others` lists every instance at head that the pattern does not report as added or
+changed, with its leaf, so that the details panel and the map can show them. A changed
+instance that a more specific pattern reports is among the others of the broader one.
+An instance is changed when one of its files changed or it binds to another leaf. Phase
+1 carries the identifier, name, purpose, `by`, keys, count, the instances with their
+status, and the others. `sources` holds the text of each
 example at head, as section 7.3 needs it.
 
 The changeset also gains `NewPatterns`, the patterns of section 4.5, each with its
@@ -464,7 +479,8 @@ states each share, says what such a sentence would.
 ## 9. The API and the viewer
 
 The facts gain `traits` on each type and aggregate `externalRefs` by referenced type,
-as section 3.3 describes, and their declarations gain `attributes`, as section 3.4
+as section 3.3 describes, and list the patterns found among their types as
+`patterns`, so that the check and the changeset read them from one place, and their declarations gain `attributes`, as section 3.4
 does. The map schema gains `patterns`. The changeset gains `Patterns` and
 `NewPatterns`, the path gains pattern steps, and a changeset published as an artifact
 carries all of it, since none of it needs the server.
@@ -514,9 +530,9 @@ suite references no framework it does not already use. The tests state:
   a row of its own.
 
 The `Sample` suite checks traits and discovery on the sample solution once per run,
-where the compilation is already paid for. The sample gains five consumers, so that it
-has a pattern with norms, and three handlers with validators for their commands, so
-that it has companions.
+where the compilation is already paid for. The sample has five consumers of payment
+events, four of which take the outbox, so that it has a pattern with norms. Phase 2
+adds three handlers with validators for their commands, so that it has companions.
 
 ## 11. Changes to other documents
 

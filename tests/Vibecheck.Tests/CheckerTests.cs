@@ -134,7 +134,7 @@ public class CheckerTests
         map.Externals["sdk"] = new ExternalSpec { Name = "Sdk", Bind = ["Ext.Sdk"] };
         Assert.Equal("sdk", Run(map).ExternalRefs.Single().External);
 
-        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", TestData.B1, 9)]);
+        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.Service, "Newtonsoft.Json", "Newtonsoft.Json.JsonConvert", "references", "Newtonsoft.Json.JsonConvert", TestData.B1, 9)]);
         var facts = Run(analysis: analysis);
         Assert.Empty(facts.Violations);
         Assert.Null(facts.ExternalRefs.Single(e => e.Assembly == "Newtonsoft.Json").External);
@@ -143,13 +143,21 @@ public class CheckerTests
     }
 
     [Fact]
-    public void ExternalRefsAreAggregatedPerTypeAndAssembly()
+    public void ExternalRefsAreAggregatedPerTypeAndReferencedTypeAndCountedPerAssemblyByTheirReaders()
     {
-        var analysis = TestData.Analysis(extraExternals: [new ExternalReference(TestData.Thing, "Ext.Sdk", "Ext.Sdk.Other", TestData.X1, 30)]);
+        var analysis = TestData.Analysis(extraExternals:
+        [
+            new ExternalReference(TestData.Thing, "Ext.Sdk", "Ext.Sdk.Client", "calls", "Ext.Sdk.Client.Send", TestData.X1, 25),
+            new ExternalReference(TestData.Thing, "Ext.Sdk", "Ext.Sdk.Other", "references", "Ext.Sdk.Other", TestData.X1, 30),
+        ]);
         var facts = Run(analysis: analysis);
-        var e = Assert.Single(facts.ExternalRefs);
-        Assert.Equal((2, 20), (e.Count, e.Line));
-        Assert.Equal(2, Edge(facts.LeafEdges, "a.x", "ext").Count);
+        Assert.Equal(["Ext.Sdk.Client", "Ext.Sdk.Other"], facts.ExternalRefs.Select(e => e.Type));
+        var client = facts.ExternalRefs[0];
+        Assert.Equal((2, 20, "references", "Ext.Sdk.Client"), (client.Count, client.Line, client.Kind, client.Symbol));
+        // The leaf edge and the type pairs behind it count every reference to the assembly, as they did when the facts
+        // aggregated per assembly.
+        Assert.Equal(3, Edge(facts.LeafEdges, "a.x", "ext").Count);
+        Assert.Equal([(TestData.Thing, "Ext.Sdk", 3)], Explain.Pairs(facts, "a.x", "ext"));
     }
 
     [Fact]

@@ -163,6 +163,17 @@
     TYPES_BY_LEAF.get(leaf).push(t);
   }
   const typesOf = (leaf) => TYPES_BY_LEAF.get(leaf) || [];
+  // The patterns the change touches, by identifier: each pattern found at base with the instances the change added or
+  // changed, and every other instance at head. See docs/patterns.md.
+  const PATTERNS = new Map((CS.patterns || []).map((p) => [p.id, p]));
+  // The patterns that report each added or changed instance, by the instance's type name.
+  const PATTERNS_OF = new Map();
+  for (const p of PATTERNS.values()) {
+    for (const i of p.instances) {
+      if (!PATTERNS_OF.has(i.type)) PATTERNS_OF.set(i.type, []);
+      PATTERNS_OF.get(i.type).push(p);
+    }
+  }
 
   // ---------- Reviewed files ----------
   // A changed file is reviewed when the reviewer has set it aside, or when the tool has and the reviewer has not
@@ -913,6 +924,10 @@
     testsOpen: new Set(),
     // The decision whose tests the details panel shows opened, or null.
     decisionTests: null,
+    // The pattern the details panel shows, as its identifier and the type it was opened from, or null.
+    pattern: null,
+    // The blocks whose instances the pattern's section in the details panel shows opened.
+    patternBlocks: new Set(),
     // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
     glossaryBlock: null,
     term: null,
@@ -1620,15 +1635,67 @@
 
   // Returns the line under a file's header that names the types it declares in the leaf on screen. A type that was
   // added, removed or moved carries that status, since a file's diff does not show it. A type that only changed shows
-  // no status, since the changeset does not say which of a file's types its hunks touch.
+  // no status, since the changeset does not say which of a file's types its hunks touch. A type that the changeset
+  // reports as an instance of a pattern carries a chip for each such pattern, which is the only place the leaf view
+  // shows patterns.
   function declaresLine(types) {
     const line = el("div", { class: "file-types" }, "declares ");
     types.forEach((t, i) => {
       if (i) line.append(" · ");
       line.append(el("code", { title: t.name }, shortName(t.name)));
       if (t.status !== "unchanged") line.append(" ", el("span", { class: "chip chip-" + t.status, title: t.status === "moved" ? `from ${t.leafBase} to ${t.leafHead}` : "" }, t.status));
+      for (const p of PATTERNS_OF.get(t.name) || []) line.append(" ", patternChip(p, t.name));
     });
     return line;
+  }
+
+  // Returns the chip that marks a type as an instance of a pattern, which shows the pattern in the details panel.
+  function patternChip(p, type) {
+    const on = !!state.pattern && state.pattern.id === p.id && state.pattern.type === type;
+    return el("button", { class: "chip chip-pattern" + (on ? " on" : ""), onclick: () => showPattern(on ? null : { id: p.id, type }),
+      title: `An instance of the pattern ${p.name}, which ${plural(p.count, "type", "types")} played before this change. Click to show the pattern.` }, p.name);
+  }
+
+  // Shows a pattern in the details panel, given as its identifier and the type it is opened from, or closes it for null.
+  function showPattern(selection) {
+    state.pattern = selection;
+    redraw();
+  }
+
+  // Opens the leaf view that holds a type, at its first changed file when it has one.
+  function openType(name) {
+    const t = CS.types.find((x) => x.name === name);
+    if (!t) return;
+    const changed = t.files.find((p) => fileStatus(p) !== "unchanged");
+    return changed ? openFile(changed) : openLeaf(t.leafHead || t.leafBase);
+  }
+
+  // Returns the details panel's section for the selected pattern: its name, purpose and keys, its added and changed
+  // instances, and every other instance grouped by the block that holds it, each block collapsed to a count until opened.
+  function patternPanel(p, type) {
+    const box = el("section", { class: "decision-panel pattern-panel" });
+    box.append(el("div", { class: "decision-panel-head" }, el("h2", {}, "Pattern", help(HELP.pattern)), el("button", { class: "link", onclick: () => showPattern(null) }, "Close")));
+    box.append(el("p", { class: "pattern-name" }, p.name), el("p", { class: "purpose" }, p.purpose || (p.by === "key" ? "Named from its first key." : "")));
+    box.append(kv(p.keys.length === 1 ? "Key" : "Keys", el("span", {}, ...p.keys.flatMap((k, i) => [i ? ", " : "", el("code", {}, k)]))));
+    box.append(kv("Before", plural(p.count, "instance", "instances")));
+    const row = (name, status) => {
+      const t = CS.types.find((x) => x.name === name);
+      return el("li", {}, el("button", { class: "row" + (name === type ? " current" : ""), onclick: () => openType(name), title: name },
+        status ? el("span", { class: "chip chip-" + status }, status) : "", el("span", { class: "row-name" }, shortName(name)),
+        el("span", { class: "row-meta" }, t ? nameOf(t.leafHead || t.leafBase) : "")));
+    };
+    box.append(el("h3", {}, `In this change: ${plural(p.instances.length, "instance", "instances")}`));
+    box.append(el("ul", { class: "list" }, ...p.instances.map((i) => row(i.type, i.status))));
+    if (!p.others.length) return box;
+    box.append(el("h3", {}, `Other instances: ${p.others.length}`));
+    const byBlock = new Map();
+    for (const o of p.others) { if (!byBlock.has(o.leaf)) byBlock.set(o.leaf, []); byBlock.get(o.leaf).push(o.type); }
+    for (const [leaf, names] of [...byBlock].sort((a, b) => b[1].length - a[1].length || nameOf(a[0]).localeCompare(nameOf(b[0])))) {
+      box.append(el("details", { class: "pattern-block", open: state.patternBlocks.has(leaf),
+        ontoggle: (ev) => { if (ev.target.open) state.patternBlocks.add(leaf); else state.patternBlocks.delete(leaf); } },
+        el("summary", { title: leaf }, `${nameOf(leaf)} · ${names.length}`), el("ul", { class: "list" }, ...names.map((n) => row(n, null)))));
+    }
+    return box;
   }
 
   // Returns the line that says how many of a node's changed files are reviewed, with a button that marks them all, or
@@ -2220,6 +2287,8 @@
     edges: "An edge is the set of references from one block to another. This list shows the edges whose reference counts changed, with new and removed edges first. Click an edge to show it on the map.",
     map: "This list shows the blocks and views that were added, removed or changed in the map, and the types that moved to a different block.",
     decision: "This section shows the selected decision's declarations and the hunks that follow from it, grouped by block. Click a hunk to open it.",
+    pattern: "A pattern is a role that several types play, found from what they declare about themselves: a base class, an interface or an attribute they share. " +
+      "The patterns come from the code before this change, and a type joins one when it carries every key. Click an instance to open its type.",
     narrative: "This is Claude's explanation of why this part changed. Any evidence it relies on is listed below it.",
     terms: "These are the names this block introduces. The Glossary lists the names from the whole change.",
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
@@ -2323,6 +2392,7 @@
     const box = $("#details");
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
+    if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
     const l = loc();
     const cur = state.current;
     if (l.leaf) {

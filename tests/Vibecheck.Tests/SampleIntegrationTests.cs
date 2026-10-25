@@ -123,6 +123,24 @@ public class SampleIntegrationTests(SampleFixture sample)
     }
 
     [Fact]
+    public void TheConsumersAreAPatternFoundByTheirInterface()
+    {
+        const string consumer = "Orchard.Notifications.Consumers.ReceiptConsumer";
+        var traits = sample.Analysis.Types.Single(t => t.Name == consumer).Traits!;
+        var implemented = Assert.Single(traits.Interfaces);
+        Assert.Equal(("Orchard.Shared.Messaging.IConsumer<>", "Orchard.Notifications.Dispatch.PaymentEvent"), (implemented.Type, Assert.Single(implemented.Arguments!)));
+        Assert.Equal(["Orchard.Notifications.Dispatch.Outbox"], traits.Injects);
+        // The serializer context's base is a framework type, which the analysis records although the assembly has no source.
+        Assert.Equal("System.Text.Json.Serialization.JsonSerializerContext", sample.Analysis.Types.Single(t => t.Name == Context).Traits!.Base!.Type);
+
+        var facts = Checker.Run(sample.Map, sample.Analysis);
+        var pattern = Assert.Single(facts.Patterns);
+        Assert.Equal(("implements:Orchard.Shared.Messaging.IConsumer<>", "implements IConsumer<>"), (pattern.Id, pattern.Name));
+        Assert.Equal(5, pattern.Instances.Count);
+        Assert.All(pattern.Instances, i => Assert.StartsWith("Orchard.Notifications.Consumers.", i));
+    }
+
+    [Fact]
     public void ResolvesExternalsToTheMostSpecificPattern()
     {
         var facts = Checker.Run(sample.Map, sample.Analysis);

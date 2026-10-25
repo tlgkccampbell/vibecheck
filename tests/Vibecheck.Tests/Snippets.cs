@@ -70,9 +70,10 @@ internal static class Snippets
     /// <summary>
     /// Returns the analysis of the files given, keyed by path relative to the root: one project of the files outside
     /// <see cref="TestFolder"/>, and a test project of those inside it when there are any. Files that are not C# take no
-    /// part in the analysis, as a document in a solution's folder does not.
+    /// part in the analysis, as a document in a solution's folder does not. Both projects reference the libraries
+    /// given, which <see cref="Library"/> compiles.
     /// </summary>
-    public static AnalysisResult Analyze(IReadOnlyDictionary<string, string> files)
+    public static AnalysisResult Analyze(IReadOnlyDictionary<string, string> files, params MetadataReference[] libraries)
     {
         var resolver = new SourceResolver(Root);
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
@@ -81,16 +82,22 @@ internal static class Snippets
         RoslynAnalyzer.ProjectTrees Project(string name, Compilation compilation) =>
             new(name, "", compilation, compilation.SyntaxTrees.Select(t => (t, resolver.AddDocument(t.FilePath)!, (string?)null)).ToList());
 
-        var compilation = CSharpCompilation.Create("Snippets", Parse(tests: false), References, options);
+        var compilation = CSharpCompilation.Create("Snippets", Parse(tests: false), [.. References, .. libraries], options);
         var projects = new List<RoslynAnalyzer.ProjectTrees> { Project("Snippets", compilation) };
         var testTrees = Parse(tests: true);
         if (testTrees.Count > 0)
-            projects.Add(Project("Snippets.Tests", CSharpCompilation.Create("Snippets.Tests", testTrees, [.. References, .. Frameworks.Value, compilation.ToMetadataReference()], options)));
+            projects.Add(Project("Snippets.Tests", CSharpCompilation.Create("Snippets.Tests", testTrees, [.. References, .. libraries, .. Frameworks.Value, compilation.ToMetadataReference()], options)));
         return RoslynAnalyzer.Collect(resolver, projects, []);
     }
 
     /// <summary>Returns the facts of the files given under a map that binds every type to one leaf.</summary>
     public static Facts Facts(IReadOnlyDictionary<string, string> files) => Checker.Run(Map(), Analyze(files));
+
+    /// <summary>
+    /// Returns a library compiled from a source text into an assembly of the given name, such as a stand-in for a
+    /// framework whose types the snippets use, so that the suite needs no framework it does not already use.
+    /// </summary>
+    public static MetadataReference Library(string assembly, string source) => Compile(assembly, source);
 
     /// <summary>
     /// Returns a map with one leaf per top-level namespace segment the tests use, so that tests can count blocks, and

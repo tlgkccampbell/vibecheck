@@ -49,12 +49,27 @@ public sealed record Facts
     /// <summary>Gets the test types, with their subjects and test methods, and the references they make into the system, as <see cref="TestTypes"/> builds them.</summary>
     public TestFacts Tests { get; init; } = TestFacts.Empty;
 
+    /// <summary>Gets the patterns among the types, most instances first, as <see cref="PatternDiscovery"/> finds them.</summary>
+    public List<PatternFact> Patterns { get; init; } = [];
+
     [JsonIgnore]
     public bool Passed => Violations.Count == 0;
 }
 
-/// <summary>A top-level type, the leaf it binds to, how it was bound (<c>attribute</c>, <c>pattern</c> or <c>fallback</c>), the files that declare it, and the generator that produced a part of it.</summary>
-public sealed record TypeFact(string Name, string Assembly, string Leaf, string By, IReadOnlyList<string> Files, string? Generator = null);
+/// <summary>
+/// A top-level type, the leaf it binds to, how it was bound (<c>attribute</c>, <c>pattern</c> or <c>fallback</c>), the
+/// files that declare it, the generator that produced a part of it, and its traits, as <see cref="TypeInfo.Traits"/> gives them.
+/// </summary>
+public sealed record TypeFact(string Name, string Assembly, string Leaf, string By, IReadOnlyList<string> Files, string? Generator = null, TypeTraits? Traits = null);
+
+/// <summary>A pattern among the types of a commit, as <see cref="PatternDiscovery"/> finds it. See <c>docs/patterns.md</c> section 4.</summary>
+/// <param name="Id">The identifier of the map's entry for the pattern, or else its keys joined by <c>" + "</c>.</param>
+/// <param name="Name">The name the map's entry gives the pattern, or else the name its first key gives it, as <see cref="PatternKeys.NameOf"/> forms it.</param>
+/// <param name="Purpose">The purpose the map's entry gives the pattern, or <see langword="null"/>.</param>
+/// <param name="By">What named the pattern: <see cref="PatternDiscovery.ByMap"/> or <see cref="PatternDiscovery.ByKey"/>.</param>
+/// <param name="Keys">The keys every instance carries, ordered by kind as <see cref="PatternKeys.Kinds"/> lists them and then by value.</param>
+/// <param name="Instances">The names of the types that carry every key, ordered by name.</param>
+public sealed record PatternFact(string Id, string Name, string? Purpose, string By, IReadOnlyList<string> Keys, IReadOnlyList<string> Instances);
 
 /// <summary>
 /// A source document, its content hash, and the leaves its types bind to. A generated document names its generator. A
@@ -127,11 +142,12 @@ public sealed record DependencyFact(string From, string To, string Kind, string 
 public sealed record EdgeCount(string From, string To, int Count);
 
 /// <summary>
-/// The references one type makes to one external assembly, resolved to the external
-/// the assembly binds to, if any. The symbol, file and line are the first reference;
-/// the count covers all of them.
+/// The references one type makes to one type of an external assembly, resolved to the external the assembly binds to,
+/// if any. The referenced type is in the open form that <see cref="TraitType"/> describes. The kind, symbol, file and
+/// line are those of the first reference, and the count covers all of them. A reader that counts references per
+/// assembly sums the counts.
 /// </summary>
-public sealed record ExternalRefFact(string From, string Assembly, string Symbol, string File, int Line, int Count, string? External);
+public sealed record ExternalRefFact(string From, string Assembly, string Type, string Kind, string Symbol, string File, int Line, int Count, string? External);
 
 public sealed record UnresolvableFact(string From, string Symbol, string Reason, string File, int Line);
 

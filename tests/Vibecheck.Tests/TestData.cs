@@ -71,7 +71,7 @@ internal static class TestData
             new(Service, Error, "constructs", "Shared.Error", B1, 5),
         };
         if (extraDependencies is not null) deps.AddRange(extraDependencies);
-        var externals = new List<ExternalReference> { new(Thing, "Ext.Sdk", "Ext.Sdk.Client", X1, 20) };
+        var externals = new List<ExternalReference> { new(Thing, "Ext.Sdk", "Ext.Sdk.Client", "references", "Ext.Sdk.Client", X1, 20) };
         if (extraExternals is not null) externals.AddRange(extraExternals);
         return new AnalysisResult
         {

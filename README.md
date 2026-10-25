@@ -21,7 +21,9 @@ Tests in a review are designed in [docs/tests.md](docs/tests.md); all three of i
 phases, test types, tests on decisions and test signals, are built.
 Patterns, the roles many types play, such as controllers, handlers and consumers, and the
 comparison of a new instance with the existing ones, are designed in
-[docs/patterns.md](docs/patterns.md); none of its phases is built.
+[docs/patterns.md](docs/patterns.md); its first phase is built: traits, patterns found at base, the map's
+`patterns` list, the check's report of patterns, and a chip on a changed type that names its pattern and opens it
+in the details panel.
 
 ## Layout
 
