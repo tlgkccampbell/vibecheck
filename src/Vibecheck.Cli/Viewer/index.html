@@ -434,15 +434,11 @@
   .metrics { display: flex; flex-wrap: wrap; gap: 6px 22px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .metrics b { color: var(--fg); font-weight: 600; }
   .typecard { border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
-  .typecard > header { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--bg); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; min-width: 0; flex-wrap: wrap; }
-  .typecard.st-added > header { border-left: 3px solid var(--added); }
-  .typecard.st-removed > header { border-left: 3px solid var(--removed); }
-  .typecard.st-modified > header { border-left: 3px solid var(--modified); }
-  .typecard.st-reviewed > header { border-left: 3px solid var(--line-strong); }
-  .typename { font-weight: 600; }
   .typens { color: var(--muted); }
   .file { border-top: 1px solid var(--line); }
   .file-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 10px; font-family: var(--mono); font-size: 12px; min-width: 0; color: var(--muted); }
+  .file-types { padding: 0 10px 5px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .file-types code { color: var(--fg); }
   .file-path { overflow-wrap: anywhere; }
   .file-head input { margin: 0; flex: none; cursor: pointer; }
   .file-note { white-space: nowrap; }

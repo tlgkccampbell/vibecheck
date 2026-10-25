@@ -77,7 +77,6 @@
   const parentOf = (id) => id === ROOT ? null : id.startsWith(OTHER + "/") ? OTHER : id.lastIndexOf(".") < 0 ? ROOT : id.slice(0, id.lastIndexOf("."));
   const isUnder = (id, anc) => anc === ROOT || id === anc || id.startsWith(anc + (anc === OTHER ? "/" : "."));
   const shortName = (type) => type.replace(/^.*::/, "").split(".").pop();
-  const namespaceOf = (type) => { const t = type.replace(/^.*::/, ""); const i = t.lastIndexOf("."); return i < 0 ? "" : t.slice(0, i); };
 
   const hasUnsorted = CS.types.some((t) => t.leafHead === UNSORTED || t.leafBase === UNSORTED);
   const CHILDREN = {};
@@ -1364,12 +1363,6 @@
   // Ranks a file in the leaf view: files with decisions or other edits first, then files whose hunks all follow from
   // decisions, then reviewed files.
   const fileRank = (path) => fileStatus(path) === "reviewed" ? 2 : consequenceOnly(path) ? 1 : 0;
-  // Ranks a type in the leaf view by its changed files, as fileRank ranks them.
-  const typeRank = (t) => {
-    if (typeStatus(t) === "reviewed") return 2;
-    const ranks = t.files.filter((p) => fileStatus(p) !== "unchanged").map(fileRank);
-    return ranks.length && ranks.every((r) => r >= 1) ? 1 : 0;
-  };
 
   // Returns the header of a decision's hunk: what changed, whether it is public, its reach, and the action that marks
   // the files that follow from it alone.
@@ -1579,8 +1572,9 @@
 
   // Returns a file's header and diffs for the leaf view. A changed file's header carries its reviewed checkbox, and a
   // reviewed file's diffs stay collapsed while reviewed files are muted, until the reader shows them. A renamed file
-  // names its path at base, and a path at base that a type still lists links to the renamed file.
-  function fileBlock(path) {
+  // names its path at base, and a path at base that a type still lists links to the renamed file. When types are given,
+  // a line under the header names them, with the status of each that was added, removed or moved.
+  function fileBlock(path, types) {
     const f = fileOf(path), fs = fileStatus(path);
     if (f && f.path !== path) {
       return el("div", { class: "file file-" + fs },
@@ -1605,6 +1599,7 @@
     if (open) head.append(el("span", { class: "file-note talk-note" }, plural(open, "unresolved thread", "unresolved threads")));
     const muted = done && state.opts.mute;
     const block = el("div", { class: "file file-" + fs, "data-file": path }, head);
+    if (types && types.length) block.append(declaresLine(types));
     const diffs = el("div", { class: "file-diffs" });
     const fill = () => { if (!diffs.childElementCount) hunks.forEach((h, i) => diffs.append(hunkBlock(path, h, i, talk.lines, notes.lines))); };
     if (muted && !state.expanded.has(path)) diffs.hidden = true;
@@ -1621,6 +1616,19 @@
     if (talk.top.length) block.append(el("div", { class: "file-threads" }, ...talk.top.map((t) => threadBox(t, { top: true }))));
     block.append(diffs);
     return block;
+  }
+
+  // Returns the line under a file's header that names the types it declares in the leaf on screen. A type that was
+  // added, removed or moved carries that status, since a file's diff does not show it. A type that only changed shows
+  // no status, since the changeset does not say which of a file's types its hunks touch.
+  function declaresLine(types) {
+    const line = el("div", { class: "file-types" }, "declares ");
+    types.forEach((t, i) => {
+      if (i) line.append(" · ");
+      line.append(el("code", { title: t.name }, shortName(t.name)));
+      if (t.status !== "unchanged") line.append(" ", el("span", { class: "chip chip-" + t.status, title: t.status === "moved" ? `from ${t.leafBase} to ${t.leafHead}` : "" }, t.status));
+    });
+    return line;
   }
 
   // Returns the line that says how many of a node's changed files are reviewed, with a button that marks them all, or
@@ -1681,20 +1689,23 @@
     const bar = reviewedBar(id);
     if (bar) wrap.append(bar);
 
-    // Changed types with their files and hunks, the reviewed ones last.
+    // The files of the changed types, each once, however many of the leaf's types it declares. A path at base that a
+    // type still lists stands for its renamed file. Files keep the order of their types within a rank, so the files of
+    // a partial type stay together.
     const types = typesOf(id);
-    const touched = byRank(types.filter(typeTouched), typeRank);
-    wrap.append(el("h3", {}, touched.length ? `${touched.length} of ${types.length} types changed` : `No changes among ${types.length} types`, help(HELP.types)));
-    for (const t of touched) {
-      const ts = typeStatus(t);
-      const card = el("section", { class: "typecard" + statusClass(ts) });
-      const head = el("header", {},
-        el("span", { class: "chip chip-" + ts }, ts),
-        el("span", { class: "typename" }, shortName(t.name)),
-        el("span", { class: "typens" }, namespaceOf(t.name)));
-      if (t.status === "moved") head.append(el("span", { class: "typens" }, `from ${t.leafBase} to ${t.leafHead}`));
-      card.append(head);
-      for (const path of byRank(t.files, fileRank)) card.append(fileBlock(path));
+    const declared = new Map();
+    for (const t of types.filter(typeTouched)) {
+      for (const p of t.files) {
+        const path = fileOf(p) ? fileOf(p).path : p;
+        if (!declared.has(path)) declared.set(path, []);
+        if (!declared.get(path).includes(t)) declared.get(path).push(t);
+      }
+    }
+    const files = byRank([...declared.keys()], fileRank);
+    wrap.append(el("h3", {}, files.length ? plural(files.length, "file", "files") : `No changes among ${types.length} types`, help(HELP.types)));
+    if (files.length) {
+      const card = el("section", { class: "typecard" });
+      for (const path of files) card.append(fileBlock(path, declared.get(path)));
       wrap.append(card);
     }
     wrap.append(testsSection(id) || "");
@@ -2214,8 +2225,8 @@
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
       "Tests are never drawn on the map. While this list is open, a block's badge counts the changed test files of the types it holds. Test infrastructure, such as fixtures and builders, comes last.",
     testsSection: "These are the changed test files whose test types test a type in this block. They count apart from the block's own files in the progress.",
-    types: "These are the types in this block whose files changed, with the hunks of each file. Files with decisions or their own edits come first, " +
-      "then files that only follow from decisions, then reviewed files.",
+    types: "These are the files that declare this block's changed types, each once, with the types it declares and the hunks of the file. " +
+      "Files with decisions or their own edits come first, then files that only follow from decisions, then reviewed files.",
     uses: "Uses lists the blocks this block references, and Used by lists the blocks that reference it. Each count is the number of references at base and at head. " +
       "Click a row to see the type pairs behind it.",
     threads: "These review threads on files in this block are not resolved yet. Click one to go to its lines.",
