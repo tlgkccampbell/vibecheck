@@ -2278,8 +2278,6 @@
   function renderPatterns(box) {
     const departures = (p) => p.instances.reduce((s, i) => s + i.departures.length, 0);
     const found = [...PATTERNS.values()].sort((a, b) => departures(b) - departures(a) || b.instances.length - a.instances.length || patternNaming(a).name.localeCompare(patternNaming(b).name));
-    box.append(el("p", { class: "hint" }, "Patterns lists the repeated ", el("em", {}, "code patterns"), " that this change touches, such as types that implement the same interface. " +
-      "Concepts lists repeated concepts instead. Hover a pattern to outline its blocks."));
     const hoverable = (p, node) => { node.addEventListener("mouseenter", () => hoverPattern(p)); node.addEventListener("mouseleave", () => hoverPattern(null)); return node; };
     for (const p of found) {
       const naming = patternNaming(p), n = departures(p);
@@ -2511,8 +2509,6 @@
     head.append(el("div", { class: "path-head" }, el("span", {}, block ? `${plural(terms.length, "concept", "concepts")} in ${nameOf(block)}` : plural(GLOSSARY.length, "concept", "concepts")),
       block ? el("button", { class: "link", onclick: () => showGlossary(null) }, "Show all") : null));
     if (!terms.length) { box.append(el("p", { class: "hint" }, block ? "The change touches no concept here." : "The change touches no concept.")); return; }
-    box.append(el("p", { class: "hint" }, "Concepts lists the repeated ", el("em", {}, "concepts"), " that this change touches, such as “Command Handler” in the names of many types. " +
-      "Patterns lists repeated code patterns instead. Hover a concept to outline its blocks."));
     const hoverable = (t, node) => { node.addEventListener("mouseenter", () => hoverPattern(t)); node.addEventListener("mouseleave", () => hoverPattern(null)); return node; };
     for (const [title, group] of [["New in this change", terms.filter((t) => t.new)], ["Touched by this change", terms.filter((t) => !t.new)]]) {
       if (!group.length) continue;
@@ -2595,7 +2591,7 @@
       "Then holds the other changed blocks. Set aside counts the consequences, trivial files and files already reviewed. A step is read once all its files are reviewed.",
     changes: "This panel lists every changed block and its changed files. Below them are the decisions, the edges whose reference counts changed, and the changes to the map itself.",
     glossary: "Concepts lists the concepts that recur in the names of types, such as “Command Handler”. A word counts only when unrelated types share it. " +
-      "New concepts come first, and Claude defines each concept that no type documents.",
+      "New concepts come first, and Claude defines each concept that no type documents. Hover a concept to outline the blocks that hold its types.",
     decisions: "A decision is a hunk that adds, removes, renames or changes the signature of a declaration. Its consequences are other hunks whose changes all follow from it, such as updated call sites. " +
       "Decisions that reach the most blocks come first. Hover a row to see its reach on the map, and click it to go there.",
     edges: "An edge is the set of references from one block to another. This list shows the edges whose reference counts changed, with new and removed edges first. Click an edge to show it on the map.",
