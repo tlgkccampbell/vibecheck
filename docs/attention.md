@@ -151,7 +151,11 @@ consequences under the blocks that hold them.
 
 In the leaf view, a decision's hunk is drawn with a header: the kind of change, the
 declaration, the public mark where it applies, and "n consequences in m files,
-across k blocks". Consequences are collapsed to one line each, with "follows from"
+across k blocks", with its consequences in test files counted apart as ", and 4 in
+tests". The header also says which test methods reference the decision, directly and
+through helpers, and names the changed ones, or says "no test references it" for a
+public decision that none does, as [tests.md](tests.md) section 5.1 describes; the
+counts open the lists of the methods in the details panel. Consequences are collapsed to one line each, with "follows from"
 and the decision's declaration as a link, and open on a click like a reviewed file's
 diff. A file whose hunks are all consequences sorts after files with decisions and
 before reviewed files, and its chip says `consequence`.

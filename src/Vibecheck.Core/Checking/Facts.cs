@@ -47,7 +47,7 @@ public sealed record Facts
     public List<Site> Sites { get; init; } = [];
 
     /// <summary>Gets the test types, with their subjects and test methods, and the references they make into the system, as <see cref="TestTypes"/> builds them.</summary>
-    public TestFacts Tests { get; init; } = new([], []);
+    public TestFacts Tests { get; init; } = TestFacts.Empty;
 
     [JsonIgnore]
     public bool Passed => Violations.Count == 0;
@@ -74,7 +74,12 @@ public sealed record FileFact(string Path, string Hash, IReadOnlyList<string> Le
 /// <summary>The test types of a commit and the references they make into the system. See <c>docs/tests.md</c> section 3.2.</summary>
 /// <param name="Types">The test types, ordered by name.</param>
 /// <param name="Exercises">The references from test types to declarations of the system, ordered by file and line.</param>
-public sealed record TestFacts(List<TestTypeFact> Types, List<ExerciseFact> Exercises);
+/// <param name="Calls">The references from members of test types to members of test types, ordered by file and line.</param>
+public sealed record TestFacts(List<TestTypeFact> Types, List<ExerciseFact> Exercises, List<CallFact> Calls)
+{
+    /// <summary>The test facts of a commit that has no test types.</summary>
+    public static TestFacts Empty => new([], [], []);
+}
 
 /// <summary>
 /// A test type: a type that the map's <c>tests</c> list matches and its <c>exclude</c> list does not. It binds to no leaf.
@@ -102,6 +107,13 @@ public sealed record TestMethodFact(string Symbol, string File, int First, int L
 /// it never becomes an edge. The method is the member of the test type whose lines hold the reference, when one does.
 /// </summary>
 public sealed record ExerciseFact(string From, string? Method, string Symbol, string File, int Line);
+
+/// <summary>
+/// A call: a reference from a member of a test type to a declaration of a test type, the same one or another, which is
+/// what <see cref="TestReferences"/> follows through helpers. The member is the innermost one whose lines hold the
+/// reference. See <c>docs/tests.md</c> section 5.1.
+/// </summary>
+public sealed record CallFact(string From, string To, string File, int Line);
 
 /// <summary>An observed dependency between two types, kept as evidence. The leaves of its ends are found through the types list.</summary>
 public sealed record DependencyFact(string From, string To, string Kind, string Symbol, string File, int Line);

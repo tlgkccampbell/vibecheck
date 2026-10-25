@@ -53,6 +53,10 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Null(facts.Tests.Types.Single(t => t.Name == "Orchard.Tests.Sessions.SessionBuilder").Subject);
         Assert.Contains(facts.Tests.Exercises, e => e.Symbol == session + ".Has" && e.Method == "Orchard.Tests.Sessions.SessionTests.Has_FindsAGrantedScope");
         Assert.DoesNotContain(facts.Tests.Exercises, e => e.Symbol.StartsWith("Xunit.", StringComparison.Ordinal) || e.Symbol.StartsWith("Orchard.Tests.", StringComparison.Ordinal));
+        // The test builds its session through the builder, so it reaches the session's type through that helper.
+        var references = TestReferences.Of(facts.Tests)["Orchard.Tests.Sessions.SessionTests.Has_FindsAGrantedScope"];
+        Assert.Equal(new TestReference("direct"), references[session + ".Has"]);
+        Assert.Equal(new TestReference("helper", "Orchard.Tests.Sessions.SessionBuilder.With"), references[session]);
         var file = facts.Files.Single(f => f.Path == "tests/Orchard.Tests/Sessions/SessionTests.cs");
         Assert.Equal((true, "auth.sessions"), (file.Test, file.Subject));
         Assert.Equal((true, (string?)null), facts.Files.Where(f => f.Path.EndsWith("SessionBuilder.cs")).Select(f => (f.Test, f.Subject)).Single());

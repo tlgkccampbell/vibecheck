@@ -17,8 +17,8 @@ Directing the reviewer's attention, with decisions and their consequences, seman
 triviality, a reading path, new concepts and a glossary, is designed in
 [docs/attention.md](docs/attention.md); its first four phases, decisions and their
 consequences, semantic triviality, the reading path and the glossary, are built.
-Tests in a review are designed in [docs/tests.md](docs/tests.md); its first phase, test
-types, is built.
+Tests in a review are designed in [docs/tests.md](docs/tests.md); its first two phases,
+test types and tests on decisions, are built.
 
 ## Layout
 
@@ -297,6 +297,17 @@ changed, and test infrastructure last; while it is open, each block carries a ba
 with the number of its changed test files. A change of tests alone opens there.
 `vibecheck check` reports how the test types were placed, and warns about an `exclude`
 pattern that names only test projects, which belongs in `tests`.
+
+A decision's header says which tests reference it, as "referenced by 6 tests directly
+and 31 through helpers: 1 added, 2 changed", and names the changed test methods, or
+says "no test references it" for a public decision that none does. A test reaches a
+declaration through a helper when a member of a test type that it calls, such as a
+builder, references it; calls are followed through test code and never into the
+system. Each count opens the list of the methods in the details panel, where hovering
+one names its helper. A hunk in a test file can follow from a decision, as an updated
+call site does, and the decision counts its consequences in tests apart. In the Tests
+face, each changed test method names the changed declarations it references, each
+opening its decision.
 
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a

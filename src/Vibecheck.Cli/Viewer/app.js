@@ -221,15 +221,19 @@
   const declText = (x) => x.previous ? `${memberName(x.previous, x.kind)} → ${memberName(x.symbol, x.kind)}` : memberName(x.symbol, x.kind);
   // Returns the declaration a decision is named by: the one with the most sites at either end.
   const leadOf = (d) => d.declarations.slice().sort((a, b) => b.sitesBase + b.sitesHead - a.sitesBase - a.sitesHead)[0];
-  // Returns the files that hold a decision's consequences and the leaves those files count under.
+  // Returns the files of the system that hold a decision's consequences, the leaves those files count under, and how
+  // many of its consequences are in test files, which count apart. See docs/tests.md section 5.2.
   function reachOf(d) {
-    const files = [...new Set(d.consequences.map((c) => c.file))];
+    const isTest = (p) => { const f = fileOf(p); return !!(f && f.test); };
+    const files = [...new Set(d.consequences.map((c) => c.file).filter((p) => !isTest(p)))];
     const blocks = new Set(files.flatMap((p) => { const f = fileOf(p); return f ? countedLeaves(f) : []; }));
-    return { files, blocks };
+    return { files, blocks, tests: d.consequences.filter((c) => isTest(c.file)).length };
   }
   function reachText(d) {
-    const r = reachOf(d);
-    return `${plural(d.consequences.length, "consequence", "consequences")} in ${plural(r.files.length, "file", "files")}, across ${plural(r.blocks.size, "block", "blocks")}`;
+    const r = reachOf(d), system = d.consequences.length - r.tests;
+    if (!system) return `${plural(r.tests, "consequence", "consequences")} in tests`;
+    return `${plural(system, "consequence", "consequences")} in ${plural(r.files.length, "file", "files")}, across ${plural(r.blocks.size, "block", "blocks")}`
+      + (r.tests ? `, and ${r.tests} in tests` : "");
   }
   // Returns the leaves the decision's own file counts under, which are the blocks the decision is drawn from.
   function sourceLeavesOf(d) {
@@ -884,6 +888,8 @@
     panel: undefined,
     // The leaves whose Tests sections the reader has opened.
     testsOpen: new Set(),
+    // The decision whose tests the details panel shows opened, or null.
+    decisionTests: null,
     // The block the Glossary is narrowed to, or null for every term, and the key of the term it marks, or null.
     glossaryBlock: null,
     term: null,
@@ -1363,10 +1369,58 @@
     if (d.public) head.append(el("span", { class: "public-mark", title: "Callers outside the solution may exist that the changeset cannot show." }, "public"));
     head.append(el("button", { class: "link", onclick: () => selectDecision(d.id), title: "List the consequences by block and mark them on the map" },
       d.consequences.length ? reachText(d) : "no consequences"));
+    head.append(testsLine(d) || "");
     head.append(el("button", { class: "link", onclick: () => revealDecision(d), title: "Select this decision and show it in the Changes panel" }, "Show in Changes"));
     if (d.consequences.length) head.append(el("button", { class: "btn", onclick: () => markConsequences(d) }, "Mark consequences reviewed"));
     if (state.decisionNote && state.decisionNote.id === d.id) head.append(el("span", { class: "file-note" }, state.decisionNote.text));
     return head;
+  }
+
+  // ---------- Tests of decisions ----------
+  // A decision lists the test methods that reference its declarations, directly or through a helper, each with its
+  // status in the change. The header counts the two ways apart, since a shared fixture would otherwise make every
+  // decision "referenced by 400 tests", and names the changed methods, whose names are often the sentence a reviewer
+  // needs. See docs/tests.md section 5.1.
+  const NO_TESTS_TIP = "No test method names this decision's declarations, directly or through a helper. A test can still reach it through code of the system that those references do not name.";
+  const testName = (t) => memberName(t.method, "method");
+  const testTitle = (t) => t.method + (t.helper ? `\nThrough the helper ${memberName(t.helper, "method")}` : "") + `\n${t.status}`;
+  // Opens the decision in the details panel with its tests shown.
+  function showDecisionTests(d) {
+    state.decision = d.id;
+    state.decisionTests = d.id;
+    redraw();
+  }
+  // Returns the line that says which test methods reference a decision, or "no test references it" for a public
+  // decision that none does, or null for a decision that is neither tested nor public.
+  function testsLine(d) {
+    const tests = d.tests || [];
+    if (!tests.length) return d.public ? el("span", { class: "tests-line none", title: NO_TESTS_TIP }, "no test references it") : null;
+    const direct = tests.filter((t) => t.way === "direct").length, helper = tests.length - direct;
+    const counts = ["added", "removed", "changed"].map((s) => [s, tests.filter((t) => t.status === s).length]).filter((x) => x[1]).map(([s, n]) => `${n} ${s}`);
+    const link = (text, title) => el("button", { class: "link", onclick: () => showDecisionTests(d), title }, text);
+    const line = el("span", { class: "tests-line" }, "referenced by ");
+    if (direct) line.append(link(`${plural(direct, "test", "tests")} directly`, "List the test methods whose own lines reference it"));
+    if (direct && helper) line.append(" and ");
+    if (helper) line.append(link(direct ? `${helper} through helpers` : `${plural(helper, "test", "tests")} through helpers`, "List the test methods that reach it through a helper they call"));
+    if (counts.length) line.append(": " + counts.join(", "));
+    const changed = tests.filter((t) => t.status !== "unchanged");
+    if (changed.length) line.append(" · ", ...changed.flatMap((t, i) => [i ? ", " : "", el("code", { title: testTitle(t) }, testName(t))]));
+    return line;
+  }
+  // Returns the details panel's lists of a decision's test methods, those that reference it directly and those that
+  // reach it through a helper, each method naming its status and, on hover, its helper.
+  function decisionTestsBlock(d) {
+    const tests = d.tests || [];
+    const box = el("div", { class: "decision-tests" });
+    if (!tests.length) { box.append(el("p", { class: "hint", title: NO_TESTS_TIP }, d.public ? "No test references it." : "No test references it, and it is not public.")); return box; }
+    for (const [way, title] of [["direct", "Referenced directly"], ["helper", "Referenced through helpers"]]) {
+      const list = tests.filter((t) => t.way === way);
+      if (!list.length) continue;
+      box.append(el("h3", {}, `${title}: ${list.length}`));
+      box.append(el("ul", { class: "test-methods" }, ...list.map((t) => el("li", { class: "st-" + (METHOD_STATUS[t.status] || "unchanged"), title: testTitle(t) },
+        el("span", { class: "row-change" }, t.status + " "), el("code", {}, testName(t)), t.helper ? el("span", { class: "row-change" }, ` via ${memberName(t.helper, "method")}`) : ""))));
+    }
+    return box;
   }
 
   // Returns a consequence's hunk collapsed to one line that names the decision it follows from, which shows the diff on
@@ -1441,7 +1495,7 @@
   // and how many files with consequences it left because they also carry other edits.
   async function markConsequences(d) {
     const todo = d.marks.filter((p) => !REVIEWED.has(p));
-    const left = reachOf(d).files.filter((p) => !d.marks.includes(p)).length;
+    const left = [...new Set(d.consequences.map((c) => c.file))].filter((p) => !d.marks.includes(p)).length;
     const already = d.marks.length - todo.length;
     state.decisionNote = { id: d.id, text: `Marked ${plural(todo.length, "file", "files")}` + (already ? `, ${already} already reviewed` : "") +
       (left ? `; left ${plural(left, "file that also carries", "files that also carry")} other edits` : "") + "." };
@@ -1470,17 +1524,25 @@
       box.append(kv(CHANGE_TEXT[x.change], el("span", {}, el("code", { title: x.symbol }, declText(x)), ` · ${x.kind}, ${x.accessibility || "default"} · sites ${x.sitesBase === x.sitesHead ? x.sitesHead : x.sitesBase + " → " + x.sitesHead}`)));
     }
     if (d.public) box.append(el("p", { class: "warn" }, "Public: callers outside the solution may exist that the changeset cannot show."));
+    const tests = el("details", { class: "decision-tests-box", open: state.decisionTests === d.id, ontoggle: (ev) => { state.decisionTests = ev.target.open ? d.id : null; } },
+      el("summary", {}, (d.tests || []).length ? `Tests: ${plural(d.tests.length, "test method", "test methods")}` : "Tests: none"), decisionTestsBlock(d));
+    box.append(tests);
+    if (state.decisionTests === d.id) requestAnimationFrame(() => tests.scrollIntoView({ block: "nearest" }));
     if (!d.consequences.length) { box.append(el("p", { class: "hint" }, "No other hunk follows from this decision alone.")); return box; }
     box.append(el("h3", {}, reachText(d)));
     const byBlock = new Map();
+    // Consequences in test files are grouped apart, last, since test files count under no block.
+    const IN_TESTS = "~in-tests";
     for (const c of d.consequences) {
       const f = fileOf(c.file);
-      for (const leaf of f ? countedLeaves(f) : []) { if (!byBlock.has(leaf)) byBlock.set(leaf, []); byBlock.get(leaf).push(c); }
+      for (const leaf of !f ? [] : f.test ? [IN_TESTS] : countedLeaves(f)) { if (!byBlock.has(leaf)) byBlock.set(leaf, []); byBlock.get(leaf).push(c); }
     }
     const ul = el("ul", { class: "list" });
-    for (const [leaf, list] of [...byBlock].sort((a, b) => b[1].length - a[1].length || nameOf(a[0]).localeCompare(nameOf(b[0])))) {
-      ul.append(el("li", {}, el("button", { class: "row", onclick: () => showInContext(leaf), title: leaf }, treeIcon(leaf), el("span", { class: "row-name" }, nameOf(leaf)),
-        el("span", { class: "row-meta" }, plural(list.length, "hunk", "hunks")))));
+    for (const [leaf, list] of [...byBlock].sort((a, b) => (a[0] === IN_TESTS) - (b[0] === IN_TESTS) || b[1].length - a[1].length || nameOf(a[0]).localeCompare(nameOf(b[0])))) {
+      ul.append(el("li", {}, leaf === IN_TESTS
+        ? el("div", { class: "row" }, el("span", { class: "tree-icon" }), el("span", { class: "row-name" }, "In tests"), el("span", { class: "row-meta" }, plural(list.length, "hunk", "hunks")))
+        : el("button", { class: "row", onclick: () => showInContext(leaf), title: leaf }, treeIcon(leaf), el("span", { class: "row-name" }, nameOf(leaf)),
+          el("span", { class: "row-meta" }, plural(list.length, "hunk", "hunks")))));
       for (const c of list) {
         const hunk = (HUNKS.get(c.file) || [])[c.hunk];
         ul.append(el("li", {}, el("button", { class: "row reach-hunk" + (REVIEWED.has(c.file) ? " st-reviewed" : ""), onclick: () => openHunk(c.file, c.hunk), title: c.file },
@@ -1853,11 +1915,20 @@
           el("span", { class: "dot" }), el("span", { class: "row-name" }, el("code", {}, shortName(t.name))),
           el("span", { class: "row-meta" }, t.methods.length ? plural(t.methods.length, "method", "methods") : t.status)));
         if (t.methods.length) li.append(el("ul", { class: "test-methods" }, ...t.methods.map((m) =>
-          el("li", { class: "st-" + METHOD_STATUS[m.status] }, el("span", { class: "row-change" }, m.status + " "), el("code", {}, memberName(m.symbol, "method"))))));
+          el("li", { class: "st-" + METHOD_STATUS[m.status] }, el("span", { class: "row-change" }, m.status + " "), el("code", {}, memberName(m.symbol, "method")),
+            (m.declarations || []).length ? el("span", { class: "tested" }, "references ", ...m.declarations.flatMap((x, i) => [i ? ", " : "", testedDeclaration(x)])) : ""))));
         ul.append(li);
       }
       box.append(ul);
     }
+  }
+  // Returns a changed declaration that a test method references, with how it changed, which opens the decision that
+  // holds it when there is one. A rewritten declaration is no decision, so it is only named.
+  function testedDeclaration(x) {
+    const d = DECISION_LIST.find((d) => d.declarations.some((y) => y.symbol === x.symbol));
+    const name = el("code", { title: x.symbol }, memberName(x.symbol, "member"));
+    const text = [name, ` ${CHANGE_TEXT[x.change] || x.change}`];
+    return d ? el("button", { class: "link", onclick: () => openDecision(d), title: "Open the decision" }, ...text) : el("span", {}, ...text);
   }
   // Opens a leaf's view with its Tests section open, or the test infrastructure leaf.
   async function openLeaf(leaf) {

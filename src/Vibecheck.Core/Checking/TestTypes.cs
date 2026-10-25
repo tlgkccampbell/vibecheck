@@ -3,8 +3,8 @@ using Vibecheck.Analysis;
 namespace Vibecheck.Checking;
 
 /// <summary>
-/// Builds the <c>tests</c> member of the facts: each test type with its test methods and its subject, and the exercises
-/// that the test types make into the system. This is the one place that decides which system type a test type tests.
+/// Builds the <c>tests</c> member of the facts: each test type with its test methods and its subject, the exercises
+/// that the test types make into the system, and the calls among their members. This is the one place that decides which system type a test type tests.
 /// See <c>docs/tests.md</c> sections 3.2 and 4.
 /// </summary>
 public static class TestTypes
@@ -26,7 +26,7 @@ public static class TestTypes
     public static (TestFacts Tests, List<FileFact> Files) Build(AnalysisResult analysis, Exclusion exclusion, AnalysisResult system, IReadOnlyDictionary<string, string> leafOf)
     {
         var tests = analysis.Types.Where(exclusion.IsTest).OrderBy(t => t.Name, StringComparer.Ordinal).ToList();
-        if (tests.Count == 0) return (new TestFacts([], []), []);
+        if (tests.Count == 0) return (TestFacts.Empty, []);
         var names = tests.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         var systemTypes = system.Types.ToDictionary(t => t.Name, StringComparer.Ordinal);
 
@@ -45,6 +45,16 @@ public static class TestTypes
             .ToList();
         var exercises = references.Select(r => new ExerciseFact(r.From, MemberAt(r.From, r.File, r.Line), r.Symbol, r.File, r.Line)).ToList();
         var referencesOf = references.ToLookup(r => r.From, r => r.To, StringComparer.Ordinal);
+
+        // A call joins a member of a test type to a declaration of a test type: another type's, by a dependency, or its
+        // own, by a site. A reference that no member holds, such as one in an attribute on the type, is not a call.
+        var calls = analysis.Dependencies.Where(d => names.Contains(d.FromType) && names.Contains(d.ToType))
+            .Select(d => (d.FromType, d.Symbol, d.File, d.Line))
+            .Concat(analysis.Sites.Where(s => names.Contains(s.FromType) && names.Contains(s.ToType)).Select(s => (s.FromType, s.Symbol, s.File, s.Line)))
+            .Select(r => (From: MemberAt(r.FromType, r.File, r.Line), r.Symbol, r.File, r.Line))
+            .Where(r => r.From is not null && r.From != r.Symbol)
+            .OrderBy(r => r.File, StringComparer.Ordinal).ThenBy(r => r.Line).ThenBy(r => r.Symbol, StringComparer.Ordinal)
+            .Select(r => new CallFact(r.From!, r.Symbol, r.File, r.Line)).Distinct().ToList();
 
         var byShortName = system.Types.GroupBy(t => ShortName(t.PlainName), StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         var methodsOf = declarations.Where(d => d.Kind == "method" && d.Test is not null).ToLookup(d => d.Type, StringComparer.Ordinal);
@@ -75,7 +85,7 @@ public static class TestTypes
                 .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => g.Key).FirstOrDefault();
             files.Add(new FileFact(file.Path, file.Hash, [], file.Generator) { Test = true, Subject = subject });
         }
-        return (new TestFacts(types, exercises), files);
+        return (new TestFacts(types, exercises, calls), files);
     }
 
     /// <summary>

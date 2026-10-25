@@ -199,6 +199,12 @@ public sealed record Decision(string Id, string File, int Hunk, bool Public, Lis
     /// left out.
     /// </summary>
     public List<string> Marks { get; init; } = [];
+
+    /// <summary>
+    /// Gets the test methods that reference the decision's declarations, with their statuses and ways, the removed
+    /// first, then the added, the changed and the unchanged, as <see cref="TestChanges"/> finds them.
+    /// </summary>
+    public List<DecisionTest> Tests { get; init; } = [];
 }
 
 /// <summary>

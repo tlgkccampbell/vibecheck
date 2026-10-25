@@ -38,10 +38,11 @@ public static class Clustering
         var atHead = decisive.Where(c => c.HeadSymbol is not null).ToDictionary(c => c.HeadSymbol!, StringComparer.Ordinal);
         var baseDeclarations = ByFile(baseFacts.Declarations);
         var headDeclarations = ByFile(headFacts.Declarations);
-        var baseSites = SitesOf(baseFacts);
-        var headSites = SitesOf(headFacts);
-        var baseCounts = baseSites.Values.SelectMany(s => s).CountBy(s => s, StringComparer.Ordinal).ToDictionary(StringComparer.Ordinal);
-        var headCounts = headSites.Values.SelectMany(s => s).CountBy(s => s, StringComparer.Ordinal).ToDictionary(StringComparer.Ordinal);
+        var baseSites = SitesOf(baseFacts, tests: true);
+        var headSites = SitesOf(headFacts, tests: true);
+        // A declaration's site counts are those in the system, so that the tests that reference it do not swell them.
+        var baseCounts = SitesOf(baseFacts, tests: false).Values.SelectMany(s => s).CountBy(s => s, StringComparer.Ordinal).ToDictionary(StringComparer.Ordinal);
+        var headCounts = SitesOf(headFacts, tests: false).Values.SelectMany(s => s).CountBy(s => s, StringComparer.Ordinal).ToDictionary(StringComparer.Ordinal);
         var previous = files.Where(f => f.PreviousPath is not null).ToDictionary(f => f.Path, f => f.PreviousPath!, StringComparer.Ordinal);
 
         var located = new List<Located>();
@@ -180,8 +181,12 @@ public static class Clustering
     private static Dictionary<string, List<Declaration>> ByFile(IEnumerable<Declaration> declarations) =>
         declarations.GroupBy(d => d.File, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
-    /// <summary>Returns the symbols referenced on each line of each file at one end, from its dependencies and its sites together.</summary>
-    private static Dictionary<(string File, int Line), List<string>> SitesOf(Facts facts)
+    /// <summary>
+    /// Returns the symbols referenced on each line of each file at one end, from its dependencies, its sites and the
+    /// exercises of its test types together when <paramref name="tests"/> is set, so that a hunk in a test file can follow
+    /// from a decision. See <c>docs/tests.md</c> section 5.2.
+    /// </summary>
+    private static Dictionary<(string File, int Line), List<string>> SitesOf(Facts facts, bool tests)
     {
         var result = new Dictionary<(string, int), List<string>>();
         void Add(string file, int line, string symbol)
@@ -191,6 +196,7 @@ public static class Clustering
         }
         foreach (var d in facts.Dependencies) Add(d.File, d.Line, d.Symbol);
         foreach (var s in facts.Sites) Add(s.File, s.Line, s.Symbol);
+        if (tests) foreach (var e in facts.Tests.Exercises) Add(e.File, e.Line, e.Symbol);
         return result;
     }
 }

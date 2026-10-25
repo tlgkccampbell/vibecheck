@@ -559,7 +559,9 @@ viewer consumes two of these and never reads the code or the map directly.
       "subject": { "type": "Example.Auth.Session", "leaf": "auth", "by": "name" },
       "methods": [ { "symbol": "Example.Auth.Tests.SessionTests.Require_Succeeds", "file": "tests/Auth/SessionTests.cs", "first": 18, "last": 31 } ] } ],
     "exercises": [ { "from": "Example.Auth.Tests.SessionTests", "method": "Example.Auth.Tests.SessionTests.Require_Succeeds",
-      "symbol": "Example.Auth.Session.Require", "file": "tests/Auth/SessionTests.cs", "line": 24 } ]
+      "symbol": "Example.Auth.Session.Require", "file": "tests/Auth/SessionTests.cs", "line": 24 } ],
+    "calls": [ { "from": "Example.Auth.Tests.SessionTests.Require_Fails_WhenExpired", "to": "Example.Auth.Tests.SessionBuilder.Expired",
+      "file": "tests/Auth/SessionTests.cs", "line": 40 } ]
   },
   "nodes": { "billing": { "types": 40, "internal": 212, "crossing": 9, "attributed": 1 } },
   "levels": { "root": { "edges": [ { "from": "billing", "to": "auth", "count": 17 } ], "cycles": [] } },
@@ -575,8 +577,9 @@ their files to the diff. Excluded types and the files that declare nothing else 
 absent, and `excluded` counts them. Test types are absent from `types`, from the
 dependencies and from the declarations, and are not counted in `excluded`. The
 `tests` member lists them instead, each with its files, its test methods and its
-subject, with the references they make into the system as `exercises`, as
-[tests.md](tests.md) section 3.2 describes. A file that declares test types and no
+subject, with the references they make into the system as `exercises` and the
+references among their own members as `calls`, as [tests.md](tests.md) section 3.2
+describes. A file that declares test types and no
 system type is listed in `files` with no leaves, `test` set, and the leaf of its
 test types' subject as `subject`. Dependencies are listed per reference, since
 each one is evidence the viewer can show, and once more aggregated per pair of
@@ -614,8 +617,9 @@ as the differences:
   and all of them at the top level.
 - **Tests**: every test type with a changed file at either end, with its status, its
   subject, its changed files, and its test methods that the change added, removed or
-  changed, where a method is changed when a hunk changes one of its lines. The
-  viewer's Tests switch lists them, as [tests.md](tests.md) section 7.3 describes.
+  changed, where a method is changed when a hunk changes one of its lines. Each such
+  method names the changed declarations it references, rewritten ones among them.
+  The viewer's Tests switch lists them, as [tests.md](tests.md) section 7.3 describes.
 - **Types**: every type at either end with the leaf it binds to at base and at head,
   the files that declare it, and whether it was added, removed, moved or unchanged.
   This is how the viewer descends from a leaf to its types to their files.
@@ -658,7 +662,12 @@ as the differences:
   own end, is a consequence: its `follows` lists the decisions, the one with the most
   sites in it first, and each decision lists its consequences with the number of
   lines each explains. A decision's `marks` are the files whose every hunk is trivial
-  or explained by that decision alone.
+  or explained by that decision alone. A hunk in a test file follows from a decision
+  by the same rule, read against the exercises of the test types, and a decision's
+  site counts leave the tests out. Each decision lists as `tests` the test methods
+  that reference its declarations, directly or through a helper, with the way, the
+  helper, and the method's status in the change, as [tests.md](tests.md) section 5.1
+  describes.
 - **Path**: the order in which to read the changeset, as [attention.md](attention.md)
   section 6 plans it: the surprises first, each with the signal that put it there,
   then the other changed leaves with the decisions, files and test files under them,

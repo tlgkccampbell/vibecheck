@@ -52,6 +52,7 @@ public static class ReadingPath
         var map = cs.Map;
         var changed = cs.Files.Where(f => f.Status != "unchanged").ToList();
         var changedPaths = changed.Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
+        var testPaths = changed.Where(f => f.Test).Select(f => f.Path).ToHashSet(StringComparer.Ordinal);
         var filesOfType = cs.Types.ToDictionary(t => t.Name, t => t.Files.Where(changedPaths.Contains).ToList(), StringComparer.Ordinal);
         var hunksOf = cs.Hunks.ToDictionary(h => h.Path, StringComparer.Ordinal);
         var decisionAt = cs.Decisions.ToDictionary(d => d.Id, StringComparer.Ordinal);
@@ -244,9 +245,18 @@ public static class ReadingPath
         }
 
         var aside = new List<PathStep>();
-        int Blocks(List<string> paths) => paths.SelectMany(p => CountedLeaves(changed.First(f => f.Path == p))).Distinct(StringComparer.Ordinal).Count();
-        if (consequences.Count > 0) aside.Add(new PathStep("aside:consequences", "aside", "aside", "consequences", $"{Plural(consequences.Count, "file", "files")} of consequences in {Plural(Blocks(consequences), "block", "blocks")}", consequences));
-        if (trivial.Count > 0) aside.Add(new PathStep("aside:trivial", "aside", "aside", "trivial", $"{Plural(trivial.Count, "trivial or generated file", "trivial or generated files")} in {Plural(Blocks(trivial), "block", "blocks")}", trivial));
+        // Says how many of the files are in the system and in how many blocks, with the test files, which count under no
+        // block, apart.
+        string Where(List<string> paths, string one, string many)
+        {
+            var system = paths.Where(p => !testPaths.Contains(p)).ToList();
+            var tests = paths.Count - system.Count;
+            var blocks = system.SelectMany(p => CountedLeaves(changed.First(f => f.Path == p))).Distinct(StringComparer.Ordinal).Count();
+            var text = system.Count > 0 ? $"{Plural(system.Count, one, many)} in {Plural(blocks, "block", "blocks")}" : "";
+            return tests == 0 ? text : text.Length == 0 ? $"{Plural(tests, "test " + one, "test " + many)}" : $"{text}, and {tests} in tests";
+        }
+        if (consequences.Count > 0) aside.Add(new PathStep("aside:consequences", "aside", "aside", "consequences", Where(consequences, "file of consequences", "files of consequences"), consequences));
+        if (trivial.Count > 0) aside.Add(new PathStep("aside:trivial", "aside", "aside", "trivial", Where(trivial, "trivial or generated file", "trivial or generated files"), trivial));
 
         return first.Concat(then).Concat(aside).ToList();
 
@@ -257,15 +267,21 @@ public static class ReadingPath
             var what = lead.Change == "reshaped" ? $"signature of {Short(lead)} changed" : $"{ChangeText.GetValueOrDefault(lead.Change, lead.Change)} {Short(lead)}";
             var others = d.Declarations.Count - 1;
             var signal = what + (others > 0 ? $" and {Plural(others, "other", "others")}" : "") + (d.Public ? ", public" : "") + ": "
-                + (d.Consequences.Count == 0 ? "no consequences" : $"{Plural(d.Consequences.Count, "consequence", "consequences")} in {Plural(reach.Files, "file", "files")} across {Plural(reach.Blocks, "block", "blocks")}");
+                + (d.Consequences.Count == 0 ? "no consequences"
+                    : reach.Files == 0 ? $"{Plural(reach.Tests, "consequence", "consequences")} in tests"
+                    : $"{Plural(d.Consequences.Count - reach.Tests, "consequence", "consequences")} in {Plural(reach.Files, "file", "files")} across {Plural(reach.Blocks, "block", "blocks")}"
+                        + (reach.Tests > 0 ? $", and {reach.Tests} in tests" : ""));
             return new PathStep($"decision:{d.Id}", tier, "decision", d.Id, signal, [d.File]);
         }
 
-        (int Blocks, int Files) Reach(Decision d)
+        // A decision's reach counts the blocks and files of the system its consequences are in. Its consequences in test
+        // files count apart, so that tests do not rank a decision above one that reaches further into the system.
+        (int Blocks, int Files, int Tests) Reach(Decision d)
         {
-            var files = d.Consequences.Select(c => c.File).Distinct(StringComparer.Ordinal).ToList();
+            var tests = d.Consequences.Count(c => testPaths.Contains(c.File));
+            var files = d.Consequences.Select(c => c.File).Where(p => !testPaths.Contains(p)).Distinct(StringComparer.Ordinal).ToList();
             var blocks = files.Select(p => changed.FirstOrDefault(f => f.Path == p)).OfType<FileChange>().SelectMany(CountedLeaves).Distinct(StringComparer.Ordinal).Count();
-            return (blocks, files.Count);
+            return (blocks, files.Count, tests);
         }
     }
 
