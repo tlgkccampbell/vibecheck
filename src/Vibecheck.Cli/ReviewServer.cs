@@ -393,8 +393,9 @@ public sealed class ReviewServer : IAsyncDisposable
 
     /// <summary>
     /// Sends a review's pages an <c>intents</c> event with the intents of its pull request's description, resolved
-    /// against the current result, when the description differs from the one they were last resolved from. A review
-    /// with no result yet is sent nothing, since its page reads the intents with the changeset.
+    /// against the current result, and the coverage of each surprise on the reading path, when the description differs
+    /// from the one they were last resolved from. A review with no result yet is sent nothing, since its page reads the
+    /// intents with the changeset.
     /// </summary>
     private static void PublishIntents(Review review, PullSnapshot snapshot)
     {
@@ -405,7 +406,9 @@ public sealed class ReviewServer : IAsyncDisposable
             if (review.IntentsBody == (snapshot.Body ?? "")) return;
             review.IntentsBody = snapshot.Body ?? "";
         }
-        review.Add(new { type = "intents", run, intents = ResolveIntents(snapshot, result) });
+        var changeset = ResolveIntents(snapshot, result);
+        var coverage = changeset.Path.Where(IntentResolver.IsSurprise).Select(s => new { id = s.Id, intents = s.Intents, uncovered = s.Uncovered });
+        review.Add(new { type = "intents", run, intents = changeset.Intents, coverage });
     }
 
     /// <summary>Returns a review's changeset with the intents of its pull request's description, which a cached changeset never carries.</summary>
@@ -413,19 +416,19 @@ public sealed class ReviewServer : IAsyncDisposable
     {
         var snapshot = review.Snapshot;
         lock (review) review.IntentsBody = snapshot?.Body ?? "";
-        return result.Changeset with { Intents = ResolveIntents(snapshot, result) };
+        return ResolveIntents(snapshot, result);
     }
 
     /// <summary>
-    /// Returns the intents of a pull request's description resolved against a review's result, or none when the review
-    /// has no pull request. Node identifiers resolve only when the map is the repository's own. See
-    /// <c>docs/intent.md</c> section 4.
+    /// Returns a review's changeset with the intents of its pull request's description resolved against it and the
+    /// coverage of its reading path, or with no intents when the review has no pull request. Node identifiers resolve
+    /// only when the map is the repository's own. See <c>docs/intent.md</c> section 4.
     /// </summary>
-    internal static List<ResolvedIntent> ResolveIntents(PullSnapshot? snapshot, ReviewResult result)
+    internal static Changeset ResolveIntents(PullSnapshot? snapshot, ReviewResult result)
     {
-        if (snapshot?.Body is not { } body) return [];
+        var intents = snapshot?.Body is { } body ? IntentReader.Parse(body).Intents : [];
         var ownMap = result.Info.MapKind is "repository" or "file";
-        return IntentResolver.Resolve(IntentReader.Parse(body).Intents, result.Changeset, result.Target.Root, ownMap);
+        return IntentResolver.Apply(result.Changeset, intents, result.Target.Root, ownMap);
     }
 
     /// <summary>

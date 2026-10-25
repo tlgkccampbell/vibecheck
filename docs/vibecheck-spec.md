@@ -728,6 +728,9 @@ as the differences:
   and last what is set aside. The first tier ends with a step for each test type whose
   signals touch changed code and one step for every other test signal, and then a
   step for each new or changed instance of a pattern that departs from its norms. Each step names what it opens and the changed files it covers.
+  A surprise, which is a first-tier new edge, new cycle or decision, also carries the
+  indices of the intents that cover it, or is marked uncovered when the changeset has
+  intents and none covers it, as [intent.md](intent.md) section 4.2 describes.
 - **Patterns**: each pattern found at base that has an instance at head that the
   change added or changed, with its keys, its number of instances at base, its
   norms, those instances with their status, their departures from the norms, the

@@ -27,6 +27,16 @@ public sealed record PathStep(string Id, string Tier, string Kind, string Target
 
     /// <summary>Gets the identifier of the pattern whose norms a pattern step's instance departs from.</summary>
     public string? Pattern { get; init; }
+
+    /// <summary>
+    /// Gets the indices into <see cref="Changeset.Intents"/> of the intents that cover a surprise, as
+    /// <see cref="Intents.IntentResolver.Apply"/> finds them, or <see langword="null"/> when none does.
+    /// </summary>
+    public List<int>? Intents { get; init; }
+
+    /// <summary>Gets a value indicating whether the step is a surprise that no intent covers, in a changeset that has intents.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Uncovered { get; init; }
 }
 
 /// <summary>

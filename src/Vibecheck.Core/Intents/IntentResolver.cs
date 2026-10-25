@@ -65,11 +65,42 @@ public static class IntentResolver
     /// <param name="changeset">The changeset to resolve against.</param>
     /// <param name="root">The directory the changeset's paths are relative to, relative to the repository's top.</param>
     /// <param name="ownMap">A value indicating whether the changeset is drawn with the repository's own map.</param>
-    public static List<ResolvedIntent> Resolve(IReadOnlyList<Intent> intents, Changeset changeset, string root, bool ownMap)
+    public static List<ResolvedIntent> Resolve(IReadOnlyList<Intent> intents, Changeset changeset, string root, bool ownMap) =>
+        Resolve(new Scope(changeset, root, ownMap), intents);
+
+    private static List<ResolvedIntent> Resolve(Scope scope, IReadOnlyList<Intent> intents) =>
+        intents.Select(i => new ResolvedIntent(i.Line, i.Claim, i.Why, i.Alternative, i.Note, i.Anchors.Select(scope.Resolve).ToList())).ToList();
+
+    /// <summary>
+    /// Returns a changeset with the intents resolved against it and the coverage of its reading path's surprises. Each
+    /// surprise carries the indices of the intents that cover it, or is marked uncovered when none does. A changeset
+    /// given no intents keeps its path as it is, since a change with no intent section is not missing one. The path's
+    /// order never changes. See <c>docs/intent.md</c> section 4.2.
+    /// </summary>
+    /// <param name="changeset">The changeset to resolve against, which is left as it is.</param>
+    /// <param name="intents">The intents, as <see cref="IntentReader.Parse"/> reads them.</param>
+    /// <param name="root">The directory the changeset's paths are relative to, relative to the repository's top.</param>
+    /// <param name="ownMap">A value indicating whether the changeset is drawn with the repository's own map.</param>
+    public static Changeset Apply(Changeset changeset, IReadOnlyList<Intent> intents, string root, bool ownMap)
     {
         var scope = new Scope(changeset, root, ownMap);
-        return intents.Select(i => new ResolvedIntent(i.Line, i.Claim, i.Why, i.Alternative, i.Note, i.Anchors.Select(scope.Resolve).ToList())).ToList();
+        var resolved = Resolve(scope, intents);
+        if (resolved.Count == 0) return changeset with { Intents = resolved };
+        var path = changeset.Path.Select(step =>
+        {
+            if (!IsSurprise(step)) return step;
+            var covering = Enumerable.Range(0, resolved.Count).Where(i => resolved[i].Anchors.Any(a => scope.Covers(a, step))).ToList();
+            return step with { Intents = covering.Count > 0 ? covering : null, Uncovered = covering.Count == 0 };
+        }).ToList();
+        return changeset with { Intents = resolved, Path = path };
     }
+
+    /// <summary>
+    /// Gets a value indicating whether a step of the reading path is a surprise: a first-tier new edge, which includes
+    /// an edge out of a foundation or domain block, a new cycle, or a decision. Steps for tests and patterns are not,
+    /// since their signal is a departure from a norm rather than a choice.
+    /// </summary>
+    public static bool IsSurprise(PathStep step) => step.Tier == "first" && step.Kind is "edge" or "cycle" or "decision";
 
     /// <summary>Returns a type's name without its assembly prefix or its type parameters, which is how an anchor names it.</summary>
     private static string Bare(string name)
@@ -94,6 +125,9 @@ public static class IntentResolver
         private readonly Dictionary<string, List<TypeChange>> byName = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<TypeChange>> bySimpleName = new(StringComparer.Ordinal);
         private readonly List<EdgeChange> changedEdges;
+
+        // What each resolved anchor covers among the path's surprises, by the anchor itself. A node anchor covers none.
+        private readonly Dictionary<ResolvedAnchor, Func<PathStep, bool>> covers = new(ReferenceEqualityComparer.Instance);
 
         public Scope(Changeset changeset, string root, bool ownMap)
         {
@@ -131,8 +165,15 @@ public static class IntentResolver
             _ => Type(anchor),
         };
 
-        private static ResolvedAnchor Make(IntentAnchor anchor, string? target, bool touched) =>
-            target is null ? new(anchor.Text, KindOf(anchor), Unknown) : new(anchor.Text, KindOf(anchor), touched ? Touched : Untouched) { Target = target };
+        /// <summary>Gets a value indicating whether a resolved anchor covers a surprise: it is touched, and names the surprise as <c>docs/intent.md</c> section 4.2 lists.</summary>
+        public bool Covers(ResolvedAnchor anchor, PathStep step) => anchor.State == Touched && covers.TryGetValue(anchor, out var f) && f(step);
+
+        private ResolvedAnchor Make(IntentAnchor anchor, string? target, bool touched, Func<PathStep, bool>? covering = null)
+        {
+            ResolvedAnchor resolved = target is null ? new(anchor.Text, KindOf(anchor), Unknown) : new(anchor.Text, KindOf(anchor), touched ? Touched : Untouched) { Target = target };
+            if (target is not null && covering is not null) covers[resolved] = covering;
+            return resolved;
+        }
 
         private static string KindOf(IntentAnchor anchor) => anchor.Kind.ToString().ToLowerInvariant();
 
@@ -171,8 +212,37 @@ public static class IntentResolver
             {
                 touched = changedEdges.Any(e => (e.Evidence ?? []).Any(p => from.Matches(p.From, e.From) && to.Matches(p.To, e.To)));
             }
-            return Make(anchor, $"{from.Target} → {to.Target}", touched);
+            return Make(anchor, $"{from.Target} → {to.Target}", touched, step => step.Kind switch
+            {
+                "edge" => step.Target.Split('→') is [var a, var b] && CoversEdge(from, to, a, b),
+                "cycle" => (step.Members ?? []).Any(a => (step.Members ?? []).Any(b => a != b && CoversEdge(from, to, a, b))),
+                _ => false,
+            });
         }
+
+        /// <summary>
+        /// Gets a value indicating whether an edge anchor covers the drawn edge between two blocks: the edge itself, an
+        /// edge between blocks inside its two ends, or a type pair in its evidence. A block is a node, or a group of a
+        /// view as <see cref="DrawnEdges.GroupKey"/> names it.
+        /// </summary>
+        private bool CoversEdge(EdgeEnd from, EdgeEnd to, string fromBlock, string toBlock)
+        {
+            if (from.Node is not null && !Inside(from.Node, fromBlock) || to.Node is not null && !Inside(to.Node, toBlock)) return false;
+            if (from.Node is not null && to.Node is not null) return true;
+            return changedEdges.Any(e => Inside(e.From, fromBlock) && Inside(e.To, toBlock)
+                && (e.Evidence ?? []).Any(p => from.Matches(p.From, e.From) && to.Matches(p.To, e.To)));
+        }
+
+        /// <summary>Gets a value indicating whether a node is a block or lies inside it. A node lies inside a group when it is one of the group's leaves or under one.</summary>
+        private bool Inside(string node, string block)
+        {
+            if (!block.StartsWith("g:", StringComparison.Ordinal)) return Identifiers.IsUnder(node, block);
+            return block[2..].Split('/') is [var view, var group] && changeset.Map.Views.TryGetValue(view, out var v) && v.Groups.TryGetValue(group, out var g)
+                && g.Leaves.Any(l => Identifiers.IsUnder(node, l));
+        }
+
+        /// <summary>Returns the decision a step opens, or <see langword="null"/> for any other step.</summary>
+        private Decision? DecisionOf(PathStep step) => step.Kind == "decision" ? changeset.Decisions.FirstOrDefault(d => d.Id == step.Target) : null;
 
         /// <summary>Represents a resolved end of an edge anchor: a node identifier, or the bare names of the types it names.</summary>
         private sealed record EdgeEnd(string? Node, IReadOnlySet<string> Types, string Target)
@@ -195,8 +265,10 @@ public static class IntentResolver
         private ResolvedAnchor File(IntentAnchor anchor)
         {
             if (ReviewPipeline.ChangesetPath(anchor.Name, root) is not { } path) return Make(anchor, null, false);
-            if (files.TryGetValue(path, out var file)) return Make(anchor, path, file.Status != "unchanged");
-            return Make(anchor, declared.Contains(path) ? path : null, false);
+            // A file covers the decision whose hunk it holds.
+            bool Covering(PathStep step) => DecisionOf(step)?.File == path;
+            if (files.TryGetValue(path, out var file)) return Make(anchor, path, file.Status != "unchanged", Covering);
+            return Make(anchor, declared.Contains(path) ? path : null, false, Covering);
         }
 
         /// <summary>
@@ -208,7 +280,10 @@ public static class IntentResolver
             var types = Types(anchor.Name);
             if (types.Count == 0) return Make(anchor, null, false);
             var touched = types.Any(t => t.Status != "unchanged" || t.Files.Any(f => files.TryGetValue(f, out var c) && c.Status != "unchanged"));
-            return Make(anchor, types[0].Name, touched);
+            // A type covers a decision that declares it or one of its members.
+            var names = types.Select(t => Bare(t.Name)).ToHashSet(StringComparer.Ordinal);
+            bool Declares(string? symbol) => symbol is not null && names.Any(n => symbol == n || symbol.StartsWith(n + ".", StringComparison.Ordinal));
+            return Make(anchor, types[0].Name, touched, step => DecisionOf(step)?.Declarations.Any(x => Declares(x.Symbol) || Declares(x.Previous)) == true);
         }
 
         /// <summary>

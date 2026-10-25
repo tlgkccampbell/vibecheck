@@ -11,9 +11,9 @@ that no statement covers. It builds on the map and facts of
 and the guide for coding agents, and it lists, in section 9, the changes it makes to
 those documents.
 
-Phases 1 and 2 of section 10 are built: the format, `vibecheck intent`, the guide
-and the note, and intents in a review, with their flags for unbacked intents and
-unknown anchors. Coverage of the reading path's surprises is not built yet.
+All three phases of section 10 are built. The reading path has no step for a new
+concept yet, so of the surprises of section 4.2 only new edges, which include edges
+out of a foundation or domain block, new cycles and decisions are covered or flagged.
 
 The design rests on one principle. An agent's statement of intent is a claim, not
 evidence. It is the one account of why a change was made that comes from the author,

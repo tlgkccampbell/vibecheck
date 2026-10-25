@@ -196,6 +196,8 @@ public class ReviewServerTests
         // The new snapshot's description has no intent section, so the pages are sent the intents anew: none.
         var intents = await ReadEventsAsync(client, api + "/events", e => e.GetProperty("type").GetString() == "intents");
         Assert.Empty(intents[^1].GetProperty("intents").EnumerateArray());
+        // With no intents, no surprise on the path is flagged.
+        Assert.All(intents[^1].GetProperty("coverage").EnumerateArray(), c => Assert.False(c.GetProperty("uncovered").GetBoolean()));
         Assert.Single(intents, e => e.GetProperty("type").GetString() == "intents");
         github.Fail = new GitHubRateLimitException("slow down", TimeSpan.FromMilliseconds(300));
         var stale = await ReadEventsAsync(client, api + "/events", e => e.TryGetProperty("stale", out _));

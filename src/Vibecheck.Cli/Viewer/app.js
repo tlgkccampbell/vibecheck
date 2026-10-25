@@ -2236,6 +2236,7 @@
         const n = stepNarrative(s);
         const text = el("span", { class: "step-text" }, stepSignal(s));
         if (n) text.append(el("span", { class: "step-why" }, ...richText(n.text)));
+        text.append(stepIntent(s) || "");
         const meta = s.files.length ? el("span", { class: "step-meta" }, tier === "aside" ? `${reviewed} of ${s.files.length} reviewed` : done ? "read" : `${reviewed}/${s.files.length} files`) : null;
         const li = el("li", {}, el("button", { class: "row step" + (done ? " read" : "") + (current ? " current" : ""), onclick: () => openStep(s),
           title: s.files.length ? `${plural(s.files.length, "file", "files")}, ${reviewed} reviewed` : "" },
@@ -2634,7 +2635,8 @@
     intent: "These are the intents the pull request's author stated for this part, in the Intent section of its description. " +
       "Each anchor says whether the change touches what it names. The review does not check that an intent is true; read it beside Claude's explanation and the code.",
     intentList: "This list holds every intent the pull request's description states, in order. An intent that names nothing this change touches, " +
-      "and an anchor that names nothing in the map or the code, are flagged. A flag says what the description names, not that the intent is false.",
+      "and an anchor that names nothing in the map or the code, are flagged. After them come the surprises on the reading path, such as new edges, " +
+      "new cycles and decisions, that no intent names. A flag says what the description names, not that the intent is false.",
     patterns: "Patterns lists the roles that the change's new and changed types play, such as consumers or controllers, the most departures first. " +
       "Hover a pattern to outline the blocks that hold its instances, solid for new and changed ones and dashed for the rest. " +
       "While this list is open, a block's badge counts the new and changed instances it holds. Patterns new in this change come last.",
@@ -3544,9 +3546,21 @@
       el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
   }
 
-  // Returns the counts of the discrepancies between the stated intent and the change: unbacked intents and unknown anchors.
+  // Returns the counts of the discrepancies between the stated intent and the change: unbacked intents, unknown
+  // anchors, and surprises on the reading path that no intent covers.
   function intentDiscrepancies() {
-    return { unbacked: INTENTS.filter((i) => i.unbacked).length, unknown: INTENTS.flatMap((i) => i.anchors).filter((a) => a.state === "unknown").length };
+    return { unbacked: INTENTS.filter((i) => i.unbacked).length, unknown: INTENTS.flatMap((i) => i.anchors).filter((a) => a.state === "unknown").length,
+      uncovered: PATH.filter((s) => s.uncovered).length };
+  }
+
+  // Returns what a path step shows under its signal about the stated intent: the claim of the first intent that covers
+  // it, with a count when more do, or a flag for a surprise that none covers. A changeset with no intents shows neither.
+  function stepIntent(s) {
+    if (!INTENTS.length) return null;
+    const covering = (s.intents || []).map((i) => INTENTS[i]).filter(Boolean);
+    if (covering.length) return el("span", { class: "step-intent" }, el("span", { class: "intent-label" }, "Author: "), ...richText(covering[0].claim),
+      covering.length > 1 ? el("span", { class: "intent-label" }, ` +${covering.length - 1} more`) : null);
+    return s.uncovered ? el("span", { class: "step-intent intent-flag" }, "no stated intent") : null;
   }
 
   // Shows the line under the top bar that counts the description's intents and their discrepancies, and opens the
@@ -3557,28 +3571,43 @@
     const d = intentDiscrepancies();
     const parts = [`${plural(INTENTS.length, "intent", "intents")} from the description`,
       d.unbacked ? `${d.unbacked} ${d.unbacked === 1 ? "names" : "name"} nothing changed` : "",
-      d.unknown ? `${plural(d.unknown, "anchor names", "anchors name")} nothing` : ""].filter(Boolean);
+      d.unknown ? `${plural(d.unknown, "anchor names", "anchors name")} nothing` : "",
+      d.uncovered ? `${plural(d.uncovered, "surprise", "surprises")} with no stated intent` : ""].filter(Boolean);
     box.replaceChildren(el("span", { class: "summary-label" }, "Intent"), el("span", {}, parts.join(" · ")),
-      d.unbacked || d.unknown ? el("span", { class: "intent-flag" }, "check these") : null,
+      d.unbacked || d.unknown || d.uncovered ? el("span", { class: "intent-flag" }, "check these") : null,
       el("button", { class: "link", onclick: () => { state.intentList = !state.intentList; renderDetails(); } }, state.intentList ? "Hide the list" : "Show the list"));
     box.hidden = false;
   }
 
-  // Returns the details panel's Intent list: every intent of the description in order, with its parts.
+  // Returns the details panel's Intent list: every intent of the description in order, with its parts, and after them
+  // the surprises on the reading path that no intent covers, each a link to its step.
   function intentListPanel() {
-    return el("section", { class: "decision-panel intent-list" },
+    const box = el("section", { class: "decision-panel intent-list" },
       el("div", { class: "decision-panel-head" }, el("h2", {}, "Intent", help(HELP.intentList)),
         el("button", { class: "link", onclick: () => { state.intentList = false; renderDetails(); renderIntentLine(); } }, "Close")),
       ...INTENTS.map(intentItem), el("div", { class: "by" }, "Stated in the pull request description; a claim, not evidence."));
+    const uncovered = PATH.filter((s) => s.uncovered);
+    if (uncovered.length) box.append(el("h3", {}, "Surprises with no stated intent"),
+      el("ul", { class: "list" }, ...uncovered.map((s) => el("li", {}, el("button", { class: "row step", onclick: () => openStep(s) },
+        el("span", { class: "step-kind " + s.kind }, s.kind), el("span", { class: "step-text" }, stepSignal(s)))))));
+    return box;
   }
 
-  // Records an intents event, which follows an edit of the description, and shows the intents anew.
+  // Records an intents event, which follows an edit of the description: the intents, and which surprises on the path
+  // they cover. The path's order never changes. Shows the intents anew.
   function intentsEvent(e) {
     if (e.run !== META.run) return;
     INTENTS = e.intents || [];
+    const coverage = new Map((e.coverage || []).map((c) => [c.id, c]));
+    for (const s of PATH) {
+      const c = coverage.get(s.id);
+      s.intents = c && c.intents || null;
+      s.uncovered = !!(c && c.uncovered);
+    }
     if (!INTENTS.length) state.intentList = false;
     renderIntentLine();
     renderDetails();
+    if (state.panel === "path") renderChanges();
   }
 
   // Shows an edge's narrative, or its counts until the narrative arrives, in a tooltip that follows the pointer.

@@ -331,6 +331,12 @@ arrived, so the path gets Claude's explanations with no request of its own. When
 map switches, the path is recomputed with the changeset, and the open step is kept
 where its leaf still exists.
 
+When the pull request's description states intents, as [intent.md](intent.md)
+describes, a surprise in the first tier, which is a new edge, a new cycle or a
+decision, shows the claim of the first intent that covers it under its signal, with a
+count when more do, and a surprise that no intent covers shows "no stated intent".
+Coverage never reorders the path. A changeset with no intents shows neither.
+
 ### 6.3 Claude's part
 
 The order within the first tier is deterministic and is enough. A later phase may

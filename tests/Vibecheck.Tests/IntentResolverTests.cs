@@ -26,6 +26,17 @@ public class IntentResolverTests
                 ["shared"] = new() { Name = "Shared", Bind = ["App.Shared.**"] },
             },
             Externals = new(StringComparer.Ordinal) { ["json"] = new() { Name = "System.Text.Json", Bind = ["System.Text.Json"] } },
+            Views = new(StringComparer.Ordinal)
+            {
+                ["by-concern"] = new()
+                {
+                    Name = "By concern", Level = "root", Groups = new(StringComparer.Ordinal)
+                    {
+                        ["money"] = new() { Name = "Money", Leaves = ["billing.ledger"] },
+                        ["requests"] = new() { Name = "Requests", Leaves = ["billing.api", "shared"] },
+                    },
+                },
+            },
         },
         Structural = new() { Nodes = [new("notifications", "removed", "node", null)], Views = [], Types = [] },
         Content = new(StringComparer.Ordinal),
@@ -56,6 +67,22 @@ public class IntentResolverTests
         Levels = new(StringComparer.Ordinal),
         Views = new(StringComparer.Ordinal),
         Hunks = [],
+        Decisions =
+        [
+            new("Billing/Api/RefundsController.cs#0", "Billing/Api/RefundsController.cs", 0, true, [new("App.Billing.Api.RefundsController.Issue(int)", "added", "method", "public", 0, 1)], []),
+            new("Billing/Ledger/Ledger.cs#0", "Billing/Ledger/Ledger.cs", 0, false, [new("App.Billing.Ledger.Ledger.Post()", "reshaped", "method", "public", 2, 2)], []),
+        ],
+        Path =
+        [
+            new("edge:billing:billing.api→billing.ledger", "first", "edge", "billing.api→billing.ledger", "API now references Ledger", []) { Location = "billing" },
+            new("cycle:view:by-concern:g:by-concern/requests→g:by-concern/money", "first", "cycle", "g:by-concern/requests→g:by-concern/money", "a cycle", [])
+                { Location = "view:by-concern", Members = ["g:by-concern/requests", "g:by-concern/money"] },
+            new("decision:Billing/Api/RefundsController.cs#0", "first", "decision", "Billing/Api/RefundsController.cs#0", "adds Issue", []),
+            new("decision:Billing/Ledger/Ledger.cs#0", "first", "decision", "Billing/Ledger/Ledger.cs#0", "reshapes Post", []),
+            new("test:App.Tests.RefundTests", "first", "test", "App.Tests.RefundTests", "a test changed", []),
+            new("node:billing.api", "then", "node", "billing.api", "API: 1 file", []),
+            new("decision:then:Billing/Api/RefundsController.cs#0", "then", "decision", "Billing/Api/RefundsController.cs#0", "adds Issue", []),
+        ],
     };
 
     [Theory]
@@ -156,6 +183,54 @@ public class IntentResolverTests
 
         Assert.Contains("\"unbacked\":true", json.Replace(" ", "", StringComparison.Ordinal), StringComparison.Ordinal);
         Assert.Equal(cs.Intents[0].Anchors, back.Intents[0].Anchors);
+    }
+
+    [Theory]
+    [InlineData("`billing.api → billing.ledger`", "edge:billing:billing.api→billing.ledger cycle:view:by-concern:g:by-concern/requests→g:by-concern/money")]
+    [InlineData("`RefundsController -> Ledger`", "edge:billing:billing.api→billing.ledger cycle:view:by-concern:g:by-concern/requests→g:by-concern/money")]
+    [InlineData("`billing.api → App.Billing.Ledger.Ledger`", "edge:billing:billing.api→billing.ledger cycle:view:by-concern:g:by-concern/requests→g:by-concern/money")]
+    [InlineData("`billing → billing.ledger`", "")]
+    [InlineData("`src/Billing/Api/RefundsController.cs`", "decision:Billing/Api/RefundsController.cs#0")]
+    [InlineData("`App.Billing.Api.RefundsController`", "decision:Billing/Api/RefundsController.cs#0")]
+    [InlineData("`src/Billing/Ledger/Ledger.cs`, `App.Billing.Ledger.Ledger`", "")]
+    [InlineData("`billing.api`, `billing`", "")]
+    public void AnIntentCoversTheSurprisesItsTouchedAnchorsName(string anchors, string covered)
+    {
+        var cs = IntentResolver.Apply(Billing, Parse(anchors), "src", ownMap: true);
+
+        var surprises = cs.Path.Where(IntentResolver.IsSurprise).ToList();
+        Assert.Equal(covered.Split(' ', StringSplitOptions.RemoveEmptyEntries), surprises.Where(s => s.Intents is [0]).Select(s => s.Id));
+        Assert.All(surprises, s => Assert.Equal(s.Intents is null, s.Uncovered));
+    }
+
+    [Fact]
+    public void OnlyFirstTierEdgesCyclesAndDecisionsAreSurprisesAndThePathKeepsItsOrder()
+    {
+        var cs = IntentResolver.Apply(Billing, Parse("`billing.api`"), "src", ownMap: true);
+
+        Assert.Equal(Billing.Path.Select(s => s.Id), cs.Path.Select(s => s.Id));
+        Assert.Equal([true, true, true, true, false, false, false], cs.Path.Select(s => s.Uncovered));
+        Assert.All(cs.Path, s => Assert.Null(s.Intents));
+    }
+
+    [Fact]
+    public void EachCoveringIntentIsListedByItsIndex()
+    {
+        var intents = IntentReader.Parse("## Intent\n- **A.** `billing.api`\n- **B.** `RefundsController`\n- **C.** `src/Billing/Api/RefundsController.cs`\n").Intents;
+
+        var cs = IntentResolver.Apply(Billing, intents, "src", ownMap: true);
+
+        Assert.Equal([1, 2], cs.Path.Single(s => s.Id == "decision:Billing/Api/RefundsController.cs#0").Intents);
+    }
+
+    [Fact]
+    public void AChangesetWithNoIntentsFlagsNoStep()
+    {
+        var cs = IntentResolver.Apply(Billing, [], "src", ownMap: true);
+
+        Assert.Empty(cs.Intents);
+        Assert.Same(Billing.Path, cs.Path);
+        Assert.All(cs.Path, s => Assert.False(s.Uncovered));
     }
 
     private static IReadOnlyList<Intent> Parse(string anchors) => IntentReader.Parse($"## Intent\n- **A.** {anchors}\n").Intents;

@@ -31,9 +31,10 @@ each instance that departs, a compare view that sets an instance beside its near
 by member, a Patterns switch that lists the patterns, outlines their blocks and lists the patterns new in a change,
 Claude's names and purposes for patterns, and patterns as hints for placing unsorted types.
 Stated intent, in which the coding agent that writes a change says why it made the change's main choices in an
-`Intent` section of the pull request description, is designed in [docs/intent.md](docs/intent.md); its first
-two phases are built: the format, the guide's section on it, `vibecheck intent`, which checks a draft, and
-intents in a review, shown beside Claude's narratives with flags for those that name nothing the change touches.
+`Intent` section of the pull request description, is designed in [docs/intent.md](docs/intent.md); all three
+of its phases are built: the format, the guide's section on it, `vibecheck intent`, which checks a draft,
+intents in a review, shown beside Claude's narratives with flags for those that name nothing the change touches,
+and the surprises on the reading path that no intent covers.
 
 ## Layout
 
