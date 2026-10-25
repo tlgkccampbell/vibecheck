@@ -142,6 +142,7 @@
   .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .btn:disabled { opacity: .45; cursor: default; }
   .btn:focus-visible, .crumb:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .viewswitch { display: inline-flex; align-items: center; }
   .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 3px; overflow: hidden; }
   .seg button { background: var(--surface); border: 0; padding: 3px 10px; cursor: pointer; font-size: 13px; font-family: var(--mono); }
   .seg button + button { border-left: 1px solid var(--line-strong); }
@@ -214,6 +215,7 @@
   .node.other .box { stroke-dasharray: 1 3; }
   .node .title { font-size: 12px; font-weight: 600; letter-spacing: .08em; fill: var(--fg); }
   .node .meta { font-size: 10.5px; fill: var(--muted); }
+  .node .meta.grouping { font-style: italic; }
   .node .enter-glyph { font-size: 13px; fill: var(--muted); cursor: pointer; }
   .node .enter-glyph:hover { fill: var(--accent); }
   .node.st-children .box { stroke: var(--modified); stroke-width: 1.5; }
@@ -654,7 +656,7 @@
   <span class="progress" id="progress" aria-live="polite"></span>
   <span class="spacer"></span>
   <div class="controls">
-    <span class="seg" id="viewseg" hidden></span>
+    <span class="viewswitch" id="viewswitch" hidden><span class="seg" id="viewseg"></span></span>
     <label class="toggle">Edges <select id="threshold">
       <option value="1">all</option>
       <option value="10">≥ 10 refs</option>
