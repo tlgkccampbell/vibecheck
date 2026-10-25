@@ -38,7 +38,7 @@ opinion of it.
 
 1. The changeset opens on the map as it does now. The summary above the drawing gains
    a **Path** control, and a panel beside the Changes panel lists the reading path in
-   three tiers: read first, then the rest, and set aside.
+   three tiers: high, medium and low priority.
 2. A **New concepts** notice appears when the change adds types the map does not
    describe. Each entry names the types, shows what they reference and what references
    them, and carries Claude's proposal for a home with the reviewer's choice to accept
@@ -259,7 +259,7 @@ tiers. It is computed by `ReadingPath.Plan` in `Vibecheck.Core`, a pure function
 the changeset, as `NarrativePlanner.Plan` is, and carried in the changeset as `Path`.
 The same changeset always gives the same path.
 
-**Read first** holds the surprises, each with the signal that put it there:
+**High priority** holds the surprises, each with the signal that put it there:
 
 - An edge that is new at head between two blocks of any level, largest first. The
   signal names the pairs behind it.
@@ -285,7 +285,7 @@ The same changeset always gives the same path.
   counts the new and changed instances it holds, and pattern steps are dropped after
   test steps and before decision steps when the path is full.
 
-**Then** holds every other changed leaf, largest change first within each level, and
+**Medium priority** holds every other changed leaf, largest change first within each level, and
 under each the decisions and the files with edits of their own that the first tier
 did not take, and after them the changed test files whose subject the leaf holds, as
 [tests.md](tests.md) section 7.2 describes. A leaf whose changed files are all set
@@ -293,7 +293,7 @@ aside is not a step, since the third tier accounts for it. A changed test file t
 no leaf's step lists, such as one of test infrastructure, comes last on its own, and
 a changed file that no type binds comes after it.
 
-**Set aside** holds the consequences, the trivial and generated files and the files
+**Low priority** holds the consequences, the trivial and generated files and the files
 already reviewed, as counts with the blocks they are in. A file that is both trivial
 and a consequence counts as trivial. The tier exists so that the reviewer sees that
 the volume has been accounted for, not so that they read it.

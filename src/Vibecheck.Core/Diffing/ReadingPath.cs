@@ -202,7 +202,7 @@ public static class ReadingPath
             .ToList();
         first.AddRange(patternSteps);
 
-        // Set aside: files whose edits are trivial or generated, and files whose hunks are all consequences. They are
+        // Low priority: files whose edits are trivial or generated, and files whose hunks are all consequences. They are
         // found first, so that the second tier lists neither them nor a block that holds nothing else.
         var trivial = changed.Where(f => hunksOf.GetValueOrDefault(f.Path)?.Reason is not null || (f.Status == "renamed" && f.BlobBase is not null && f.BlobBase == f.BlobHead)).Select(f => f.Path).ToList();
         var consequences = changed.Where(f => !trivial.Contains(f.Path) && ConsequenceOnly(hunksOf.GetValueOrDefault(f.Path), decisionAt)).Select(f => f.Path).ToList();

@@ -388,6 +388,10 @@
   svg#stage.hovering .edge:not(.hot), svg#stage.hovering .edge-label:not(.hot) { opacity: .06; }
   svg#stage.hovering .node:not(.hot), svg#stage.hovering .pin:not(.hot) { opacity: .35; }
   svg#stage.hovering .hot, svg#stage.focused:not(.hovering) .in-focus { opacity: 1; }
+  /* A block is never drawn at an opacity of exactly 1. Chrome draws a group at a lower opacity on a layer of its own,
+     which places its text a fraction of a pixel away from where it falls when drawn directly, so a dimmed block under
+     the pointer would shift each time it came out of the dimming. */
+  .node, svg#stage.hovering .node.hot, svg#stage.focused:not(.hovering) .node.in-focus { opacity: .999; }
   svg#stage .edge.hot .edge-line, svg#stage .edge.in-focus .edge-line { stroke-opacity: 1; }
 
   .arrow { fill: var(--line-strong); }

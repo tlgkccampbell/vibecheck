@@ -1033,7 +1033,21 @@
   // A map with views gives every block a second line of text, which names its place in the other grouping, so the
   // preview starts lower.
   const PREVIEW_TOP = Object.keys(VIEWS).length ? 66 : 54;
-  const previewBox = (box) => ({ x: box.x + 10, y: box.y + PREVIEW_TOP, w: box.w - 20, h: box.h - PREVIEW_TOP - 8 });
+  // A header band whose title wraps onto two lines is taller, and the text and preview under it move down to match.
+  const previewBox = (box, child) => {
+    const top = PREVIEW_TOP + headerOf(child, box).drop;
+    return { x: box.x + 10, y: box.y + top, w: box.w - 20, h: box.h - top - 8 };
+  };
+
+  // Returns how a block's header band is set: where its title starts, the fitted title, the band's height, and how
+  // far a taller band moves the text under it down. A title of two lines gets a taller band, so that it has as much
+  // room below it as a title of one line.
+  function headerOf(child, box) {
+    const x = box.x + (categoryOf(child.id) ? 30 : 10);
+    const title = fitTitle(nameOf(child.id).toUpperCase(), box.x + box.w - 32 - x);
+    const band = title.lines.length > 1 ? 35 : 28;
+    return { x, title, band, drop: band - 28 };
+  }
 
   // Returns the cached layout of the level a child opens, or null for a leaf or a level not yet laid out.
   function subLayoutOf(child) {
@@ -1053,7 +1067,7 @@
   }
 
   function previewInto(g, child, box) {
-    const inner = previewBox(box);
+    const inner = previewBox(box, child);
     if (inner.h < 10) return;
     if (child.kind === "node" && isLeaf(child.id) || child.kind === "unsorted") {
       // One bar per type, colored by what happened to it.
@@ -1163,13 +1177,12 @@
         onkeydown: (ev) => { if (ev.key === "Enter") { ev.stopPropagation(); enter(c); } } });
       g.append(svg("rect", { x: r.x, y: r.y, width: r.w, height: r.h, rx: 2, class: "box" }));
       // The header band and icon chip carry the category. The border and the badge on the top edge carry the change.
-      g.append(svg("path", { d: `M${r.x + 2},${r.y} H${r.x + r.w - 2} Q${r.x + r.w},${r.y} ${r.x + r.w},${r.y + 2} V${r.y + 28} H${r.x} V${r.y + 2} Q${r.x},${r.y} ${r.x + 2},${r.y} Z`, class: "band" }));
-      if (cat) g.append(categoryChip(cat, r.x + 7, r.y + 6, 16));
       // The title runs from after the icon chip to before the cycle mark and the open glyph.
-      const titleX = r.x + (cat ? 30 : 10);
+      const { x: titleX, title, band, drop } = headerOf(c, r), name = nameOf(c.id).toUpperCase();
+      g.append(svg("path", { d: `M${r.x + 2},${r.y} H${r.x + r.w - 2} Q${r.x + r.w},${r.y} ${r.x + r.w},${r.y + 2} V${r.y + band} H${r.x} V${r.y + 2} Q${r.x},${r.y} ${r.x + 2},${r.y} Z`, class: "band" }));
+      if (cat) g.append(categoryChip(cat, r.x + 7, r.y + 6, 16));
       // A title of two lines starts below the status pill on the top edge, and one cut short shows its whole name on hover.
-      const name = nameOf(c.id).toUpperCase(), title = fitTitle(name, r.x + r.w - 32 - titleX);
-      const titleY = title.lines.length > 1 ? [r.y + 16, r.y + 26] : [r.y + (title.small ? 18 : 19)];
+      const titleY = title.lines.length > 1 ? [r.y + 16, r.y + 27] : [r.y + (title.small ? 18 : 19)];
       title.lines.forEach((line, i) => {
         const t = text(titleX, titleY[i], line, { class: "title" + (title.small ? " small" : "") });
         if (title.cut) t.append(svg("title", {}, name));
@@ -1220,11 +1233,11 @@
       }
       const types = m.head ? m.head.types : c.leaves.reduce((s, l) => s + ((METRICS[l] || {}).head || {}).types || 0, 0);
       const meta = isOther(c.id) ? plural(content.files, "file", "files") : `${plural(types, "type", "types")} · ${plural(content.files, "file", "files")}`;
-      g.append(text(r.x + 10, r.y + 43, fitText(meta, r.w - 20, MONO.meta), { class: "meta" }));
+      g.append(text(r.x + 10, r.y + 43 + drop, fitText(meta, r.w - 20, MONO.meta), { class: "meta" }));
       const other = otherGroupingOf(level.loc, c);
       if (other) {
         const line = other.line ? fitText(other.line, r.w - 20, MONO.meta) : fitList(other.label, other.names, r.w - 20, MONO.meta);
-        const t = text(r.x + 10, r.y + 57, line, { class: "meta grouping" });
+        const t = text(r.x + 10, r.y + 57 + drop, line, { class: "meta grouping" });
         t.append(svg("title", {}, other.title));
         g.append(t);
       }
@@ -2139,7 +2152,7 @@
   // then the other changed blocks with the decisions and files under them, and last what is set aside. A step is read
   // when every changed file it names is reviewed. See docs/attention.md section 6.
   const PATH = CS.path || [];
-  const TIER_TITLE = { first: "Read first", then: "Then", aside: "Set aside" };
+  const TIER_TITLE = { first: "High priority", then: "Medium priority", aside: "Low priority" };
   const stepRead = (s) => s.files.length > 0 && s.files.every((p) => REVIEWED.has(p));
   const countedSteps = () => PATH.filter((s) => s.tier !== "aside");
   // Returns the narrative of an edge, cycle or node step once it has arrived, or null.
@@ -2626,8 +2639,8 @@
   const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
   const HELP = {
-    path: "The reading path lists the parts of the change in the order to read them. Read first holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
-      "Then holds the other changed blocks. Set aside counts the consequences, trivial files and files already reviewed. A step is read once all its files are reviewed.",
+    path: "The reading path lists the parts of the change in the order to read them. High priority holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
+      "Medium priority holds the other changed blocks. Low priority counts the consequences, trivial files and files already reviewed. A step is read once all its files are reviewed.",
     changes: "This panel lists every changed block and its changed files. Below them are the decisions, the edges whose reference counts changed, and the changes to the map itself.",
     glossary: "Concepts lists the concepts that recur in the names of types, such as “Command Handler”. A word counts only when unrelated types share it. " +
       "New concepts come first, and Claude defines each concept that no type documents. Hover a concept to outline the blocks that hold its types.",
@@ -3021,7 +3034,7 @@
   // at the outer level, or null when the block draws no preview of that layout.
   function previewMap(outer, c, innerLayout) {
     const r = outer.layout.rects.get(c.key) ? rectOf(outer.level, outer.layout, c.key) : null;
-    const p = r && previewPlacement(previewBox(r), innerLayout);
+    const p = r && previewPlacement(previewBox(r, c), innerLayout);
     if (!p) return null;
     const f = frameOf(innerLayout);
     return { k: p.sc, dx: p.ox - (f.x + p.bb.x0) * p.sc, dy: p.oy - (f.y + p.bb.y0) * p.sc };
