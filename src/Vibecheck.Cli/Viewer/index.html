@@ -543,7 +543,7 @@
   .thread > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px; color: var(--fg); font-family: var(--mono); font-size: 12px; }
   .thread.resolved > summary { color: var(--muted); }
   .thread.pending { border-color: var(--modified); }
-  .thread.flash { animation: thread-flash 1.6s ease-out; }
+  .thread.flash, [data-hunk].flash { animation: thread-flash 1.6s ease-out; }
   .row.flash { animation: row-flash 1.6s ease-out; }
   @keyframes row-flash { from { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); } }
   @keyframes thread-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }

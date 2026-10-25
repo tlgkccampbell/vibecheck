@@ -55,6 +55,21 @@
   const signalChip = (s, withMethod) => el("span", { class: "chip chip-signal" + (s.touches.length ? " touches" : ""),
     title: s.method + (s.touches.length ? "\nReferences " + s.touches.map((t) => `${memberName(t.symbol, t.kind)}, ${t.change}`).join("; ") : "\nReferences no changed declaration") },
     SIGNAL_TEXT[s.kind] || s.kind, withMethod ? ` · ${memberName(s.method, "method").split(".").pop()}` : "");
+  // Returns a value indicating whether a method's symbol belongs to a type, whose name may carry an assembly prefix.
+  const isMethodOf = (method, type) => method.startsWith(type.replace(/^.*::/, "") + ".");
+  // Returns the first hunk among some files, in their order, that carries a signal the test accepts, as its path and index, or null.
+  function signalHunk(paths, accept) {
+    for (const path of paths) {
+      const index = (HUNKS.get(path) || []).findIndex((h) => (h.signals || []).some(accept));
+      if (index >= 0) return { path, index };
+    }
+    return null;
+  }
+  // Opens a changed test type at its first hunk with a signal, or else at the top of its first changed file.
+  function openTestType(t) {
+    const at = signalHunk(t.files, (x) => isMethodOf(x.method, t.name));
+    return at ? openHunk(at.path, at.index) : openFile(t.files[0]);
+  }
   // Returns the changed test files whose subject binds to a leaf, or those without a subject for the test infrastructure leaf.
   const testFilesOf = (leaf) => TEST_FILES.filter((f) => leaf === TESTS ? !f.subject : f.subject === leaf);
 
@@ -1507,7 +1522,12 @@
     if (REVIEWED.has(path)) state.expanded.add(path);
     await openFile(path);
     const target = document.querySelector(`[data-hunk="${CSS.escape(hunkId(path, index))}"]`);
-    if (target) target.scrollIntoView({ block: "start" });
+    if (!target) return;
+    // The hunk is outlined for a moment, since one near the end of the page cannot scroll to the top.
+    target.scrollIntoView({ block: "start" });
+    target.classList.remove("flash");
+    void target.offsetWidth;
+    target.classList.add("flash");
   }
 
   // Returns the details panel's section for the selected decision: its declarations, and its consequences grouped by
@@ -1804,6 +1824,12 @@
       const d = DECISIONS.get(s.target);
       return d ? openDecision(d) : undefined;
     }
+    if (s.kind === "test" || s.kind === "tests") {
+      // A test type's step opens the first hunk with a signal of its own that touches changed code, and the closing step
+      // the first hunk with a signal that touches none, rather than the top of the file.
+      const at = signalHunk(s.files, (x) => s.kind === "test" ? x.touches.length > 0 && isMethodOf(x.method, s.target) : !x.touches.length);
+      if (at) return openHunk(at.path, at.index);
+    }
     if (s.kind === "file" || s.kind === "test" || s.kind === "tests") return s.files.length ? openFile(s.files[0]) : renderChanges();
     if (s.kind === "aside" || s.kind === "more") return s.files.length ? openFile(s.files[0]) : renderChanges();
     const loc = s.location || ROOT;
@@ -1910,7 +1936,7 @@
       const ul = el("ul", { class: "list tests" });
       for (const t of groups.get(key)) {
         const done = t.files.every((p) => REVIEWED.has(p)) && state.opts.mute;
-        const li = el("li", {}, el("button", { class: "row st-" + (done ? "reviewed" : t.status), onclick: () => openFile(t.files[0]),
+        const li = el("li", {}, el("button", { class: "row st-" + (done ? "reviewed" : t.status), onclick: () => openTestType(t),
           title: t.name + (t.subject ? `\nTests ${t.subject.type}, ${SUBJECT_RULE[t.subject.by] || t.subject.by}` : "") + "\n" + t.files.join("\n") },
           el("span", { class: "dot" }), el("span", { class: "row-name" }, el("code", {}, shortName(t.name))),
           el("span", { class: "row-meta" }, t.methods.length ? plural(t.methods.length, "method", "methods") : t.status)));
