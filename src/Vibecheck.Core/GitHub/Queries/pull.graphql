@@ -8,6 +8,7 @@ query($owner: String!, $name: String!, $number: Int!, $threads: Boolean = true, 
       state
       isDraft
       author { login avatarUrl(size: 64) }
+      body
       bodyHTML
       createdAt
       headRefName

@@ -728,6 +728,9 @@ as the differences:
   and last what is set aside. The first tier ends with a step for each test type whose
   signals touch changed code and one step for every other test signal, and then a
   step for each new or changed instance of a pattern that departs from its norms. Each step names what it opens and the changed files it covers.
+  A surprise, which is a first-tier new edge, new cycle or decision, also carries the
+  indices of the intents that cover it, or is marked uncovered when the changeset has
+  intents and none covers it, as [intent.md](intent.md) section 4.2 describes.
 - **Patterns**: each pattern found at base that has an instance at head that the
   change added or changed, with its keys, its number of instances at base, its
   norms, those instances with their status, their departures from the norms, the
@@ -749,6 +752,13 @@ as the differences:
   hold it, the types the change added or changed under it and the other types that
   hold it, each with its leaf, and the documentation summary of a type whose whole
   name is the term. New terms come first, then those with the most touched types.
+- **Intents**: the intents of the pull request's description, as
+  [intent.md](intent.md) section 4 resolves them, each with its claim, why,
+  alternative, note and anchors, and each anchor with its text, its kind, what it
+  resolved to and whether the change touches it. The description changes without a
+  commit, so a cached changeset has none, and the server sets them when it serves the
+  changeset and sends them anew when the description changes. Each decision then
+  carries the indices of the intents that cover it.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
 separate layer that cites entries in this document by identifier. On a solution of a
@@ -773,7 +783,8 @@ the facts say, as part of the normal test run.
 | `vibecheck facts` | Emits the facts document for the working tree, recording the HEAD commit, suffixed `+dirty` when the tree has changes. |
 | `vibecheck diff <base> <head>` | Combines two facts documents into the changeset document. With `--repo`, adds every file `git diff` reports as changed between the two commits, pairs renames, and attaches the hunks, with trivial edits marked. |
 | `vibecheck changeset <base> [<head>]` | Produces the changeset document between two revisions in one step. Each revision is checked out into a temporary git worktree, built and analyzed, the two in parallel, and the current map is applied to both. The worktrees are removed afterward. One argument may be a range: `a..b`, or `a...b` to compare from the merge base as a pull request does. The head defaults to `HEAD`. `:worktree` names a snapshot of the uncommitted work, and on its own compares that with `HEAD`. `--no-build` skips the builds, which leaves out generated types. Analyses are cached per commit as `review` caches them; `--no-cache` turns that off. |
-| `vibecheck guide` | Prints the guide for coding agents, `docs/keeping-the-map-in-sync.md`, which is embedded in the tool. `init` prints a note for the repository's `CLAUDE.md` or `AGENTS.md` that sends agents to it, and the review workflow offers to add the note to `CLAUDE.md`, or to the `AGENTS.md` that it imports, when it saves a map, showing the note before writing it. |
+| `vibecheck guide` | Prints the guide for coding agents, `docs/agent-guide.md`, which is embedded in the tool. `init` prints a note for the repository's `CLAUDE.md` or `AGENTS.md` that sends agents to it, and the review workflow offers to add the note to `CLAUDE.md`, or to the `AGENTS.md` that it imports, when it saves a map, showing the note before writing it. |
+| `vibecheck intent [<file>]` | Checks the `Intent` section of a draft pull request description, read from the file or from standard input, as [intent.md](intent.md) section 7.3 describes. It prints each intent with its anchors, and whether each node anchor names a node of the map and each file anchor a file of the working tree. File anchors are paths from the top of the repository that holds the root. `--base <rev>` also marks the files changed since that revision. It does not build the solution, so type anchors are unchecked. Exit code 1 when the text has no `Intent` section or an item has no claim. |
 
 Every command takes `--map <path>`; the default is `./vibecheck.json`, and the layout
 file sits beside the map. The repository root, which the map's solution path and

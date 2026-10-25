@@ -90,6 +90,8 @@ public class ReviewServerTests
         Assert.Contains("window.CHANGESET = {", script, StringComparison.Ordinal);
         Assert.Contains("(function () {", await client.GetStringAsync(server.BaseAddress + url + "app.js"), StringComparison.Ordinal);
         Assert.Contains("\"reviewed\":{}", script, StringComparison.Ordinal);
+        // A review of a range with no pull request has no intents.
+        Assert.Contains("\"intents\":[]", script, StringComparison.Ordinal);
 
         var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
         var marked = await client.PostAsJsonAsync(api + "/reviewed", new { paths = new[] { TestData.X1 }, reviewed = true });
@@ -158,7 +160,7 @@ public class ReviewServerTests
         var github = new FakeGitHub
         {
             Pulls = [new PullSummary(9, "Other", "u", "x", false, baseTip, "main", null, null, false), new PullSummary(5, "Call the service", "u", "author", false, head, "main", "REVIEW_REQUIRED", "SUCCESS", true)],
-            Snapshots = { [5] = Snapshot(5, head, baseTip) with { Discussion = OneThread("app/" + TestData.X1) } },
+            Snapshots = { [5] = Snapshot(5, head, baseTip) with { Discussion = OneThread("app/" + TestData.X1), Body = $"## Intent\n- **Thing calls the service.** `app/{TestData.X1}`\n  Why: b.\n" } },
         };
         await using var server = new ReviewServer(Options(clone) with { Directory = Path.Combine(clone.Path, "app"), GitHub = github, PollInterval = TimeSpan.FromMilliseconds(100) });
         using var client = Client();
@@ -184,10 +186,19 @@ public class ReviewServerTests
         Assert.Contains($"\"headOid\":\"{head}\"", script, StringComparison.Ordinal);
         // The thread on the head's first line of the changed file goes under that line, by the changeset's path.
         Assert.Contains($"\"pullThreads\":{{\"T1\":{{\"path\":\"{TestData.X1}\",\"hunk\":0,\"line\":1}}}}", script, StringComparison.Ordinal);
+        // The changeset carries the description's intents, resolved against it, with the file by the changeset's path.
+        Assert.Contains("\"claim\":\"Thing calls the service.\"", script, StringComparison.Ordinal);
+        Assert.Contains($"\"state\":\"touched\",\"target\":\"{TestData.X1}\"", script, StringComparison.Ordinal);
 
         // While the page is open the server polls, and sends a snapshot only when it changed, or word that it is stale.
         github.Snapshots[5] = Snapshot(5, head, baseTip, title: "Call the service, renamed");
         var renamed = await ReadEventsAsync(client, api + "/events", e => e.TryGetProperty("snapshot", out var p) && p.GetProperty("title").GetString()!.EndsWith("renamed"));
+        // The new snapshot's description has no intent section, so the pages are sent the intents anew: none.
+        var intents = await ReadEventsAsync(client, api + "/events", e => e.GetProperty("type").GetString() == "intents");
+        Assert.Empty(intents[^1].GetProperty("intents").EnumerateArray());
+        // With no intents, no surprise on the path is flagged.
+        Assert.All(intents[^1].GetProperty("coverage").EnumerateArray(), c => Assert.False(c.GetProperty("uncovered").GetBoolean()));
+        Assert.Single(intents, e => e.GetProperty("type").GetString() == "intents");
         github.Fail = new GitHubRateLimitException("slow down", TimeSpan.FromMilliseconds(300));
         var stale = await ReadEventsAsync(client, api + "/events", e => e.TryGetProperty("stale", out _));
         Assert.Equal("slow down", stale[^1].GetProperty("message").GetString());

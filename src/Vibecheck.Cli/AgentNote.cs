@@ -4,9 +4,9 @@ namespace Vibecheck.Cli;
 
 /// <summary>
 /// Represents the note that tells coding agents in a repository about its map, and the guide that the note sends them
-/// to. The guide is <c>docs/keeping-the-map-in-sync.md</c>, embedded in the tool and printed by <c>vibecheck guide</c>,
-/// so that it always describes the installed version. The note goes in the repository's agent instructions file,
-/// which <see cref="Target"/> chooses.
+/// to. The guide is <c>docs/agent-guide.md</c>, embedded in the tool and printed by <c>vibecheck guide</c>, so that it
+/// always describes the installed version. It says how to keep the map in sync and how to state a change's intent.
+/// The note goes in the repository's agent instructions file, which <see cref="Target"/> chooses.
 /// </summary>
 internal static class AgentNote
 {
@@ -29,11 +29,12 @@ internal static class AgentNote
 
     /// <summary>Returns the note, as a Markdown section, for a map at the given path relative to the repository's top.</summary>
     public static string Text(string mapPath) => $"""
-        ## Architecture map
+        ## vibecheck
 
-        This repository has an architecture map, `{mapPath}`, that the vibecheck review tool draws changes with.
-        Before finishing a change that adds, moves, renames or deletes types, namespaces, projects or package
-        references, run `{Command}` and follow it to keep the map in sync.
+        This repository's changes are reviewed with vibecheck, which draws each change on the
+        architecture map `{mapPath}`. Before finishing a change, run `{Command}` and
+        follow it. It says when the map needs updating, and how to state the intent of the
+        change in the pull request description.
 
         """.ReplaceLineEndings("\n");
 

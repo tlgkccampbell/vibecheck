@@ -8,6 +8,7 @@ using Vibecheck.Assist;
 using Vibecheck.Checking;
 using Vibecheck.Diffing;
 using Vibecheck.GitHub;
+using Vibecheck.Intents;
 using Vibecheck.Model;
 using Vibecheck.Reviewing;
 using Microsoft.AspNetCore.Builder;
@@ -387,6 +388,48 @@ public sealed class ReviewServer : IAsyncDisposable
             review.Stale = null;
         }
         review.Add(new { type = "pull", snapshot, threads = Placements(review, snapshot), annotations = AnnotationPlaces(review, snapshot) });
+        PublishIntents(review, snapshot);
+    }
+
+    /// <summary>
+    /// Sends a review's pages an <c>intents</c> event when the description differs from the one they were last resolved
+    /// from. The event holds the intents of the pull request's description resolved against the current result, the
+    /// intents that cover each decision, and the coverage of each surprise on the reading path. A review with no result
+    /// yet is sent nothing, since its page reads the intents with the changeset.
+    /// </summary>
+    private static void PublishIntents(Review review, PullSnapshot snapshot)
+    {
+        var (result, run) = review.Current;
+        if (result is null) return;
+        lock (review)
+        {
+            if (review.IntentsBody == (snapshot.Body ?? "")) return;
+            review.IntentsBody = snapshot.Body ?? "";
+        }
+        var changeset = ResolveIntents(snapshot, result);
+        var coverage = changeset.Path.Where(IntentResolver.IsSurprise).Select(s => new { id = s.Id, intents = s.Intents, uncovered = s.Uncovered });
+        var decisions = changeset.Decisions.Where(d => d.Intents is not null).Select(d => new { id = d.Id, intents = d.Intents });
+        review.Add(new { type = "intents", run, intents = changeset.Intents, coverage, decisions });
+    }
+
+    /// <summary>Returns a review's changeset with the intents of its pull request's description, which a cached changeset never carries.</summary>
+    private static Changeset WithIntents(Review review, ReviewResult result)
+    {
+        var snapshot = review.Snapshot;
+        lock (review) review.IntentsBody = snapshot?.Body ?? "";
+        return ResolveIntents(snapshot, result);
+    }
+
+    /// <summary>
+    /// Returns a review's changeset with the intents of its pull request's description resolved against it and the
+    /// coverage of its reading path, or with no intents when the review has no pull request. Node identifiers resolve
+    /// only when the map is the repository's own. See <c>docs/intent.md</c> section 4.
+    /// </summary>
+    internal static Changeset ResolveIntents(PullSnapshot? snapshot, ReviewResult result)
+    {
+        var intents = snapshot?.Body is { } body ? IntentReader.Parse(body).Intents : [];
+        var ownMap = result.Info.MapKind is "repository" or "file";
+        return IntentResolver.Apply(result.Changeset, intents, result.Target.Root, ownMap);
     }
 
     /// <summary>
@@ -902,7 +945,7 @@ public sealed class ReviewServer : IAsyncDisposable
         });
 
         web.MapGet("/api/reviews/{id}/changeset", (string id) =>
-            reviews.TryGetValue(id, out var r) && r.Result is not null ? Results.Text(FactsJson.Serialize(r.Result.Changeset), "application/json") : Results.NotFound());
+            reviews.TryGetValue(id, out var r) && r.Result is { } result ? Results.Text(FactsJson.Serialize(WithIntents(r, result)), "application/json") : Results.NotFound());
 
         web.MapGet("/reviews/{id}/", (string id, HttpContext ctx) =>
         {
@@ -928,7 +971,7 @@ public sealed class ReviewServer : IAsyncDisposable
                 narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root), settings = new { theme = settings.Theme },
                 pull = r.Snapshot, pullThreads = Placements(r, r.Snapshot), pullAnnotations = AnnotationPlaces(r, r.Snapshot), pullCommits = r.OpenedCommits, pullStale = r.Stale,
             };
-            var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(result.Changeset)}";
+            var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(WithIntents(r, result))}";
             return Results.Text(script, "text/javascript; charset=utf-8");
         });
     }
@@ -1226,6 +1269,9 @@ public sealed class ReviewServer : IAsyncDisposable
 
         /// <summary>Gets or sets the snapshot last sent to the pages, as JSON, so that an unchanged one is not sent again.</summary>
         public string? SentSnapshot { get; set; }
+
+        /// <summary>Gets or sets the description the pages' intents were last resolved from, or <see langword="null"/> before they had any.</summary>
+        public string? IntentsBody { get; set; }
 
         /// <summary>Gets or sets why the pages' snapshot is stale, or <see langword="null"/> when it is current.</summary>
         public string? Stale { get; set; }

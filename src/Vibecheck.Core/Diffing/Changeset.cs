@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Vibecheck.Analysis;
 using Vibecheck.Checking;
+using Vibecheck.Intents;
 using Vibecheck.Model;
 
 namespace Vibecheck.Diffing;
@@ -58,6 +59,13 @@ public sealed record Changeset
 
     /// <summary>Gets the patterns new in this change, as <see cref="PatternChanges.New"/> finds them.</summary>
     public List<NewPattern> NewPatterns { get; init; } = [];
+
+    /// <summary>
+    /// Gets the intents of the pull request's description, as <see cref="IntentResolver"/> resolves them. The
+    /// description changes without a commit, so a cached changeset has none, and the server sets them when it serves
+    /// the changeset. See <c>docs/intent.md</c> section 4.3.
+    /// </summary>
+    public List<ResolvedIntent> Intents { get; init; } = [];
 }
 
 /// <summary>
@@ -313,6 +321,12 @@ public sealed record Decision(string Id, string File, int Hunk, bool Public, Lis
     /// first, then the added, the changed and the unchanged, as <see cref="TestChanges"/> finds them.
     /// </summary>
     public List<DecisionTest> Tests { get; init; } = [];
+
+    /// <summary>
+    /// Gets the indices into <see cref="Changeset.Intents"/> of the intents that cover the decision, as
+    /// <see cref="Intents.IntentResolver.Apply"/> finds them, or <see langword="null"/> when none does.
+    /// </summary>
+    public List<int>? Intents { get; init; }
 }
 
 /// <summary>

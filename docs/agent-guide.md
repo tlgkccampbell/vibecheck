@@ -1,8 +1,9 @@
-# Keeping `vibecheck.json` in sync: a guide for coding agents
+# vibecheck for coding agents
 
 This document is written for language-model coding agents that change code in a C#
-repository with a `vibecheck.json` file. It says what the file is, when a code change
-also needs a map change, and the steps to take before a change is finished.
+repository whose changes are reviewed with vibecheck. It says what the `vibecheck.json`
+file is, when a code change also needs a map change, the steps to take before a change
+is finished, and how to state the intent of a change in its pull request description.
 `vibecheck guide` prints it, so the copy you read always matches the installed tool.
 
 The full definition of the format is in the
@@ -262,11 +263,108 @@ vibecheck fmt
 ### 3.5 Commit the map with the code
 
 Commit the map change in the same commit or pull request as the code that needs it,
-so that the review of that change draws correctly. In your summary or pull request
-description, say in one sentence what moved in the map, such as "Added the
-`billing.refunds` leaf for the new refund types and listed it under the Money group."
+so that the review of that change draws correctly. State what moved in the map as an
+intent, as section 4 describes, anchored to the nodes that moved:
 
-## 4. Checklist
+```markdown
+- **Refund types get their own leaf, `billing.refunds`, under the Money group.** `billing.refunds`
+  Why: refunds have their own lifecycle and would double the size of the ledger leaf.
+```
+
+## 4. Stating intent
+
+A reviewer of your pull request sees what changed, and Claude's account of why, read
+from the code. The one account that comes from you is the **intent** section of the
+pull request description, which says why you made the change's main choices. The
+review reads it, ties each intent to the parts of the change it names, and shows the
+reviewer every large part of the change that no intent covers. An unexplained new
+dependency is exactly what such a reviewer looks for, so a choice you leave unstated
+is flagged.
+
+The review never takes an intent as true. It shows what the intent names and whether
+the change touches it, beside Claude's account, so write what you actually chose and
+why, not what reads well.
+
+### 4.1 What deserves an intent
+
+Write an intent for each of these:
+
+- A new or removed component.
+- A new dependency between components.
+- A new cycle, with why it is acceptable.
+- A new package or project reference.
+- A change to a public signature that other code calls.
+- A departure from what the other instances of a pattern do, such as a handler that
+  skips the validation every other handler runs.
+- Any other choice between real alternatives that a reviewer could ask about.
+
+Edits that follow from an intent need none of their own. Do not restate the diff,
+list files, or explain an edit that the code makes obvious. Three good intents are
+better than ten.
+
+### 4.2 The format
+
+Write the intents in the pull request description, in a section whose heading is the
+word `Intent`. Each top-level list item is one intent:
+
+```markdown
+## Intent
+
+- **Refunds post as negative ledger entries.** `billing.ledger`, `billing.api → billing.ledger`
+  Why: the ledger stays append-only, so the monthly reconciliation needs no new case.
+  Instead of: a `Refund` aggregate in a new `billing.refunds` leaf.
+- **`RefundIssued` is published from the API, not the ledger.** `Orchard.Billing.Api.RefundsController`
+  Why: the ledger must not reference messaging, which `notifications` owns.
+```
+
+An intent has these parts:
+
+- The **claim**, in bold, opens the item. It says in one sentence what was chosen.
+- The **anchors** follow the claim on the same line, as inline code spans separated by
+  commas. They name what the intent is about.
+- The **why**, after `Why:` on a later line, gives the reason. It must not repeat the
+  claim.
+- The **alternative**, after `Instead of:` on a later line, is optional. Give one only
+  when you actually weighed it.
+
+An anchor is one of these:
+
+| Anchor | Example |
+|---|---|
+| A node or external of the map, by identifier | `billing.ledger` |
+| An edge, as two ends joined by `→` or `->`, each a node or a type | `billing.api → billing.ledger` |
+| A file, by its path from the repository's top | `src/Orchard.Billing/Api/RefundsController.cs` |
+| A type, by its full name, or by its simple name when that is unique | `Orchard.Billing.Api.RefundsController` |
+
+Give every intent about particular code a file or a type anchor. Use node identifiers
+and edges between nodes only in a repository with a `vibecheck.json`, since a review
+without one draws a generated map whose identifiers yours will not match. A node
+anchor alone never covers a particular edge or decision, because a node is too broad
+to say which one you meant. A code span that is none of these, such as a member name
+in the claim, stays text.
+
+### 4.3 Where to write it
+
+Put the section in the pull request description when you open the pull request. When
+you do not open it yourself, give the section in your report, so that whoever opens
+the pull request can paste it. Commit messages are not read for intents.
+
+### 4.4 Check the format
+
+Before opening the pull request, you may check your draft without building anything:
+
+```
+vibecheck intent description.md --base main
+```
+
+With no file, it reads standard input. It prints each intent with its anchors, says
+whether each node anchor is in the map and each file exists, and with `--base` says
+which files changed since that revision. It cannot check types, which only a review
+knows. It exits with code 1 when the text has no `Intent` section or an item has no
+claim, and reports anchors that name nothing as warnings. Fix the warnings. Do not run
+a review to check your intents.
+
+## 5. Checklist
 
 - [ ] New types sit in a namespace the map binds to the right component, or the map
       binds them by pattern or exact name.
@@ -280,4 +378,7 @@ description, say in one sentence what moved in the map, such as "Added the
 - [ ] `vibecheck check` reports no failures and no new warnings, and any new cycle is
       explained by `vibecheck why`.
 - [ ] `vibecheck fmt` has been run.
-- [ ] The map change is committed with the code change and mentioned in the summary.
+- [ ] The map change is committed with the code change and stated as an intent.
+- [ ] The pull request description has an `Intent` section with an intent for each
+      large choice, each with a claim, anchors and a why, and `vibecheck intent`
+      reports no failures and no warnings for it.
