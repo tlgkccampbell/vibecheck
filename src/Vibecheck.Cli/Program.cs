@@ -29,6 +29,7 @@ public static class Program
           vibecheck diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
           vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
           vibecheck guide
+          vibecheck intent    [<file>] [--map <vibecheck.json>] [--root <dir>] [--base <rev>]
 
         vibecheck with no command, or vibecheck review, opens the viewer in the browser on a range of the repository
         that the current directory is in. Without a range it opens on a picker. The map is --map when given, then the
@@ -41,7 +42,10 @@ public static class Program
         directory; pass --root when the map is kept outside the repository. changeset takes two
         revisions or one range (a..b, or a...b for a pull request), and the head defaults to HEAD.
 
-        vibecheck guide prints the guide for coding agents: what the map is and how to keep it in sync with a change.
+        vibecheck guide prints the guide for coding agents: how to keep the map in sync with a change, and how to state
+        the change's intent in the pull request description. vibecheck intent checks the Intent section of a draft
+        description, read from the file or from standard input, without building the solution. File anchors are
+        paths from the top of the repository that holds the root, and --base marks the files changed since a revision.
         """;
 
     public static async Task<int> Main(string[] args)
@@ -64,6 +68,7 @@ public static class Program
                 "diff" => Diff(positional, options),
                 "changeset" => await ChangesetAsync(positional, options),
                 "guide" => Guide(),
+                "intent" => Intent(positional, options),
                 "--help" or "-h" or "help" => Help(),
                 _ => Unknown(args[0]),
             };
@@ -83,6 +88,25 @@ public static class Program
     private static int Help() { Console.WriteLine(Usage); return 0; }
 
     private static int Guide() { Console.Out.Write(AgentNote.Guide()); return 0; }
+
+    /// <summary>
+    /// Checks the intents of a draft description against the map, when there is one, and the working tree. The map is
+    /// <c>--map</c>, or <c>./vibecheck.json</c> when it exists.
+    /// </summary>
+    private static int Intent(List<string> positional, Dictionary<string, string> options)
+    {
+        if (positional.Count > 1) throw new ArgumentException("intent takes at most one file");
+        // Standard input is read as UTF-8, since the console's own encoding on Windows loses the arrow of an edge.
+        var markdown = positional.Count == 0 || positional[0] == "-"
+            ? new StreamReader(Console.OpenStandardInput(), System.Text.Encoding.UTF8).ReadToEnd()
+            : File.ReadAllText(positional[0]);
+        ArchitectureMap? map = null;
+        string? mapDir = null;
+        if (options.ContainsKey("map") || File.Exists(MapPath(options))) (map, _, _, mapDir) = LoadMap(options);
+        var dir = Path.GetFullPath(options.GetValueOrDefault("root") ?? mapDir ?? Directory.GetCurrentDirectory());
+        var top = Git.TryRun(dir, "rev-parse", "--show-toplevel") is { } t ? Path.GetFullPath(t) : dir;
+        return IntentCommand.Run(markdown, map, top, options.GetValueOrDefault("base"), Console.Out, Console.Error);
+    }
 
     private static int Unknown(string command)
     {
@@ -166,7 +190,7 @@ public static class Program
         if (!mapInRoot.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(mapInRoot))
         {
             Console.WriteLine();
-            Console.WriteLine($"To have coding agents keep the map in sync, add this to the repository's {AgentNote.Claude} or {AgentNote.Agents}:");
+            Console.WriteLine($"To have coding agents keep the map in sync and state the intent of their changes, add this to the repository's {AgentNote.Claude} or {AgentNote.Agents}:");
             Console.WriteLine();
             Console.Write(AgentNote.Text(mapInRoot.Replace(Path.DirectorySeparatorChar, '/')));
         }

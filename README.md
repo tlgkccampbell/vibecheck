@@ -8,8 +8,8 @@ schematic that reviewers drill into. The map is proposed by a language model fro
 listing of the code's types and verified against the dependency graph.
 
 The design is in [docs/vibecheck-spec.md](docs/vibecheck-spec.md). Coding agents that change
-code in a repository with a `vibecheck.json` follow
-[docs/keeping-the-map-in-sync.md](docs/keeping-the-map-in-sync.md), which `vibecheck guide`
+code in a repository reviewed with vibecheck follow
+[docs/agent-guide.md](docs/agent-guide.md), which `vibecheck guide`
 prints; see [Telling coding agents about the map](#telling-coding-agents-about-the-map). The one-step review
 workflow, with generated maps and narratives, is in
 [docs/review-workflow.md](docs/review-workflow.md); its first four phases are built.
@@ -30,6 +30,10 @@ pattern and counts its departures, the pattern's norms in the details panel, a s
 each instance that departs, a compare view that sets an instance beside its nearest or typical example, member
 by member, a Patterns switch that lists the patterns, outlines their blocks and lists the patterns new in a change,
 Claude's names and purposes for patterns, and patterns as hints for placing unsorted types.
+Stated intent, in which the coding agent that writes a change says why it made the change's main choices in an
+`Intent` section of the pull request description, is designed in [docs/intent.md](docs/intent.md); its first
+phase is built: the format, the guide's section on it, and `vibecheck intent`, which checks a draft. The review
+does not read intents yet.
 
 ## Layout
 
@@ -186,6 +190,7 @@ vibecheck facts     [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [
 vibecheck diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
 vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
 vibecheck guide
+vibecheck intent    [<file>] [--map <vibecheck.json>] [--root <dir>] [--base <rev>]
 ```
 
 The map defaults to `./vibecheck.json`, and the layout file sits beside it. The
@@ -226,16 +231,21 @@ behind one edge.
 
 A map stays useful only while changes keep it in sync, and in a repository where coding
 agents write the changes, the agents have to know that. `vibecheck guide` prints the
-guide for them, [docs/keeping-the-map-in-sync.md](docs/keeping-the-map-in-sync.md),
-which is embedded in the tool so that it always matches the installed version. A short
-note in the repository's `CLAUDE.md` or `AGENTS.md` sends agents to it:
+guide for them, [docs/agent-guide.md](docs/agent-guide.md),
+which is embedded in the tool so that it always matches the installed version. It also
+asks agents to state the intent of each change's main choices in an `Intent` section of
+the pull request description, as [docs/intent.md](docs/intent.md) describes, and
+`vibecheck intent` checks a draft of that section in well under a second, without
+building the solution. A short note in the repository's `CLAUDE.md` or `AGENTS.md`
+sends agents to the guide:
 
 ```markdown
-## Architecture map
+## vibecheck
 
-This repository has an architecture map, `vibecheck.json`, that the vibecheck review tool draws changes with.
-Before finishing a change that adds, moves, renames or deletes types, namespaces, projects or package
-references, run `vibecheck guide` and follow it to keep the map in sync.
+This repository's changes are reviewed with vibecheck, which draws each change on the
+architecture map `vibecheck.json`. Before finishing a change, run `vibecheck guide` and
+follow it. It says when the map needs updating, and how to state the intent of the
+change in the pull request description.
 ```
 
 `vibecheck init` prints this note, with the map's path, after writing a map inside the

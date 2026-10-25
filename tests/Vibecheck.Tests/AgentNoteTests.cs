@@ -8,15 +8,16 @@ public class AgentNoteTests
     [Fact]
     public void TheGuideIsEmbeddedInTheTool()
     {
-        Assert.StartsWith("# Keeping `vibecheck.json` in sync", AgentNote.Guide(), StringComparison.Ordinal);
+        Assert.StartsWith("# vibecheck for coding agents", AgentNote.Guide(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void TheNoteNamesTheMapAndTheGuideCommand()
+    public void TheNoteNamesTheMapTheGuideCommandAndThePullRequestDescription()
     {
         var text = AgentNote.Text("src/app/vibecheck.json");
         Assert.Contains("`src/app/vibecheck.json`", text, StringComparison.Ordinal);
         Assert.Contains("`vibecheck guide`", text, StringComparison.Ordinal);
+        Assert.Contains("pull request description", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\r", text, StringComparison.Ordinal);
     }
 
@@ -40,7 +41,7 @@ public class AgentNoteTests
 
         Assert.True(AgentNote.AddTo(temp.Path, "CLAUDE.md", "vibecheck.json"));
         var text = File.ReadAllText(path);
-        Assert.StartsWith("# Project\r\n\r\nBuild with make.\r\n\r\n## Architecture map\r\n", text, StringComparison.Ordinal);
+        Assert.StartsWith("# Project\r\n\r\nBuild with make.\r\n\r\n## vibecheck\r\n", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\n", text.Replace("\r\n", "", StringComparison.Ordinal), StringComparison.Ordinal);
 
         // A file that already sends agents to the guide is left alone.
@@ -61,6 +62,17 @@ public class AgentNoteTests
         if (claude is not null) File.WriteAllText(Path.Combine(temp.Path, "CLAUDE.md"), claude);
         if (agents) File.WriteAllText(Path.Combine(temp.Path, "AGENTS.md"), "# Agents\n");
         Assert.Equal(expected, AgentNote.Target(temp.Path));
+    }
+
+    [Fact]
+    public void AFileWithTheEarlierNoteIsNotGivenTheNewOne()
+    {
+        using var temp = new TempDirectory();
+        var earlier = "## Architecture map\n\nBefore finishing a change that moves types, run `vibecheck guide` and follow it to keep the map in sync.\n";
+        File.WriteAllText(Path.Combine(temp.Path, "CLAUDE.md"), earlier);
+        Assert.True(AgentNote.IsPresent(temp.Path));
+        Assert.False(AgentNote.AddTo(temp.Path, "CLAUDE.md", "vibecheck.json"));
+        Assert.Equal(earlier, File.ReadAllText(Path.Combine(temp.Path, "CLAUDE.md")));
     }
 
     [Fact]

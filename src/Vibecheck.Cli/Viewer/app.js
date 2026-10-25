@@ -4159,8 +4159,8 @@
       show("busy", "switch", spinner(), el("span", {}, "Switching to the concept map…"));
       post("switch");
     }
-    // A saved map is offered a note in the repository's agent instructions, which tells coding agents to keep it in
-    // sync. The note is previewed, with the file it goes in, before anything is written.
+    // A saved map is offered a note in the repository's agent instructions, which sends coding agents to the vibecheck
+    // guide. The note is previewed, with the file it goes in, before anything is written.
     async function save() {
       const r = await post("save");
       const note = r.ok && r.body.note && !r.body.note.present ? r.body.note : null;
@@ -4169,7 +4169,7 @@
     }
     function previewNote(note) {
       const where = note.create ? `Creates ${note.file} with this note` : `Adds this note to the end of ${note.file}`;
-      show("info", "preview", el("span", {}, `${where}, which tells coding agents to keep the map in sync:`,
+      show("info", "preview", el("span", {}, `${where}, which sends coding agents to the vibecheck guide:`,
         el("pre", { class: "note-preview" }, note.text)),
         el("button", { class: "btn", onclick: () => addNote(note.file) }, note.create ? `Create ${note.file}` : `Add to ${note.file}`));
     }

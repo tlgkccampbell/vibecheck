@@ -11,7 +11,8 @@ that no statement covers. It builds on the map and facts of
 and the guide for coding agents, and it lists, in section 9, the changes it makes to
 those documents.
 
-Nothing in this document is built yet.
+Phase 1 of section 10 is built: `IntentReader`, `vibecheck intent`, the guide's
+section and rename, and the new note. The review does not read intents yet.
 
 The design rests on one principle. An agent's statement of intent is a claim, not
 evidence. It is the one account of why a change was made that comes from the author,
