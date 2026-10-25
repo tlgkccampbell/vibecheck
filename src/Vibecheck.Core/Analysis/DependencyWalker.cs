@@ -169,10 +169,15 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
             target.ToDisplayString(RoslynAnalyzer.TypeNameFormat), target.ContainingAssembly?.Name ?? "", line));
     }
 
-    /// <summary>Returns the top-level type whose declaration contains a node, or <see langword="null"/> outside any type, as in an assembly attribute.</summary>
+    /// <summary>
+    /// Returns the top-level type whose declaration contains a node, or <see langword="null"/> outside any type, as in an
+    /// assembly attribute. A type's base list and constraints belong to the type, although the semantic model places
+    /// them in the enclosing namespace.
+    /// </summary>
     private INamedTypeSymbol? EnclosingTopLevelType(SyntaxNode node)
     {
-        var enclosing = model.GetEnclosingSymbol(node.SpanStart);
+        var declaration = node.FirstAncestorOrSelf<SyntaxNode>(n => n is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax);
+        var enclosing = declaration is null ? model.GetEnclosingSymbol(node.SpanStart) : model.GetDeclaredSymbol(declaration);
         return TopLevelTypeOf(enclosing);
     }
 
