@@ -48,7 +48,8 @@ public static class SolutionBuild
         psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         psi.Environment["DOTNET_NOLOGO"] = "1";
         var verb = preparation == SolutionPreparation.Build ? "build" : "restore";
-        foreach (var a in new[] { verb, solution, "-v", "q", "--nologo", "-nodeReuse:false" }) psi.ArgumentList.Add(a);
+        // A restore for analysis has no use for the vulnerability audit, which fetches advisory data from every feed.
+        foreach (var a in new[] { verb, solution, "-v", "q", "--nologo", "-nodeReuse:false", "-p:NuGetAudit=false" }) psi.ArgumentList.Add(a);
         if (preparation == SolutionPreparation.Build) psi.ArgumentList.Add("-p:UseSharedCompilation=false");
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("dotnet could not be started");
         process.StandardInput.Close();
