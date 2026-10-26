@@ -161,7 +161,8 @@ it:
 4. If anything was found, send the findings back with the proposal and ask for a
    revision. Stop when nothing is found, after three rounds, or when a usable
    revision does not reduce the number of findings. The last case usually means a
-   cycle in the code itself, which no grouping removes.
+   cycle in the code itself, which no grouping removes. A revision that fails, or
+   takes longer than fifteen minutes, also ends the rounds.
 5. Keep the usable proposal with the fewest findings, preferring the later of two
    that tie.
 
@@ -333,8 +334,9 @@ whole request as they are, and the server sends it as `explainer` events.
 The tool calls the Claude Code command line in print mode. Each request runs
 `claude -p` with the prompt on standard input and these options:
 
-- `--output-format json` and `--json-schema <schema>`, so that the answer is one
-  document of a known shape.
+- `--output-format stream-json`, `--verbose` and `--json-schema <schema>`, so that
+  the call's events arrive as they happen and the final one carries an answer of a
+  known shape. A request that reports its activity adds `--include-partial-messages`.
 - `--no-session-persistence`, so that reviews do not fill the reviewer's session
   history.
 - `--restricted` and `--strict-mcp-config`, so that the call loads none of the
@@ -386,7 +388,13 @@ against $0.41 for the seven narrative requests that were not already cached;
 [explainers.md](explainers.md) section 8 has the details.
 
 Each narrative request, and the explainer's request, is abandoned after five minutes and counts as failed, so that
-one hung call cannot keep the narratives from finishing.
+one hung call cannot keep the narratives from finishing. Each map proposal and revision is abandoned after fifteen
+minutes, since a large solution's map takes long to write.
+
+Map generation reports its activity every ten seconds in the viewer's notice and the
+log: how long the request has run, and about how many tokens Claude has spent
+thinking and writing the answer. Claude Code streams the size of the thinking but
+not its text. The answer's size is estimated at four characters a token.
 
 The calls go through one interface, `IClaude`, with the real implementation and a
 canned one that tests use. Prompts and schemas are files in the tool, versioned

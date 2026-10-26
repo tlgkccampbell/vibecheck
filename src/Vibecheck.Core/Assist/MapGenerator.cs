@@ -25,12 +25,17 @@ public static class MapGenerator
     /// <summary>A leaf with more types than this is reported as too large for a view to regroup.</summary>
     public const int LargeLeaf = 60;
 
+    /// <summary>Gets how long one proposal or revision may take before it is abandoned as failed.</summary>
+    public static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(15);
+
     /// <summary>
     /// Proposes a concept map for an analysis and revises it against the checker's findings. The skeleton supplies the
     /// solution, the exclusions, the test types and the externals, which the generated map keeps. Returns the usable proposal with the
-    /// fewest findings, preferring the later of two that tie.
+    /// fewest findings, preferring the later of two that tie. A revision that fails, or takes longer than
+    /// <see cref="RequestTimeout"/>, ends the rounds and keeps the best proposal so far. While Claude works, the progress
+    /// says every few seconds how long the request has run and how much Claude has thought and written.
     /// </summary>
-    /// <exception cref="ClaudeException">Claude failed, or no proposal could be used as a map.</exception>
+    /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static async Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null)
     {
         var errors = new List<string>();
@@ -42,7 +47,11 @@ public static class MapGenerator
         var schema = Prompts.Read("map.schema.json");
 
         progress?.Report($"proposing a concept map from {included.Types.Count} types");
-        var answer = await claude.AskAsync(new ClaudeRequest(Prompts.Fill(Prompts.Read("propose-map.md"), ("rules", rules), ("listing", listing)), schema) { Model = model }, ct);
+        ClaudeRequest Request(string prompt, string step) => new(prompt, schema)
+        {
+            Model = model, Timeout = RequestTimeout, Activity = progress is null ? null : a => progress.Report($"{step}: {a.Describe()}"),
+        };
+        var answer = await claude.AskAsync(Request(Prompts.Fill(Prompts.Read("propose-map.md"), ("rules", rules), ("listing", listing)), "proposing"), ct);
         GeneratedMap? best = null;
         IReadOnlyList<string> findings = [];
         var previous = int.MaxValue;
@@ -61,7 +70,15 @@ public static class MapGenerator
             var prompt = Prompts.Fill(Prompts.Read("revise-map.md"), ("rules", rules), ("listing", listing),
                 ("previous", JsonSerializer.Serialize(answer, new JsonSerializerOptions { WriteIndented = true })),
                 ("findings", string.Join("\n\n", findings.Select(f => "- " + f.Replace("\n", "\n  ")))));
-            answer = await claude.AskAsync(new ClaudeRequest(prompt, schema) { Model = model }, ct);
+            try
+            {
+                answer = await claude.AskAsync(Request(prompt, $"round {round + 1}"), ct);
+            }
+            catch (ClaudeException ex) when (best is not null)
+            {
+                progress?.Report($"round {round + 1} failed, so the map from round {best.Round} is kept: {ex.Message}");
+                break;
+            }
         }
         return best ?? throw new ClaudeException("Claude proposed no usable map: " + string.Join("; ", findings.Take(5)));
     }

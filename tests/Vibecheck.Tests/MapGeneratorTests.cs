@@ -38,6 +38,12 @@ internal sealed class FakeClaude : IClaude
 
 public class MapGeneratorTests
 {
+    /// <summary>Records each progress message as it is reported, on the reporting thread.</summary>
+    private sealed class Progress(List<string> messages) : IProgress<string>
+    {
+        public void Report(string value) => messages.Add(value);
+    }
+
     /// <summary>A proposal for the synthetic analysis that binds every type, with one view.</summary>
     internal const string Complete = """
         { "nodes": [
@@ -131,6 +137,37 @@ public class MapGeneratorTests
 
         Assert.Equal(2, claude.Requests.Count);
         Assert.Equal((2, 1), (generated.Round, generated.Findings.Count));
+    }
+
+    [Fact]
+    public async Task KeepsTheBestProposalWhenARevisionFails()
+    {
+        var claude = new FakeClaude(r => r.Prompt.Contains("Shared.Result", StringComparison.Ordinal)
+            ? throw new ClaudeException($"claude gave no answer within {r.Timeout!.Value.TotalSeconds:F0} s") : MissingShared);
+        var progress = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress));
+
+        Assert.Equal((1, 1), (generated.Round, generated.Findings.Count));
+        Assert.Equal([MapGenerator.RequestTimeout, MapGenerator.RequestTimeout], claude.Requests.Select(r => r.Timeout));
+        Assert.Contains("round 2 failed, so the map from round 1 is kept: claude gave no answer within 900 s", progress);
+    }
+
+    [Fact]
+    public async Task ReportsWhatClaudeIsDoingInEachRound()
+    {
+        var claude = new FakeClaude(r =>
+        {
+            var revising = r.Prompt.Contains("Shared.Result", StringComparison.Ordinal);
+            r.Activity!(new ClaudeActivity(TimeSpan.FromSeconds(192), 9400, revising ? 2100 : 0));
+            return revising ? Complete : MissingShared;
+        });
+        var progress = new List<string>();
+
+        await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress));
+
+        Assert.Contains("proposing: thinking, about 9,400 tokens so far (3m12s)", progress);
+        Assert.Contains("round 2: writing the answer, about 2,100 tokens so far after about 9,400 tokens of thinking (3m12s)", progress);
     }
 
     [Fact]
