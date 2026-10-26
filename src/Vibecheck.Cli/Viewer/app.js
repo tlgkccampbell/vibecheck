@@ -2295,7 +2295,7 @@
 
   // ---------- The reading path ----------
   // The order in which to read the changeset, as the changeset plans it: the surprises first, each with its signal,
-  // then the other changed blocks with the decisions and files under them, and last what is set aside. A step is read
+  // then the other changed blocks with the decisions and files under them, and last what is set aside. A step is reviewed
   // when every changed file it names is reviewed. See docs/attention.md section 6.
   const PATH = CS.path || [];
   const TIER_TITLE = { first: "High priority", then: "Medium priority", aside: "Low priority" };
@@ -2309,7 +2309,7 @@
     return null;
   }
   // Returns the step to open next: the first unread step after the current one, or else the first unread step from
-  // the top, or null when every step is read.
+  // the top, or null when every step is reviewed.
   function nextStep() {
     const steps = countedSteps();
     const at = steps.findIndex((s) => s.id === state.step);
@@ -2389,11 +2389,11 @@
         el("input", { type: "checkbox", checked: REVIEWED.has(p), onchange: (ev) => setReviewed([p], ev.target.checked) }),
         el("button", { class: "link", onclick: () => openFile(p), title: p }, p.split("/").pop())));
     }
-    // The action keeps its place once the step is read, so that the list below it does not jump.
+    // The action keeps its place once the step is reviewed, so that the list below it does not jump.
     box.append(left.length
-      ? el("button", { class: "btn", onclick: () => setReviewed(left, true), title: "Mark every file of this step reviewed, which makes the step read" },
-        left.length === s.files.length ? "Mark read" : `Mark the other ${plural(left.length, "file", "files")}`)
-      : el("button", { class: "btn", disabled: true, title: "Every file of this step is reviewed" }, "Read"));
+      ? el("button", { class: "btn", onclick: () => setReviewed(left, true), title: "Mark every file of this step reviewed" },
+        left.length === s.files.length ? "Mark reviewed" : `Mark the other ${plural(left.length, "file", "files")}`)
+      : el("button", { class: "btn", disabled: true, title: "Every file of this step is reviewed" }, "Reviewed"));
     return box;
   }
   // Renders the path into the panel, with its arrows and count in the panel's pinned head.
@@ -2402,11 +2402,11 @@
     const next = nextStep(), previous = previousStep();
     head.append(el("div", { class: "path-head" },
       el("button", { class: "btn step-arrow", disabled: !previous, onclick: () => previous && openStep(previous), "aria-label": "Previous step",
-        title: previous ? "Previous step, read or not" : "No step before this one" }, "←"),
+        title: previous ? "Previous step, reviewed or not" : "No step before this one" }, "←"),
       el("button", { class: "btn step-arrow", disabled: !next, onclick: () => next && openStep(next), "aria-label": "Next step",
-        title: next ? "Next step whose files are not all reviewed" : "Every step is read" }, "→"),
-      el("span", {}, read === steps.length ? "Every step is read" : `${read} of ${plural(steps.length, "step", "steps")} read`)));
-    box.append(el("p", { class: "hint" }, "A step opens where it lives, and is read once its files are reviewed."));
+        title: next ? "Next step whose files are not all reviewed" : "Every step is reviewed" }, "→"),
+      el("span", {}, read === steps.length ? "Every step is reviewed" : `${read} of ${plural(steps.length, "step", "steps")} reviewed`)));
+    box.append(el("p", { class: "hint" }, "A step opens where it lives, and is reviewed once all its files are."));
     for (const tier of ["first", "then", "aside"]) {
       const list = PATH.filter((s) => s.tier === tier);
       if (!list.length) continue;
@@ -2420,7 +2420,7 @@
         const text = el("span", { class: "step-text" }, stepSignal(s));
         if (n) text.append(el("span", { class: "step-why" }, ...richText(n.text)));
         text.append(stepIntent(s) || "");
-        const meta = s.files.length ? el("span", { class: "step-meta" }, tier === "aside" ? `${reviewed} of ${s.files.length} reviewed` : done ? "read" : `${reviewed}/${s.files.length} files`) : null;
+        const meta = s.files.length ? el("span", { class: "step-meta" }, tier === "aside" ? `${reviewed} of ${s.files.length} reviewed` : done ? "reviewed" : `${reviewed}/${s.files.length} files`) : null;
         const li = el("li", {}, el("button", { class: "row step" + (done ? " read" : "") + (current ? " current" : ""), onclick: () => openStep(s),
           title: s.files.length ? `${plural(s.files.length, "file", "files")}, ${reviewed} reviewed` : "" },
           el("span", { class: "step-kind " + s.kind }, s.kind === "node" ? "block" : s.kind === "aside" ? "aside" : s.kind), text, meta));
@@ -2911,7 +2911,7 @@
   // The explanations that the question marks beside the page's major sections show on hover, by section.
   const HELP = {
     path: "The reading path lists the parts of the change in the order to read them. High priority holds the surprises, such as new edges, new cycles and the decisions that reach furthest. " +
-      "Medium priority holds the other changed blocks. Low priority counts the consequences, trivial files and files already reviewed. A step is read once all its files are reviewed.",
+      "Medium priority holds the other changed blocks. Low priority counts the consequences, trivial files and files already reviewed. A step is reviewed once all its files are.",
     changes: "This panel lists every changed block and its changed files. Below them are the decisions, the edges whose reference counts changed, and the changes to the map itself.",
     glossary: "Concepts lists the concepts that recur in the names of types, such as “Command Handler”. A word counts only when unrelated types share it. " +
       "New concepts come first, and Claude defines each concept that no type documents. Hover a concept to outline the blocks that hold its types.",
@@ -2933,7 +2933,7 @@
       "Hover a pattern to outline the blocks that hold its instances, solid for new and changed ones and dashed for the rest. " +
       "While this list is open, a block's badge counts the new and changed instances it holds. Patterns new in this change come last.",
     explainer: "An explainer is a story of the change that Claude writes on request, as a run of slides. Each slide says a little and moves the map to the part it describes. " +
-      "Use the arrow keys, or the arrows on the card, to move among the slides. The explainer is a second account beside the path, and opening a slide marks nothing read.",
+      "Use the arrow keys, or the arrows on the card, to move among the slides. The explainer is a second account beside the path, and opening a slide marks nothing reviewed.",
     terms: "These are the concepts that this block's new and changed types hold in their names. Concepts lists those of the whole change.",
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
       "Tests are never drawn on the map. While this list is open, a block's badge counts the changed test files of the types it holds. Test infrastructure, such as fixtures and builders, comes last.",
@@ -3917,12 +3917,12 @@
         el("span", { class: "hint" }, "One request to Claude, about a minute.")));
       return;
     }
-    box.append(el("p", { class: "hint" }, "Written by Claude; check it against the code. A slide opens where its target lives, and opening one marks nothing read."));
+    box.append(el("p", { class: "hint" }, "Written by Claude; check it against the code. A slide opens where its target lives, and opening one marks nothing reviewed."));
     const ol = el("ol", { class: "list slides" });
     EXPL.slides.forEach((s, i) => {
-      // A slide whose target has a step of its own shows whether that step is read, so that a second tour shows what is finished.
+      // A slide whose target has a step of its own shows whether that step is reviewed, so that a second tour shows what is finished.
       const step = slideStep(s);
-      const read = step && step.files.length ? el("span", { class: "step-meta slide-read", title: "The step on the path that opens this slide's target" }, stepRead(step) ? "read" : "unread") : null;
+      const read = step && step.files.length ? el("span", { class: "step-meta slide-read", title: "Whether every file of the path step that shares this slide's target is reviewed" }, stepRead(step) ? "reviewed" : "unreviewed") : null;
       ol.append(el("li", {}, el("button", { class: "row step" + (i === EXPL.current ? " current" : ""), onclick: () => openSlide(i), title: s.title },
         el("span", { class: "slide-number" }, String(i + 1)), el("span", { class: "step-text" }, s.title), read,
         el("span", { class: "step-kind slide-kind" }, slideKindText(s.target || {})))));
@@ -3961,7 +3961,7 @@
   }
 
   // Opens the step of the path that shares a slide's target, with the path in the panel, where the step's files and
-  // Mark read are. It is the one bridge from the explainer to the reviewed marks. See docs/explainers.md section 5.4.
+  // Mark reviewed are. It is the one bridge from the explainer to the reviewed marks. See docs/explainers.md section 5.4.
   function openOnPath(step) {
     state.panel = "path";
     return openStep(step);
@@ -5277,7 +5277,7 @@
     const steps = countedSteps();
     $("#progress").textContent = [files.length ? `${done} of ${files.length} files reviewed` : "",
       TEST_FILES.length ? `${tests} of ${plural(TEST_FILES.length, "test file", "test files")}` : "",
-      steps.length ? `${steps.filter(stepRead).length} of ${plural(steps.length, "step", "steps")} read` : ""].filter(Boolean).join(" · ");
+      steps.length ? `${steps.filter(stepRead).length} of ${plural(steps.length, "step", "steps")} reviewed` : ""].filter(Boolean).join(" · ");
   }
 
   // Lays marks over the page's, where each maps a path to its reason, or to nothing when the file is not reviewed.

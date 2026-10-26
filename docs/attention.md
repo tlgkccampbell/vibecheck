@@ -315,13 +315,13 @@ or "signature of `Session.Require` changed, public: 14 consequences in 9 files a
 the edge selected; a block in its level; a decision at its hunk, with its reach in
 the details panel; a file in its leaf. The step opened last is the current step. It
 is marked in the list, and under it the panel lists its files with their reviewed
-checkboxes and offers **Mark read**, which marks them all, so that what finishes the
+checkboxes and offers **Mark reviewed**, which marks them all, so that what finishes the
 step is in front of the reader. Two arrow buttons move along the path. The forward
 arrow opens the first step after the current one whose files are not all reviewed,
 or the first such step from the top. The back arrow opens the step before the
-current one, read or not, since a reader may move on without finishing a step and
+current one, reviewed or not, since a reader may move on without finishing a step and
 want it back. The bar shows
-"4 of 11 steps read" beside the file count. A step is read when every changed file it
+"4 of 11 steps reviewed" beside the file count. A step is reviewed when every changed file it
 names is reviewed, so the path and the marks are one state and the path never asks
 for a second kind of mark. The files an edge step names are the changed files of the
 types on its referencing side.
@@ -340,8 +340,8 @@ Coverage never reorders the path. A changeset with no intents shows neither.
 An explainer of [explainers.md](explainers.md) is a reader over the path and the marks,
 and changes neither. Its one bridge to them is **Open on the path**: a slide whose
 target is also the target of a step of the first two tiers offers it on its card, and it
-switches the panel to the path and opens that step, where its files and **Mark read**
-are. The slide's row in the Explainer face shows that step's read state as a word, so
+switches the panel to the path and opens that step, where its files and **Mark reviewed**
+are. The slide's row in the Explainer face shows whether that step is reviewed as a word, so
 that a second tour shows what is finished.
 
 ### 6.3 Claude's part
@@ -523,7 +523,7 @@ snippets, which keeps them in the sub-second unit suite. The tests state:
   generated files take their reasons, and the reviewer's unmark wins over each.
 - The path puts a new edge, a new cycle, an edge out of a foundation block, and the
   widest decision in the first tier in that order, deduplicates blocks across tiers,
-  and marks a step read when its files are reviewed.
+  and marks a step reviewed when its files are reviewed.
 - Placement into an existing leaf applies at once, a new leaf waits, each choice
   produces the map it should, and writing the map refuses outside the working tree.
 - The glossary finds a term only across two families, leaves out a subject joined to a

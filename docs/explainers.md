@@ -378,9 +378,10 @@ Opening a slide marks nothing reviewed and changes no step of the path. The revi
 marks and the path stay one state, as [attention.md](attention.md) section 6.2 has it,
 and the explainer is a reader over that state. **Open on the path** is the one bridge:
 it opens the step that shares the slide's target, where the step's files and
-**Mark read** are. A slide whose target has a step of its own shows that step's read
-state as a word on the slide's row in the face, so that a reviewer taking the tour a
-second time sees what is finished. The check of section 4.3 names that step on the
+**Mark reviewed** are. A slide whose target has a step of its own shows on its row in the
+face whether that step is reviewed, as "reviewed" when every file of the step is reviewed
+and "unreviewed" otherwise, so that a reviewer taking the tour a second time sees what
+is finished. The check of section 4.3 names that step on the
 slide's resolved target, as `step`: the first step of the path's first two tiers whose
 target is the same catalog entry, such as the cycle whose closing edge the slide
 targets.
