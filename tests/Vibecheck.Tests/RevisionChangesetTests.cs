@@ -79,6 +79,31 @@ public class RevisionChangesetTests
     }
 
     [Fact]
+    public void RemovesTheWorktreesOfProcessesThatAreNoLongerRunning()
+    {
+        using var repo = new TempRepo();
+        repo.Write("f.txt", "1");
+        var commit = repo.Commit("one");
+        using var exited = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "--version") { RedirectStandardOutput = true })!;
+        exited.WaitForExit();
+        var temp = Path.Combine(repo.Path, "temp");
+        var abandoned = Path.Combine(temp, $"vibecheck-{exited.Id}-0123456789ab");
+        var live = Path.Combine(temp, $"vibecheck-{Environment.ProcessId}-0123456789ab");
+        var other = Path.Combine(temp, "vibecheck-0123456789ab");
+        repo.Git("worktree", "add", "--detach", "--quiet", abandoned, commit);
+        repo.Git("worktree", "add", "--detach", "--quiet", live, commit);
+        Directory.CreateDirectory(other);
+
+        Worktree.RemoveAbandoned(repo.Path, temp);
+        Assert.False(Directory.Exists(abandoned));
+        Assert.True(Directory.Exists(live));
+        Assert.True(Directory.Exists(other));
+        var listed = repo.Git("worktree", "list");
+        Assert.DoesNotContain(Path.GetFileName(abandoned), listed);
+        Assert.Contains(Path.GetFileName(live), listed);
+    }
+
+    [Fact]
     public void ResolvesRangesTheWayGitDoes()
     {
         using var repo = new TempRepo();
