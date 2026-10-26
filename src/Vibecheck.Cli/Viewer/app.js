@@ -2635,10 +2635,11 @@
   }
 
   // ---------- Type definitions ----------
-  // Ctrl+click on a type's name in a line of code, or Cmd+click on macOS, opens the type's declaration on GitHub in a new
-  // window, at the latest commit the review examines. Any type at head can be opened, whether or not the change touches
-  // it. While the key is held, the name under the pointer is underlined. The server gives the address of the files on
-  // GitHub, so a page without GitHub opens nothing.
+  // Ctrl+Shift+click on a type's name in a line of code, or Cmd+Shift+click on macOS, opens the type's declaration on
+  // GitHub in a new tab in front, at the latest commit the review examines. Ctrl+click opens it in a background tab, as
+  // the browser opens a link. Any type at head can be opened, whether or not the change touches it. While Ctrl or Cmd is
+  // held, the name under the pointer is underlined. The server gives the address of the files on GitHub, so a page
+  // without GitHub opens nothing.
   const LOCATIONS = new Map();
   const FILE_TYPES = new Map();
   for (const l of CS.locations || []) {
@@ -2713,7 +2714,7 @@
       linked = hit ? hit.td : null;
       if (!hit) return;
       hit.td.classList.add("type-link");
-      hit.td.title = `Open ${hit.location.name} on GitHub`;
+      hit.td.title = `Ctrl+Shift+click to open ${hit.location.name} on GitHub. Ctrl+click opens it in a background tab.`;
       mark?.add(hit.range);
     };
     view.addEventListener("mousemove", (ev) => { pointer = { x: ev.clientX, y: ev.clientY }; show(ev.ctrlKey || ev.metaKey); });
@@ -2721,6 +2722,8 @@
     document.addEventListener("keydown", (ev) => { if (ev.key === "Control" || ev.key === "Meta") show(true); });
     document.addEventListener("keyup", (ev) => { if (ev.key === "Control" || ev.key === "Meta") show(false); });
     window.addEventListener("blur", () => show(false));
+    // Shift with a press on a name would otherwise extend the text selection to it.
+    view.addEventListener("mousedown", (ev) => { if ((ev.ctrlKey || ev.metaKey) && typeAt(ev.clientX, ev.clientY)) ev.preventDefault(); });
     // The click is taken before a term's own click opens the glossary.
     view.addEventListener("click", (ev) => {
       if (!(ev.ctrlKey || ev.metaKey)) return;
@@ -2729,13 +2732,12 @@
       ev.preventDefault();
       ev.stopPropagation();
       const path = hit.location.file.split("/").map(encodeURIComponent).join("/");
-      // A browser opens a window in a background tab when Ctrl or Cmd is held during the event that opens it, so the
-      // window opens after the click, while the click still lets the page open one.
-      setTimeout(() => window.open(`${META.blob}${path}#L${hit.location.line}`, "_blank", "noopener"));
+      // The window opens during the click, so the browser chooses a background or foreground tab from the keys held.
+      window.open(`${META.blob}${path}#L${hit.location.line}`, "_blank", "noopener");
     }, { capture: true });
   }
 
-  const PANEL_TITLE ={ path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
+  const PANEL_TITLE = { path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
   // The panels that put badges on the blocks, so that switching to or from one draws the map again.
   const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
