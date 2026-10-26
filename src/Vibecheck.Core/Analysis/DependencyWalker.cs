@@ -23,6 +23,7 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         memberOptions: SymbolDisplayMemberOptions.IncludeContainingType);
 
     private readonly SemanticModel model;
+    private readonly NameBinder names;
     private readonly SourceResolver resolver;
     private readonly string file;
     private readonly string assembly;
@@ -42,6 +43,7 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
     public DependencyWalker(SemanticModel model, Compilation compilation, SourceResolver resolver, string file)
     {
         this.model = model;
+        names = new NameBinder(model);
         this.resolver = resolver;
         this.file = file;
         assembly = compilation.AssemblyName ?? "";
@@ -73,15 +75,15 @@ internal sealed class DependencyWalker : CSharpSyntaxWalker
         if (node.Parent is MemberAccessExpressionSyntax { Expression: var left } && left == node)
         {
             // The left side of `Type.Member` is covered by the member reference itself.
-            var leftSymbol = model.GetSymbolInfo(node).Symbol;
-            if (leftSymbol is INamedTypeSymbol or INamespaceSymbol) return;
+            if (names.Bind(node).Symbol is INamedTypeSymbol or INamespaceSymbol) return;
         }
 
         var from = EnclosingTopLevelType(node);
         if (from is null) return;
 
-        var info = model.GetSymbolInfo(node);
-        var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
+        // The name is bound through the name binder, since the semantic model binds a whole initializer again for
+        // each name in it that has no bound node, which makes a large generated table cost minutes.
+        var symbol = names.Bind(node).SymbolOrCandidate;
         if (symbol is IAliasSymbol alias) symbol = alias.Target;
         if (symbol is null) return;
         switch (symbol.Kind)
