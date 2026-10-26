@@ -574,6 +574,8 @@ public class ReviewServerTests
         await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
         var events = await ReadEventsAsync(client, $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}/events", e => Is(e, "map", "unavailable"));
         Assert.Equal("no claude here", events[^1].GetProperty("message").GetString());
+        var explainer = await client.PostAsJsonAsync($"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}/explainer", new { regenerate = false });
+        Assert.Equal(HttpStatusCode.BadRequest, explainer.StatusCode);
     }
 
     [Fact]
@@ -622,6 +624,55 @@ public class ReviewServerTests
             Assert.True(Directory.Exists(worktree));
         }
         Assert.False(Directory.Exists(worktree));
+    }
+
+    [Fact]
+    public async Task WritesTheExplainerOnRequestAfterTheNarrativesAndReplaysItFromTheCache()
+    {
+        using var repo = new TempRepo();
+        using var temp = new TempDirectory();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("call the service");
+        var claude = new FakeClaude(r =>
+            r.Schema == Prompts.Read("explainer.schema.json")
+                ? """{ "slides": [ { "title": "Thing runs the service", "text": "Thing now calls `B.Service`.", "target": { "kind": "edge", "id": "edge:a→b" }, "cites": ["A.X.Thing → B.Service"] } ] }"""
+            : r.Schema == Prompts.Read("explainer-retry.schema.json") ? """{ "slides": [] }"""
+            : r.Schema.Contains("\"parts\"", StringComparison.Ordinal) ? """{ "text": "Thing starts using the service.", "parts": ["a", "b"] }"""
+            : """{ "edges": [ { "from": "a", "to": "b", "text": "Thing now runs the service.", "pairs": [ { "from": "A.X.Thing", "to": "B.Service" } ] } ], "nodes": [] }""");
+        await using var server = new ReviewServer(Options(repo) with
+        {
+            Directory = Path.Combine(repo.Path, "app"), Claude = claude, Cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo")),
+        });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        await ReadEventsAsync(client, api + "/events");
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews/nothing/explainer", new { regenerate = false })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/explainer", new { regenerate = false })).StatusCode);
+        var events = await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "done"));
+
+        var writing = Assert.Single(events, e => Is(e, "explainer", "writing"));
+        Assert.Equal(1, writing.GetProperty("run").GetInt32());
+        var done = events[^1];
+        Assert.Equal((1, 0), (done.GetProperty("run").GetInt32(), done.GetProperty("dropped").GetInt32()));
+        var target = done.GetProperty("slides")[0].GetProperty("target");
+        Assert.Equal(("edge", "a→b", "root"), (target.GetProperty("kind").GetString(), target.GetProperty("id").GetString(), target.GetProperty("location").GetString()));
+        Assert.Equal("A.X.Thing → B.Service", done.GetProperty("slides")[0].GetProperty("cites")[0].GetString());
+        // The explainer waited for the narratives, and its prompt holds them.
+        var request = Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("explainer.schema.json"));
+        Assert.Equal("claude-opus-5-5", request.Model);
+        Assert.Contains("- `edge:a→b`: Thing now runs the service.", request.Prompt, StringComparison.Ordinal);
+
+        // A second request reads the cache, and a page that opens later is sent both answers again.
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/explainer", new { regenerate = false })).StatusCode);
+        var replayed = await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "done") && e.GetProperty("seq").GetInt32() > done.GetProperty("seq").GetInt32());
+        Assert.Equal(2, replayed.Count(e => Is(e, "explainer", "done")));
+        Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("explainer.schema.json"));
     }
 
     private static bool Is(JsonElement e, string type, string state) =>

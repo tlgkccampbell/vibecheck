@@ -190,7 +190,7 @@ public sealed class ReviewServer : IAsyncDisposable
     {
         await stopping.CancelAsync();
         Task?[] tasks;
-        lock (mapJobs) tasks = [.. reviews.Values.Select(r => r.Task), .. reviews.Values.Select(r => r.Narratives?.Task), .. mapJobs.Values.Select(j => j.Task)];
+        lock (mapJobs) tasks = [.. reviews.Values.Select(r => r.Task), .. reviews.Values.Select(r => r.Narratives?.Task), .. reviews.Values.Select(r => r.Explainer?.Task), .. mapJobs.Values.Select(j => j.Task)];
         var running = tasks.Where(t => t is not null).Cast<Task>().ToArray();
         await Task.WhenAny(Task.WhenAll(running), Task.Delay(TimeSpan.FromSeconds(15)));
         foreach (var r in reviews.Values) r.Worktree?.Dispose();
@@ -560,6 +560,8 @@ public sealed class ReviewServer : IAsyncDisposable
         {
             review.Narratives?.Cancel();
             review.Narratives = job;
+            // An explainer names the blocks and edges of the result it was written for, so a new result stops it.
+            if (review.Explainer is { } explainer && explainer.Run != run) explainer.Cancel();
         }
         job.Task = Task.Run(async () =>
         {
@@ -567,11 +569,10 @@ public sealed class ReviewServer : IAsyncDisposable
             try
             {
                 var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
-                lock (review) review.Worktree ??= Reviewing.Worktree.Add(top, review.Head);
                 // A review has its base by the time it has a result, since a pull request's review resolves it first.
                 job.Context = new NarrativeContext(result.Changeset, result.BaseAnalysis, result.HeadAnalysis, NarrativeContext.ReadCommits(top, review.Base!, review.Head))
                 {
-                    WorkingDirectory = Path.GetFullPath(Path.Combine(review.Worktree.Path, result.Target.Root)),
+                    WorkingDirectory = HeadDirectory(review, result, top),
                     Model = options.Models.Narrative,
                     ReadBase = paths => GitHunks.TextsAt(Path.GetFullPath(Path.Combine(top, result.Target.Root)), review.Base!, paths),
                 };
@@ -579,8 +580,11 @@ public sealed class ReviewServer : IAsyncDisposable
                 var total = job.Plan.Sum(b => b.Keys.Count());
                 options.Log?.Invoke($"  {review.Id} narratives: {total} in {job.Plan.Count} request(s)");
                 review.Add(new { type = "narratives", run, state = "writing", total, message = $"Claude is explaining the changes: {total} narratives." });
-                var tally = await NarrativeWriter.RunAsync(job.Plan, job.Context, options.Claude, options.Cache,
-                    n => review.Add(new { type = "narrative", run, key = n.Key, text = n.Text, cites = n.Cites, name = n.Name }), regenerate, ct);
+                var tally = await NarrativeWriter.RunAsync(job.Plan, job.Context, options.Claude, options.Cache, n =>
+                {
+                    job.Written[n.Key] = n;
+                    review.Add(new { type = "narrative", run, key = n.Key, text = n.Text, cites = n.Cites, name = n.Name });
+                }, regenerate, ct);
                 foreach (var f in tally.Failures) options.Log?.Invoke($"  {review.Id} narratives failed: {f}");
                 options.Log?.Invoke($"  {review.Id} narratives: {tally.Written} written, {tally.Dropped} dropped");
                 review.Add(new { type = "narratives", run, state = "done", written = tally.Written, dropped = tally.Dropped, failures = tally.Failures });
@@ -612,7 +616,11 @@ public sealed class ReviewServer : IAsyncDisposable
             try
             {
                 var n = await NarrativeWriter.RegenerateAsync(batch, key, job.Context, options.Claude, options.Cache, job.Cancellation.Token);
-                if (n is not null) review.Add(new { type = "narrative", run = job.Run, key = n.Key, text = n.Text, cites = n.Cites, name = n.Name });
+                if (n is not null)
+                {
+                    job.Written[n.Key] = n;
+                    review.Add(new { type = "narrative", run = job.Run, key = n.Key, text = n.Text, cites = n.Cites, name = n.Name });
+                }
                 else review.Add(new { type = "narrative", run = job.Run, key, failed = true, message = "The new narrative failed its check, so the old one stays." });
             }
             catch (Exception ex) when (ex is ClaudeException or OperationCanceledException)
@@ -621,6 +629,65 @@ public sealed class ReviewServer : IAsyncDisposable
             }
         });
         return true;
+    }
+
+    /// <summary>Returns the directory Claude reads a result's code at head in, adding the review's worktree of the head commit when it has none yet.</summary>
+    private static string HeadDirectory(Review review, ReviewResult result, string top)
+    {
+        lock (review) review.Worktree ??= Reviewing.Worktree.Add(top, review.Head);
+        return Path.GetFullPath(Path.Combine(review.Worktree.Path, result.Target.Root));
+    }
+
+    /// <summary>
+    /// Starts writing the explainer of a review's current result, in the background, unless one is already being written
+    /// for it and <paramref name="regenerate"/> is false. The explainer waits for the result's narratives, which its
+    /// prompt holds, and its progress and result are sent as <c>explainer</c> events carrying the run of the result. See
+    /// <c>docs/explainers.md</c> section 4.4.
+    /// </summary>
+    private void WriteExplainer(Review review, bool regenerate)
+    {
+        var (result, run) = review.Current;
+        if (result is null || options.Claude is null) return;
+        var job = new ExplainerJob(run, CancellationTokenSource.CreateLinkedTokenSource(stopping.Token));
+        NarrativeJob? narratives;
+        lock (review)
+        {
+            if (!regenerate && review.Explainer is { } current && current.Run == run && current.Task?.IsCompleted == false) return;
+            review.Explainer?.Cancel();
+            review.Explainer = job;
+            narratives = review.Narratives is { } n && n.Run == run ? n : null;
+        }
+        job.Task = Task.Run(async () =>
+        {
+            var ct = job.Cancellation.Token;
+            try
+            {
+                review.Add(new { type = "explainer", run, state = "writing", message = "Claude is writing the explainer." });
+                // The prompt holds the narratives, so the explainer waits for them, and a second request finds the same key.
+                if (narratives?.Task is { } writing) await writing.WaitAsync(ct);
+                var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
+                var written = narratives?.Plan?.SelectMany(b => b.Keys).Select(k => narratives.Written.GetValueOrDefault(k)).OfType<Narrative>().ToList() ?? [];
+                var context = new ExplainerContext(narratives?.Context?.Commits ?? NarrativeContext.ReadCommits(top, review.Base!, review.Head), written)
+                {
+                    WorkingDirectory = narratives?.Context?.WorkingDirectory ?? HeadDirectory(review, result, top),
+                    Model = options.Models.Explainer,
+                };
+                var catalog = ExplainerPlanner.Plan(result.Changeset);
+                options.Log?.Invoke($"  {review.Id} explainer: {catalog.Entries.Count} catalog entries, {catalog.FirstTier.Count} first-tier steps");
+                var explainer = await ExplainerWriter.WriteAsync(catalog, context, options.Claude, options.Cache, regenerate, ct);
+                options.Log?.Invoke($"  {review.Id} explainer: {explainer.Slides.Count} slides, {explainer.Dropped} dropped, {explainer.Uncovered.Count} uncovered");
+                review.Add(new { type = "explainer", run, state = "done", slides = explainer.Slides, dropped = explainer.Dropped, reasons = explainer.Reasons, uncovered = explainer.Uncovered });
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer result, a regeneration or the server's shutdown took over.
+            }
+            catch (Exception ex)
+            {
+                options.Log?.Invoke($"  {review.Id} explainer failed: {ex.Message}");
+                review.Add(new { type = "explainer", run, state = "failed", message = "Claude could not write the explainer: " + ex.Message });
+            }
+        });
     }
 
     /// <summary>
@@ -818,6 +885,23 @@ public sealed class ReviewServer : IAsyncDisposable
                 return Results.Accepted();
             }
             return Regenerate(review, body.Key) ? Results.Accepted() : Results.NotFound(new { message = $"{body.Key} is not among the review's narratives." });
+        });
+
+        web.MapPost("/api/reviews/{id}/explainer", async (string id, HttpContext ctx) =>
+        {
+            if (!reviews.TryGetValue(id, out var review) || review.Result is null) return Results.NotFound();
+            if (options.Claude is null) return Results.BadRequest(new { message = "Claude is not available, so there is no explainer." });
+            ExplainerBody? body = null;
+            try
+            {
+                body = await JsonSerializer.DeserializeAsync<ExplainerBody>(ctx.Request.Body, FactsJson.Options);
+            }
+            catch (JsonException)
+            {
+                // An empty body asks for the explainer without regenerating it.
+            }
+            WriteExplainer(review, body?.Regenerate == true);
+            return Results.Accepted();
         });
 
         web.MapPost("/api/reviews/{id}/reviewed", async (string id, HttpContext ctx) =>
@@ -1150,6 +1234,9 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private sealed record NarrativesBody(string? Key);
 
+    /// <summary>The body of an explainer request: whether a stored explainer is ignored and written anew.</summary>
+    private sealed record ExplainerBody(bool? Regenerate);
+
 
 
     /// <summary>The body of a settings change: the theme choice.</summary>
@@ -1183,6 +1270,20 @@ public sealed class ReviewServer : IAsyncDisposable
         public Task? Task { get; set; }
         public List<NarrativeBatch>? Plan { get; set; }
         public NarrativeContext? Context { get; set; }
+
+        /// <summary>Gets the narratives that passed their check, by key, the latest of each.</summary>
+        public ConcurrentDictionary<string, Narrative> Written { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Cancels the job. Its token source is left for its task to observe, and is collected with it.</summary>
+        public void Cancel() => Cancellation.Cancel();
+    }
+
+    /// <summary>Represents the writing of one result's explainer: the run of the result and the cancellation that a newer job uses to stop it.</summary>
+    private sealed class ExplainerJob(int run, CancellationTokenSource cancellation)
+    {
+        public int Run { get; } = run;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public Task? Task { get; set; }
 
         /// <summary>Cancels the job. Its token source is left for its task to observe, and is collected with it.</summary>
         public void Cancel() => Cancellation.Cancel();
@@ -1261,6 +1362,9 @@ public sealed class ReviewServer : IAsyncDisposable
 
         /// <summary>Gets or sets the narratives being written for the current result, or <see langword="null"/>.</summary>
         public NarrativeJob? Narratives { get; set; }
+
+        /// <summary>Gets or sets the explainer being written, or last written, for a result, or <see langword="null"/> before the reviewer asks for one.</summary>
+        public ExplainerJob? Explainer { get; set; }
 
         /// <summary>Gets or sets the worktree of the head commit that narratives read, or <see langword="null"/> before the first needs it.</summary>
         public Worktree? Worktree { get; set; }

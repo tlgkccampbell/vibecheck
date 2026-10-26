@@ -176,7 +176,7 @@
   @media (max-width: 1200px) { aside { overflow: visible; } }
   aside h2.panel-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
   /* The stage fills the middle column, so fitting a level to the stage shows all of it on screen. */
-  .canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
   .stage-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; position: relative;
     flex: 1; min-height: 360px; }
   #leafview { flex: 1; min-height: 0; overflow: auto; }
@@ -321,6 +321,38 @@
   .step-file { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
   .step-file.done .link { color: var(--muted); text-decoration: line-through; }
   .step-files .btn { align-self: flex-start; margin-top: 4px; font-size: 12px; }
+  /* The Explainer face: what an explainer is with Write it, then the numbered slides with their kinds, what no slide
+     covers, the slides the check dropped, and Regenerate. */
+  .explainer-intro { margin: 0 0 10px; font-size: 13px; }
+  .explainer-action { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 10px 0 4px; }
+  .explainer-progress { display: flex; align-items: center; gap: 6px; }
+  .slides .row.step { align-items: baseline; }
+  .slide-number { flex: none; min-width: 1.6em; color: var(--muted); font-family: var(--mono); font-size: 11px; text-align: right; }
+  .step-kind.slide-kind { width: auto; min-width: 54px; text-align: right; }
+  .explainer-dropped { margin: 10px 0; color: var(--muted); font-size: 12.5px; }
+  .explainer-dropped summary { cursor: pointer; }
+  .explainer-dropped ul { margin: 4px 0 0; padding-left: 18px; }
+  /* The card of the current slide, over the lower part of the main panel: the text's measure wide, centered, at most
+     a third of the panel tall with the text scrolling inside, and marked as Claude's as the summary is. The leaf view
+     keeps room under its end for it. */
+  .slide-card { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 4; width: min(calc(80ch + 28px), calc(100% - 24px)); max-height: 33.3%;
+    display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); border-radius: 6px;
+    box-shadow: 0 6px 22px rgb(0 0 0 / .18); font-size: 13.5px; }
+  .slide-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 8px 4px 14px; }
+  .slide-count { flex: none; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .slide-title { flex: 1; min-width: 0; margin: 0; font-size: 14px; }
+  .slide-head .close { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .slide-head .close:hover { color: var(--fg); }
+  .slide-body { flex: 1; min-height: 0; overflow: auto; padding: 0 14px; }
+  .slide-text { margin: 2px 0 6px; line-height: 1.5; }
+  .slide-text code { font-family: var(--mono); font-size: .92em; }
+  .slide-body .warn { margin: 4px 0 6px; }
+  .slide-cites { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-bottom: 6px; font-size: 12.5px; }
+  .slide-cite { font-family: var(--mono); font-size: 11.5px; }
+  .slide-cite .link { font-family: var(--mono); font-size: 11.5px; }
+  .slide-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--line); }
+  .slide-foot .step-arrow { padding: 2px 9px; font-size: 14px; line-height: 1.2; }
+  #leafview { padding-bottom: var(--card-room, 0); }
   /* The Concepts panel and the term entries it shares with the tooltip on a term in a diff. */
   .glossary li { padding: 5px 6px; border-radius: 3px; }
   .glossary li.current { background: var(--bg); box-shadow: inset 2px 0 0 var(--accent); }
@@ -744,6 +776,7 @@
       <div class="tip" id="tip" role="tooltip" hidden></div>
     </div>
     <div id="leafview" hidden></div>
+    <section class="slide-card" id="slidecard" aria-label="Explainer slide" aria-live="polite" hidden></section>
   </div>
 
   <div class="side">

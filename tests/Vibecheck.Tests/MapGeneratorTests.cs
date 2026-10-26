@@ -96,7 +96,7 @@ public class MapGeneratorTests
 
         Assert.Equal(["opus", "opus", "haiku"], claude.Requests.Select(r => r.Model));
         Assert.Equal(("claude-opus-5-5", "claude-sonnet-5-5"), (ClaudeModels.Default.Map, ClaudeModels.Default.Placement));
-        Assert.Equal(new ClaudeModels("sonnet", "sonnet", "sonnet"), ClaudeModels.All("sonnet"));
+        Assert.Equal(new ClaudeModels("sonnet", "sonnet", "sonnet", "sonnet"), ClaudeModels.All("sonnet"));
     }
 
     [Fact]

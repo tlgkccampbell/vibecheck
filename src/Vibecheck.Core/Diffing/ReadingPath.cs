@@ -354,7 +354,7 @@ public static class ReadingPath
         head.Where(c => !before.Any(b => c.All(b.Contains)));
 
     /// <summary>Returns the leaves a changed file counts under, as the changeset's content counts it: its leaves at head, at base when it was removed, and at both ends when it was renamed.</summary>
-    private static List<string> CountedLeaves(FileChange f) => f.Status switch
+    internal static List<string> CountedLeaves(FileChange f) => f.Status switch
     {
         "removed" => f.LeavesBase.ToList(),
         "renamed" => f.LeavesBase.Concat(f.LeavesHead).Distinct(StringComparer.Ordinal).ToList(),

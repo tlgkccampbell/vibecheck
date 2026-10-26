@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "slides"
+  ],
+  "properties": {
+    "slides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "text",
+          "target",
+          "cites",
+          "replaces",
+          "after"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "level",
+                  "edge",
+                  "block",
+                  "decision",
+                  "hunk",
+                  "type",
+                  "pattern",
+                  "concept",
+                  "tests"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "cites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replaces": {
+            "type": "integer"
+          },
+          "after": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

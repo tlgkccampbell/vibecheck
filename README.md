@@ -369,6 +369,26 @@ the change also changed, such as an assertion removed from a test of a rewritten
 method, has a step of its own in the path's first tier after the decisions, and the
 other signals share one closing step.
 
+When the review has Claude, the Changes panel gains an **Explainer** face. An explainer
+is a story of the change, written by Claude on request as a run of short slides, each
+pointing at one level, view, edge, block, decision, hunk or type. **Write it** costs one
+request to Claude, which takes about a minute and costs under a dollar with Opus; the
+explainer is cached, so asking again costs nothing, and **Regenerate** writes it anew.
+While it is written, the face shows progress and the map stays usable. The face then
+lists the slides by number, title and target kind, with the current one marked and
+arrows with "3 of 9" in its head. Under them, **Not in the explainer** links the
+first-tier steps and changed blocks no slide covers, and a line says how many slides
+failed their check and were dropped. The current slide shows in a card over the lower
+part of the map or the leaf view, marked as written by Claude. The card shows the
+slide's title, its text and the files and type pairs it rests on, and the panel moves
+to the slide's target, fitted into the room above the card. While the card is open,
+the right and left arrow keys move among the slides, Home and End go to the first and
+last, and Escape closes the card; the map's own use of those keys waits until it is
+closed. Looking around never changes the slide, and **Show again** returns to its
+target. Opening a slide marks nothing reviewed. `mock/changeset.js` carries a canned
+explainer, as `window.CHANGESET_EXPLAINER`, so that the face and the card open without
+the server.
+
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a
 later session on another port opens in the same theme; a page opened from a file

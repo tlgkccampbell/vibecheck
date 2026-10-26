@@ -316,6 +316,18 @@ pairs. A node's appears in the details panel with its cited files. The summary h
 "regenerate all" action, and each narrative a "regenerate" action that writes it again
 on its own and stores it in place of the old one.
 
+### 6.5 The explainer
+
+The explainer of [explainers.md](explainers.md) is a second layer over the narratives:
+a run of slides that walks the reviewer through the whole change, each slide pointing
+at one thing the viewer already shows. It is written only when the reviewer asks for
+it, in one request of its own, after the result's narratives, which its prompt holds
+by key. `ExplainerPlanner` builds the catalog of what a slide may point at from the
+reading path, and `ExplainerWriter` checks each slide against it, asks once more for
+the slides that fail and the first-tier steps and changed blocks no slide covers, and
+drops what fails twice. The explainer is cached apart from the narratives, keyed by its
+whole request as they are, and the server sends it as `explainer` events.
+
 ## 7. Calling Claude
 
 The tool calls the Claude Code command line in print mode. Each request runs
@@ -331,7 +343,7 @@ The tool calls the Claude Code command line in print mode. Each request runs
 - `--tools` naming only what the request needs, with the same list in
   `--allowedTools` so that nothing asks for permission: no tools for map proposals
   and placements, which carry everything in the prompt, and Read, Grep and Glob for
-  narratives.
+  narratives and the explainer.
 - `--model`, always, so that the tool's choice and not the reviewer's Claude Code
   settings decides the model. The defaults below are pinned to exact identifiers,
   and `vibecheck review --model <model>` replaces them for every request.
@@ -366,7 +378,12 @@ three sentences asked for; Sonnet kept closest to the brief. Haiku was the cheap
 far but needed a second request for narratives that failed their check, which made it
 the slowest. The reviewer waits on narratives, so they use `claude-sonnet-5-5`.
 
-Each narrative request is abandoned after five minutes and counts as failed, so that
+The explainer uses `claude-opus-5-5`, which wrote the clearer explainer in the trial
+of [explainers.md](explainers.md) section 6. An explainer is read once and slowly, so
+the clearer text is worth the higher cost and the longer wait. Its cost and time with
+the narratives in its prompt are to be measured on the sample.
+
+Each narrative request, and the explainer's request, is abandoned after five minutes and counts as failed, so that
 one hung call cannot keep the narratives from finishing.
 
 The calls go through one interface, `IClaude`, with the real implementation and a

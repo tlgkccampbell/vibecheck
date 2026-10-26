@@ -142,7 +142,13 @@ public static class NarrativeWriter
     /// <summary>How long one request may take. A request that takes longer counts as failed, so that one hung call cannot keep the narratives from finishing.</summary>
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(5);
 
-    private const int PairsPerEdge = 8, SitesPerSide = 4, DiffLinesPerNode = 160, FilesPerNode = 30, SummaryEdges = 12, SamplesPerTerm = 5, ChangedSamplesPerTerm = 2,
+    /// <summary>The most lines of diff a node's narrative is given. An explainer gives each decision's hunk as many.</summary>
+    internal const int DiffLinesPerNode = 160;
+
+    /// <summary>The most type pairs an edge is listed with in a prompt.</summary>
+    internal const int PairsPerEdge = 8;
+
+    private const int SitesPerSide = 4, FilesPerNode = 30, SummaryEdges = 12, SamplesPerTerm = 5, ChangedSamplesPerTerm = 2,
         LinesPerSample = 80, NameLength = 40;
 
     /// <summary>
@@ -595,7 +601,7 @@ public static class NarrativeWriter
     }
 
     /// <summary>Returns the name of a node, group or external, or the identifier itself when the map has no name for it.</summary>
-    private static string NameOf(ArchitectureMap map, string id)
+    internal static string NameOf(ArchitectureMap map, string id)
     {
         if (map.Nodes.TryGetValue(id, out var n)) return n.Name;
         if (map.Externals.TryGetValue(id, out var x)) return x.Name;
