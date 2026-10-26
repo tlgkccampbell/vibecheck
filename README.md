@@ -370,7 +370,9 @@ the change also changed, such as an assertion removed from a test of a rewritten
 method, has a step of its own in the path's first tier after the decisions, and the
 other signals share one closing step.
 
-When the review has Claude, the Changes panel gains an **Explainer** face. An explainer
+The left panel's title is a menu of its faces: Path, Explainer, Changes, Intent, Concepts,
+Patterns and Tests, each when the changeset has something for it. When the review has
+Claude, the menu gains the **Explainer** face, second after Path. An explainer
 is a story of the change, written by Claude on request as a run of short slides, each
 pointing at one level, view, edge, block, decision, hunk, type, pattern instance, concept
 or test type, or, as a last resort and on two slides at most, at a figure. **Write it** costs one

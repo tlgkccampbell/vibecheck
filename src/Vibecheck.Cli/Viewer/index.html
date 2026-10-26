@@ -304,7 +304,20 @@
   .tally { margin: -4px 0 6px; }
   /* The Path panel: a switch in the panel's title, a Next action, and one row per step with its kind and signal. */
   .panel-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .panel-switch .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 8px; }
+  /* The panel's title is a menu of its faces. The title keeps the look of the other panels' titles, with a caret. */
+  .face-switch { position: relative; }
+  .face-title { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; background: none; border: 0; padding: 2px 4px; margin: -2px -4px;
+    border-radius: 3px; cursor: pointer; }
+  .face-title:hover, .face-title[aria-expanded="true"] { background: var(--bg); color: var(--fg); }
+  .face-caret { margin-left: 4px; font-size: 10px; }
+  .face-menu { position: absolute; top: calc(100% + 6px); left: -4px; z-index: 5; min-width: 150px; padding: 4px 0; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: 4px; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
+  .face-menu[hidden] { display: none; }
+  .face-item { text-align: left; background: none; border: 0; padding: 5px 12px 5px 26px; font: 13px var(--sans); color: var(--fg);
+    letter-spacing: normal; text-transform: none; cursor: pointer; position: relative; }
+  .face-item:hover, .face-item:focus-visible { background: var(--bg); outline: none; }
+  .face-item.on { font-weight: 600; }
+  .face-item.on::before { content: "✓"; position: absolute; left: 10px; color: var(--accent); }
   /* The whole head of the Changes panel, its title with the switch and the path's arrows and count, stays at the top
      of the panel while a long path scrolls under it, so that nothing above the list ever moves. It bleeds into the
      panel's padding so that its background covers the full width. */

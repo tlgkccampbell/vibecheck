@@ -2944,6 +2944,41 @@
   // Returns a question mark that shows an explanation of a section of the page on hover or focus, in the tooltip that
   // installHelpTips draws.
   function help(text) { return el("span", { class: "help", tabindex: 0, "data-help": text, "aria-label": text }, "?"); }
+  // Returns the panel's title as a menu of the faces the changeset offers, in the order given, with the current face
+  // checked. The menu opens below the title and closes on a choice, a click elsewhere or Escape. The arrow keys,
+  // Home and End move among the faces while it is open.
+  function faceMenu(faces, choose) {
+    const items = faces.map((name) => el("button", { class: "face-item" + (name === state.panel ? " on" : ""), role: "menuitemradio",
+      "aria-checked": String(name === state.panel), tabindex: -1, onclick: () => { close(); choose(name); $(".face-title")?.focus(); } }, PANEL_TITLE[name]));
+    const list = el("div", { class: "face-menu", role: "menu", hidden: true }, ...items);
+    const button = el("button", { class: "face-title", "aria-haspopup": "menu", "aria-expanded": "false", title: "Choose what the panel shows",
+      onclick: () => list.hidden ? open() : close() }, PANEL_TITLE[state.panel], el("span", { class: "face-caret", "aria-hidden": "true" }, "▾"));
+    const wrap = el("span", { class: "face-switch" }, button, list);
+    const outside = (ev) => { if (!wrap.contains(ev.target)) close(); };
+    function open() {
+      list.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", outside, true);
+      (items.find((i) => i.classList.contains("on")) || items[0]).focus();
+    }
+    function close() {
+      list.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      document.removeEventListener("mousedown", outside, true);
+    }
+    list.addEventListener("keydown", (ev) => {
+      const at = items.indexOf(document.activeElement);
+      const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 }[ev.key];
+      if (to !== undefined) items[(to + items.length) % items.length].focus();
+      else if (ev.key === "Escape") { close(); button.focus(); }
+      else if (ev.key === "Tab") close();
+      else return;
+      if (ev.key !== "Tab") ev.preventDefault();
+      // The menu takes these keys before the slide card and the stage, which also use the arrows and Escape.
+      ev.stopPropagation();
+    });
+    return wrap;
+  }
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
@@ -2957,14 +2992,14 @@
     const patterns = PATTERNS.size + NEW_PATTERNS.length;
     if (PATH.length || INTENTS.length || GLOSSARY.length || TEST_FILES.length || patterns || EXPL.state !== "off") {
       if (state.panel === undefined) state.panel = TESTS_ONLY ? "tests" : PATH.length ? "path" : "changes";
-      const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => {
+      const faces = [PATH.length && "path", EXPL.state !== "off" && "explainer", "changes", INTENTS.length && "intent",
+        GLOSSARY.length && "glossary", patterns && "patterns", TEST_FILES.length && "tests"].filter(Boolean);
+      const choose = (name) => {
         const badges = state.panel !== name && (BADGE_PANELS.has(state.panel) || BADGE_PANELS.has(name));
         state.panel = name;
         if (badges) redraw(); else renderChanges();
-      } }, label);
-      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
-        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), INTENTS.length ? tab("intent", "Intent") : null, GLOSSARY.length ? tab("glossary", "Concepts") : null,
-        patterns ? tab("patterns", "Patterns") : null, TEST_FILES.length ? tab("tests", "Tests") : null, EXPL.state !== "off" ? tab("explainer", "Explainer") : null)));
+      };
+      title.replaceChildren(el("span", { class: "panel-switch" }, faceMenu(faces, choose), help(HELP[state.panel])));
       if (state.panel === "path") { renderPath(box, head); return; }
       if (state.panel === "intent") { renderIntents(box); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }

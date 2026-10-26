@@ -57,8 +57,10 @@ has no narratives.
 
 ## 2. The reviewer's path
 
-1. The changeset opens as it does now. The left panel's switch gains **Explainer**
-   beside Path, Changes, Intent, Concepts, Patterns and Tests. Its face says in one
+1. The changeset opens as it does now. The left panel's title is a menu of its faces,
+   and **Explainer** sits second in it, after Path and before Changes, Intent,
+   Concepts, Patterns and Tests. The menu replaced a row of tabs, which seven faces
+   made wider than the panel, so that the last tabs were cut off. Its face says in one
    paragraph what an explainer is and offers **Write it**, with the cost in plain
    words: one request to Claude, about a minute.
 2. While Claude writes, the face shows progress, and the reviewer goes on with the map.
@@ -296,7 +298,7 @@ cache under its key.
 
 ### 5.1 The Explainer face
 
-The face appears in the switch whenever the review has Claude, since unlike the other
+The face appears in the title's menu whenever the review has Claude, since unlike the other
 faces it has something to offer before it has data. Before an explainer exists it shows
 its paragraph and **Write it**. While one is being written it shows the spinner and the
 message the server sends, and the reviewer can leave the face. While it waits for the
