@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Vibecheck.Diffing;
 
 namespace Vibecheck.Assist;
@@ -25,7 +26,12 @@ public sealed record ExplainerGap(string Kind, string Id);
 /// <param name="Dropped">The number of slides that failed their check twice, or failed on their one request.</param>
 /// <param name="Reasons">Why each dropped slide was dropped, as <c>Slide 'title': reason</c>.</param>
 /// <param name="Uncovered">The first-tier steps and changed blocks that no slide covers.</param>
-public sealed record Explainer(IReadOnlyList<Slide> Slides, int Dropped, IReadOnlyList<string> Reasons, IReadOnlyList<ExplainerGap> Uncovered);
+public sealed record Explainer(IReadOnlyList<Slide> Slides, int Dropped, IReadOnlyList<string> Reasons, IReadOnlyList<ExplainerGap> Uncovered)
+{
+    /// <summary>Gets the number of slides that carry a figure, which says how often Claude reaches for one.</summary>
+    [JsonIgnore]
+    public int Figures => Slides.Count(s => s.Target.Figure is not null);
+}
 
 /// <summary>Holds what an explainer is written from, besides its catalog.</summary>
 /// <param name="Commits">The commit messages in the range, as <see cref="NarrativeContext.ReadCommits"/> lists them.</param>
@@ -55,12 +61,16 @@ public interface IExplainerCache
 /// <summary>
 /// Writes the explainer of a changeset with Claude in one request, and checks each slide against the catalog of
 /// <see cref="ExplainerPlanner"/>. A slide whose target is not in the catalog, whose brought-out block is not under its
-/// level, or whose cite is neither a changed file nor a type pair of a changed edge is rejected. The rejected slides,
-/// with the steps and blocks no slide covers, are requested once more together, and a slide that fails again is
-/// dropped. See <c>docs/explainers.md</c> section 4.
+/// level, or whose cite is neither a changed file nor a type pair of a changed edge is rejected, and so is a figure that
+/// <see cref="ReadFigure"/> rejects or that passes the <see cref="FiguresPerExplainer"/> an explainer may carry. The
+/// rejected slides, with the steps and blocks no slide covers, are requested once more together, and a slide that fails
+/// again is dropped. See <c>docs/explainers.md</c> section 4.
 /// </summary>
 public static class ExplainerWriter
 {
+    /// <summary>The most slides of an explainer that may carry a figure.</summary>
+    public const int FiguresPerExplainer = 2;
+
     /// <summary>
     /// Returns the explainer of a catalog, from the cache when it holds the same request and <paramref name="regenerate"/>
     /// is false, and otherwise from Claude, storing it.
@@ -85,7 +95,9 @@ public static class ExplainerWriter
             {
                 var answer = await AskAsync(prompt + RetrySection(catalog, first, gaps), Prompts.Read("explainer-retry.schema.json"), context, claude, ct);
                 var replaced = new HashSet<int>();
-                foreach (var (slide, replaces, after) in Check(catalog, Slides(answer)).Zip(Slides(answer), (c, raw) => (c, Int(raw, "replaces"), Int(raw, "after"))))
+                // The figures that passed the first time count against the limit, so that the retry cannot add past it.
+                var figures = FiguresPerExplainer - first.Count(c => c.Slide?.Target.Figure is not null);
+                foreach (var (slide, replaces, after) in Check(catalog, Slides(answer), figures).Zip(Slides(answer), (c, raw) => (c, Int(raw, "replaces"), Int(raw, "after"))))
                 {
                     if (replaces >= 1 && replaces <= slots.Count && replaced.Add(replaces))
                     {
@@ -146,10 +158,17 @@ public static class ExplainerWriter
     }
 
     /// <summary>
+    /// The entry a figure slide resolves to. A figure names nothing in the catalog, so the entry covers nothing, and the
+    /// slide covers what its cites name.
+    /// </summary>
+    private static readonly CatalogEntry FigureEntry = new("figure", new ExplainerTarget("figure", "figure"), "a figure drawn for the slide");
+
+    /// <summary>
     /// Checks the slides of an answer against a catalog, in order. Each slide that passes is resolved to the target the
     /// viewer opens, and each that fails carries the reason.
     /// </summary>
-    internal static List<SlideCheck> Check(ExplainerCatalog catalog, IEnumerable<JsonElement> slides)
+    /// <param name="figures">The number of figures the answer may still carry; a figure slide past them is rejected.</param>
+    internal static List<SlideCheck> Check(ExplainerCatalog catalog, IEnumerable<JsonElement> slides, int figures = FiguresPerExplainer)
     {
         var result = new List<SlideCheck>();
         foreach (var s in slides)
@@ -159,7 +178,7 @@ public static class ExplainerWriter
             var target = s.TryGetProperty("target", out var t) && t.ValueKind == JsonValueKind.Object ? t : default;
             var kind = target.ValueKind == JsonValueKind.Object ? Str(target, "kind") : "";
             var id = target.ValueKind == JsonValueKind.Object ? Str(target, "id").Replace("->", "→", StringComparison.Ordinal) : "";
-            var entry = Resolve(catalog, kind, id);
+            var entry = kind == "figure" ? FigureEntry : Resolve(catalog, kind, id);
             var cites = Strings(s, "cites").Select(NormalizeCite).Distinct(StringComparer.Ordinal).ToList();
             string? reason = null;
             if (title.Length == 0) reason = "the title is empty";
@@ -172,6 +191,13 @@ public static class ExplainerWriter
                 var foreign = brought.Where(b => !entry.Blocks.Contains(b)).ToList();
                 if (foreign.Count > 0) reason = $"it brings out {string.Join(", ", foreign)}, which {(foreign.Count == 1 ? "is not a block" : "are not blocks")} of {entry.Id}";
             }
+            Figure? figure = null;
+            if (reason is null && entry == FigureEntry)
+            {
+                reason = ReadFigure(s, out figure);
+                if (reason is null && figures-- <= 0)
+                    reason = $"it carries a figure past the {FiguresPerExplainer} an explainer may carry; point it at what the catalog lists";
+            }
             if (reason is null)
             {
                 var foreign = cites.Where(c => !catalog.CitableFiles.Contains(c) && !catalog.CitablePairs.Contains(c)).ToList();
@@ -182,10 +208,60 @@ public static class ExplainerWriter
                 result.Add(new SlideCheck(title.Length > 0 ? title : "(untitled)", null, null, reason));
                 continue;
             }
-            var resolved = entry!.Target with { Blocks = brought.Count > 0 ? brought : entry.Target.Blocks, Step = StepOf(catalog, entry.Id) };
+            var resolved = entry!.Target with { Blocks = brought.Count > 0 ? brought : entry.Target.Blocks, Step = StepOf(catalog, entry.Id), Figure = figure };
             result.Add(new SlideCheck(title, new Slide(title, text, cites, resolved), entry, null));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Reads the figure of a slide whose target is a figure, and returns the reason it is rejected, or <see langword="null"/>
+    /// when it passes. A figure is rejected when it is missing, has fewer than two boxes or more than the bounds of
+    /// <see cref="Figure"/> allow, has a box without an identifier or a label, names a box twice, has an arrow or a group
+    /// that names a box it does not have or an arrow from a box to itself, or puts a box in two groups. A box's type is
+    /// kept whether or not the changeset has it, since the viewer draws a type it does not have as text.
+    /// </summary>
+    internal static string? ReadFigure(JsonElement slide, out Figure? figure)
+    {
+        figure = null;
+        if (!slide.TryGetProperty("figure", out var f) || f.ValueKind != JsonValueKind.Object) return "its target is a figure, but it gives no figure";
+        var boxes = Items(f, "boxes").Select(b => new FigureBox(Str(b, "id").Trim(), Str(b, "label").Trim())
+        {
+            Type = Str(b, "type").Trim().Trim('`') is { Length: > 0 } type ? type : null,
+        }).ToList();
+        var arrows = Items(f, "arrows").Select(a => new FigureArrow(Str(a, "from").Trim(), Str(a, "to").Trim())
+        {
+            Label = Str(a, "label").Trim() is { Length: > 0 } label ? label : null,
+        }).ToList();
+        var groups = Items(f, "groups").Select(g => new FigureGroup(Str(g, "label").Trim(), Strings(g, "boxes").Select(b => b.Trim()).ToList())).ToList();
+
+        if (boxes.Count < 2) return "its figure has fewer than two boxes";
+        if (boxes.Count > Figure.MaxBoxes) return $"its figure has {boxes.Count} boxes, and a figure may have {Figure.MaxBoxes}";
+        if (arrows.Count > Figure.MaxArrows) return $"its figure has {arrows.Count} arrows, and a figure may have {Figure.MaxArrows}";
+        if (groups.Count > Figure.MaxGroups) return $"its figure has {groups.Count} groups, and a figure may have {Figure.MaxGroups}";
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var b in boxes)
+        {
+            if (b.Id.Length == 0 || b.Label.Length == 0) return "a box of its figure has no id or no label";
+            if (!ids.Add(b.Id)) return $"its figure names the box {b.Id} twice";
+        }
+        var labels = boxes.Select(b => b.Label).Concat(arrows.Select(a => a.Label ?? "")).Concat(groups.Select(g => g.Label));
+        if (labels.FirstOrDefault(l => l.Length > Figure.MaxLabel) is { } longLabel)
+            return $"its figure has the label \"{longLabel}\", longer than the {Figure.MaxLabel} characters a label may have";
+        foreach (var a in arrows)
+        {
+            if (new[] { a.From, a.To }.FirstOrDefault(x => !ids.Contains(x)) is { } missing) return $"an arrow of its figure names the box {missing}, which the figure does not have";
+            if (a.From == a.To) return $"an arrow of its figure runs from the box {a.From} to itself";
+        }
+        var grouped = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var g in groups)
+        {
+            if (g.Label.Length == 0 || g.Boxes.Count == 0) return "a group of its figure has no label or no boxes";
+            if (g.Boxes.FirstOrDefault(x => !ids.Contains(x)) is { } missing) return $"the group {g.Label} of its figure names the box {missing}, which the figure does not have";
+            if (g.Boxes.FirstOrDefault(x => !grouped.Add(x)) is { } twice) return $"its figure puts the box {twice} in two groups";
+        }
+        figure = new Figure(boxes, arrows, groups);
+        return null;
     }
 
     /// <summary>Returns the catalog entry a slide's target names, by its identifier with or without the kind written before it, or <see langword="null"/>.</summary>
@@ -363,8 +439,10 @@ public static class ExplainerWriter
 
     // ---------- JSON ----------
 
-    private static IEnumerable<JsonElement> Slides(JsonElement answer) =>
-        answer.TryGetProperty("slides", out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray() : [];
+    private static IEnumerable<JsonElement> Slides(JsonElement answer) => Items(answer, "slides");
+
+    private static IEnumerable<JsonElement> Items(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Object) : [];
 
     private static string Str(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
 

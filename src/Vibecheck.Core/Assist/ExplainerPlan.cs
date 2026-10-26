@@ -5,15 +5,15 @@ namespace Vibecheck.Assist;
 
 /// <summary>
 /// Represents what a slide of an explainer points at, as the viewer opens it. The kind is one of <c>level</c>,
-/// <c>edge</c>, <c>block</c>, <c>decision</c>, <c>hunk</c>, <c>type</c>, <c>pattern</c>, <c>concept</c> and
-/// <c>tests</c>, and the other members are set as the kind needs them. See <c>docs/explainers.md</c> section 3.2.
+/// <c>edge</c>, <c>block</c>, <c>decision</c>, <c>hunk</c>, <c>type</c>, <c>pattern</c>, <c>concept</c>, <c>tests</c>
+/// and <c>figure</c>, and the other members are set as the kind needs them. See <c>docs/explainers.md</c> section 3.2.
 /// </summary>
 /// <param name="Kind">The kind of thing the target names.</param>
 /// <param name="Id">
 /// The identifier the viewer opens: a level's node identifier, <see cref="Identifiers.Root"/> or <c>view:</c> and a view's
 /// identifier for a level; <c>from→to</c> for an edge; a node identifier for a block; a decision's identifier; a file
 /// and a hunk's index joined by <c>#</c> for a hunk; a type's full name for a type, a pattern's instance or a test
-/// type; and a term's key for a concept.
+/// type; a term's key for a concept; and <c>figure</c> for a figure, which names nothing the changeset holds.
 /// </param>
 public sealed record ExplainerTarget(string Kind, string Id)
 {
@@ -37,7 +37,60 @@ public sealed record ExplainerTarget(string Kind, string Id)
     /// target, or <see langword="null"/> when no such step does. The viewer's <b>Open on the path</b> opens that step.
     /// </summary>
     public string? Step { get; init; }
+
+    /// <summary>Gets the drawing of a figure target, or <see langword="null"/> for any other kind.</summary>
+    public Figure? Figure { get; init; }
 }
+
+/// <summary>
+/// Represents a figure: a small declarative drawing of boxes, the arrows between them and optional groups of boxes, which
+/// the viewer lays out and draws in the stage while a slide whose target is a figure is current. A figure is for what the
+/// viewer has no place for, such as the states of a new state machine, and it is kept small. See
+/// <c>docs/explainers.md</c> section 3.3.
+/// </summary>
+/// <param name="Boxes">The boxes, at least two and at most <see cref="MaxBoxes"/>.</param>
+/// <param name="Arrows">The arrows between boxes, at most <see cref="MaxArrows"/>.</param>
+/// <param name="Groups">The groups of boxes, at most <see cref="MaxGroups"/>, each box in one group at most.</param>
+public sealed record Figure(IReadOnlyList<FigureBox> Boxes, IReadOnlyList<FigureArrow> Arrows, IReadOnlyList<FigureGroup> Groups)
+{
+    /// <summary>The most boxes a figure may have.</summary>
+    public const int MaxBoxes = 12;
+
+    /// <summary>The most arrows a figure may have.</summary>
+    public const int MaxArrows = 16;
+
+    /// <summary>The most groups a figure may have.</summary>
+    public const int MaxGroups = 4;
+
+    /// <summary>The most characters a label of a box, an arrow or a group may have.</summary>
+    public const int MaxLabel = 40;
+}
+
+/// <summary>Represents a box of a <see cref="Figure"/>.</summary>
+/// <param name="Id">The identifier the figure's arrows and groups name the box by.</param>
+/// <param name="Label">The few words drawn in the box.</param>
+public sealed record FigureBox(string Id, string Label)
+{
+    /// <summary>
+    /// Gets the full name of the type the box stands for, or <see langword="null"/> when it stands for none. The viewer
+    /// draws the box as a link that opens the type when the changeset has it, and draws the name as text when it does not.
+    /// </summary>
+    public string? Type { get; init; }
+}
+
+/// <summary>Represents an arrow of a <see cref="Figure"/> from one of its boxes to another.</summary>
+/// <param name="From">The identifier of the box the arrow leaves.</param>
+/// <param name="To">The identifier of the box the arrow points at.</param>
+public sealed record FigureArrow(string From, string To)
+{
+    /// <summary>Gets the few words drawn on the arrow, or <see langword="null"/> when it has none.</summary>
+    public string? Label { get; init; }
+}
+
+/// <summary>Represents a group of a <see cref="Figure"/>: boxes drawn together inside a labeled outline.</summary>
+/// <param name="Label">The few words drawn on the outline.</param>
+/// <param name="Boxes">The identifiers of the boxes the group holds.</param>
+public sealed record FigureGroup(string Label, IReadOnlyList<string> Boxes);
 
 /// <summary>
 /// Represents one thing an explainer's slide may point at: the identifier Claude writes for it, the target the viewer

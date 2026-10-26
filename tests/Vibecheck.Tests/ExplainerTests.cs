@@ -76,6 +76,19 @@ public class ExplainerTests
             ? new { title, text = title + ".", target = new { kind, id, blocks }, cites = cites ?? [] }
             : new { title, text = title + ".", target = new { kind, id, blocks }, cites = cites ?? [], replaces, after = after ?? 0 };
 
+    /// <summary>Returns a slide of an answer whose target is a figure, with the figure given.</summary>
+    private static object F(string title, object? figure, string[]? cites = null, int? replaces = null) =>
+        replaces is null
+            ? new { title, text = title + ".", target = new { kind = "figure", id = "figure" }, cites = cites ?? [], figure }
+            : new { title, text = title + ".", target = new { kind = "figure", id = "figure" }, cites = cites ?? [], figure, replaces, after = 0 };
+
+    /// <summary>Returns a figure of two boxes and the arrow between them.</summary>
+    private static object TwoBoxes(string label = "holds") => new
+    {
+        boxes = new[] { new { id = "timer", label = "Timer", type = "A.Timer" }, new { id = "caller", label = "Caller", type = "B.Caller" } },
+        arrows = new[] { new { from = "timer", to = "caller", label } },
+    };
+
     private static List<ExplainerWriter.SlideCheck> Check(ExplainerCatalog catalog, params object[] slides) =>
         ExplainerWriter.Check(catalog, JsonDocument.Parse(Answer(slides)).RootElement.GetProperty("slides").EnumerateArray());
 
@@ -216,6 +229,91 @@ public class ExplainerTests
             "it cites B.Caller → C.Other, which is neither a changed file nor a type pair of a changed edge",
             "its target hunk hunk:src/Gen.g.cs#0 is not in the catalog",
         ], checks.Select(c => c.Reason));
+    }
+
+    [Fact]
+    public void AcceptsAFigureAndKeepsABoxTypeTheChangesetDoesNotHave()
+    {
+        var catalog = ExplainerPlanner.Plan(Scenario());
+
+        var check = Assert.Single(Check(catalog, F("A timer holds a caller", new
+        {
+            boxes = new object[]
+            {
+                new { id = "timer", label = "Timer", type = "`A.Timer`" },
+                new { id = "caller", label = "Caller", type = "B.Caller" },
+                new { id = "zone", label = "Time zone", type = "Nowhere.Zone" },
+                new { id = "tick", label = "Tick" },
+            },
+            arrows = new object[] { new { from = "timer", to = "caller", label = "holds" }, new { from = "caller", to = "zone" } },
+            groups = new[] { new { label = "Time", boxes = new[] { "timer", "zone" } } },
+        }, ["src/Timer.cs"])));
+
+        Assert.Null(check.Reason);
+        var target = check.Slide!.Target;
+        Assert.Equal(("figure", "figure", null), (target.Kind, target.Id, target.Step));
+        var figure = target.Figure!;
+        // A type the changeset does not have is kept, and the viewer draws it as text rather than as a link.
+        Assert.Equal(["A.Timer", "B.Caller", "Nowhere.Zone", null], figure.Boxes.Select(b => b.Type));
+        Assert.Equal([("timer", "caller", "holds"), ("caller", "zone", null)], figure.Arrows.Select(a => (a.From, a.To, a.Label)));
+        Assert.Equal(["timer", "zone"], Assert.Single(figure.Groups).Boxes);
+        // A figure covers what its cites name and nothing else.
+        var gaps = ExplainerWriter.Gaps(catalog, [check]);
+        Assert.DoesNotContain(new ExplainerGap("step", "cycle:root:a→b"), gaps);
+        Assert.Contains(new ExplainerGap("block", "b"), gaps);
+    }
+
+    [Fact]
+    public void RejectsAFigureWhoseArrowNamesAMissingBoxAndOneThatIsMissingMalformedOrTooLarge()
+    {
+        var catalog = ExplainerPlanner.Plan(Scenario());
+        object Box(string id) => new { id, label = id.ToUpperInvariant() };
+        var two = new[] { Box("a"), Box("b") };
+
+        var checks = Check(catalog,
+            F("Missing box", new { boxes = two, arrows = new[] { new { from = "a", to = "c" } } }),
+            F("No figure", null),
+            F("One box", new { boxes = new[] { Box("a") }, arrows = Array.Empty<object>() }),
+            F("Too many boxes", new { boxes = Enumerable.Range(0, Figure.MaxBoxes + 1).Select(i => Box("b" + i)).ToArray(), arrows = Array.Empty<object>() }),
+            F("Twice", new { boxes = new[] { Box("a"), Box("a") }, arrows = Array.Empty<object>() }),
+            F("To itself", new { boxes = two, arrows = new[] { new { from = "a", to = "a" } } }),
+            F("Long label", TwoBoxes(new string('x', Figure.MaxLabel + 1))),
+            F("Two groups", new { boxes = two, arrows = Array.Empty<object>(), groups = new[] { new { label = "One", boxes = new[] { "a" } }, new { label = "Two", boxes = new[] { "a", "b" } } } }),
+            S("A figure on another kind is ignored", "type", "type:A.Timer"));
+
+        Assert.Equal(
+        [
+            "an arrow of its figure names the box c, which the figure does not have",
+            "its target is a figure, but it gives no figure",
+            "its figure has fewer than two boxes",
+            $"its figure has {Figure.MaxBoxes + 1} boxes, and a figure may have {Figure.MaxBoxes}",
+            "its figure names the box a twice",
+            "an arrow of its figure runs from the box a to itself",
+            $"its figure has the label \"{new string('x', Figure.MaxLabel + 1)}\", longer than the {Figure.MaxLabel} characters a label may have",
+            "its figure puts the box a in two groups",
+            null,
+        ], checks.Select(c => c.Reason));
+        Assert.Null(checks[^1].Slide!.Target.Figure);
+    }
+
+    [Fact]
+    public async Task AllowsTwoFiguresAndRejectsAThirdOnTheFirstAnswerAndOnTheRetry()
+    {
+        var catalog = ExplainerPlanner.Plan(Scenario());
+
+        // The third figure of an answer is rejected, whatever its place among the other slides.
+        Assert.Equal([null, null, null, "it carries a figure past the 2 an explainer may carry; point it at what the catalog lists"],
+            Check(catalog, F("One", TwoBoxes()), Complete[0], F("Two", TwoBoxes()), F("Three", TwoBoxes())).Select(c => c.Reason));
+
+        // The retry may not add a figure past the two that passed the first time, so the third stays rejected and is dropped.
+        var claude = new FakeClaude(
+            Answer([.. Complete, F("One", TwoBoxes()), F("Two", TwoBoxes()), F("Three", TwoBoxes())]),
+            Answer(F("Three again", TwoBoxes(), replaces: Complete.Length + 3)));
+        var explainer = await ExplainerWriter.WriteAsync(catalog, Context, claude, null);
+
+        Assert.Equal((2, 1), (explainer.Figures, explainer.Dropped));
+        Assert.Equal(["Slide 'Three': it carries a figure past the 2 an explainer may carry; point it at what the catalog lists"], explainer.Reasons);
+        Assert.Contains("8. Three: rejected, because it carries a figure past the 2", claude.Requests[1].Prompt, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -36,9 +36,9 @@ of its phases are built: the format, the guide's section on it, `vibecheck inten
 intents in a review, shown beside Claude's narratives with flags for those that name nothing the change touches,
 and the surprises on the reading path that no intent covers.
 Explainers, a linear narrative that walks a reviewer through a change as its author would, slide by slide over
-the viewer's own drawing of each part, are designed in [docs/explainers.md](docs/explainers.md); its first two
-phases are built: the request, the face and the card over every kind of target but figures, and the bridge to
-the reading path.
+the viewer's own drawing of each part, are designed in [docs/explainers.md](docs/explainers.md); all three of
+its phases are built: the request, the face and the card over every kind of target, the bridge to the reading
+path, and figures for what the map has no place for.
 
 ## Layout
 
@@ -373,7 +373,7 @@ other signals share one closing step.
 When the review has Claude, the Changes panel gains an **Explainer** face. An explainer
 is a story of the change, written by Claude on request as a run of short slides, each
 pointing at one level, view, edge, block, decision, hunk, type, pattern instance, concept
-or test type. **Write it** costs one
+or test type, or, as a last resort and on two slides at most, at a figure. **Write it** costs one
 request to Claude, which takes about a minute and costs under a dollar with Opus; the
 explainer is cached, so asking again costs nothing, and **Regenerate** writes it anew.
 While it is written, the face shows progress, first how many of the narratives it is
@@ -388,7 +388,11 @@ to the slide's target, fitted into the room above the card. A level or view slid
 outlines the blocks it brings out and dims the rest, as hovering a pattern does, for as
 long as the slide is current. A pattern slide opens the compare view beside the
 instance's nearest example, a concept slide the Concepts face at the concept, and a
-tests slide the test type's first changed hunk with the Tests face. When the pull
+tests slide the test type's first changed hunk with the Tests face. A figure slide draws
+a small drawing of boxes, labeled arrows and groups in the stage in place of the map, in
+the map's own style, marked as drawn by Claude; the breadcrumb ends in **Figure**, a box
+whose type the change has opens the type, and moving to another slide, closing the card
+or any navigation returns the stage to the map. When the pull
 request states intents, the card shows the ones that cover the slide's target, marked
 as the author's, as a path step does. A slide whose target is also a step of the path
 offers **Open on the path**, which opens that step where its files can be marked, and

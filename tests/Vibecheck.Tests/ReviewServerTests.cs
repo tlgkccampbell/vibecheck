@@ -638,13 +638,21 @@ public class ReviewServerTests
         var after = repo.Commit("call the service");
         var claude = new FakeClaude(r =>
             r.Schema == Prompts.Read("explainer.schema.json")
-                ? """{ "slides": [ { "title": "Thing runs the service", "text": "Thing now calls `B.Service`.", "target": { "kind": "edge", "id": "edge:a→b" }, "cites": ["A.X.Thing → B.Service"] } ] }"""
+                ? """
+                    { "slides": [
+                      { "title": "Thing runs the service", "text": "Thing now calls `B.Service`.", "target": { "kind": "edge", "id": "edge:a→b" }, "cites": ["A.X.Thing → B.Service"] },
+                      { "title": "A call goes one way", "text": "Thing asks and the service answers.", "target": { "kind": "figure", "id": "figure" }, "cites": [],
+                        "figure": { "boxes": [ { "id": "t", "label": "Thing", "type": "A.X.Thing" }, { "id": "s", "label": "Service" } ], "arrows": [ { "from": "t", "to": "s", "label": "runs" } ] } }
+                    ] }
+                    """
             : r.Schema == Prompts.Read("explainer-retry.schema.json") ? """{ "slides": [] }"""
             : r.Schema.Contains("\"parts\"", StringComparison.Ordinal) ? """{ "text": "Thing starts using the service.", "parts": ["a", "b"] }"""
             : """{ "edges": [ { "from": "a", "to": "b", "text": "Thing now runs the service.", "pairs": [ { "from": "A.X.Thing", "to": "B.Service" } ] } ], "nodes": [] }""");
+        var log = new List<string>();
         await using var server = new ReviewServer(Options(repo) with
         {
             Directory = Path.Combine(repo.Path, "app"), Claude = claude, Cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo")),
+            Log = line => { lock (log) log.Add(line); },
         });
         using var client = Client();
         await client.GetAsync(await server.StartAsync());
@@ -665,6 +673,12 @@ public class ReviewServerTests
         // The target names the step of the path that opens it, which Open on the path opens.
         Assert.Equal("edge:root:a→b", target.GetProperty("step").GetString());
         Assert.Equal("A.X.Thing → B.Service", done.GetProperty("slides")[0].GetProperty("cites")[0].GetString());
+        // The done event and the log count the slides that carry a figure, and the figure goes to the page with its target.
+        Assert.Equal(1, done.GetProperty("figures").GetInt32());
+        var figure = done.GetProperty("slides")[1].GetProperty("target").GetProperty("figure");
+        Assert.Equal(("A.X.Thing", "runs"), (figure.GetProperty("boxes")[0].GetProperty("type").GetString(), figure.GetProperty("arrows")[0].GetProperty("label").GetString()));
+        Assert.False(figure.GetProperty("boxes")[1].TryGetProperty("type", out _));
+        lock (log) Assert.Contains(log, l => l.Contains("explainer: 2 slides, 1 with a figure, 0 dropped", StringComparison.Ordinal));
         // The explainer waited for the narratives, and its prompt holds them.
         var request = Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("explainer.schema.json"));
         Assert.Equal("claude-opus-5-5", request.Model);

@@ -208,14 +208,14 @@
 
   .node { cursor: pointer; }
   .node:focus { outline: none; }
-  .node .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+  .node .box, .fig-box .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
   .node:hover .box, .node:focus .box { stroke: var(--accent); }
   .node.selected .box { stroke: var(--accent); stroke-width: 2.5; }
   .fam-blue { --fam: var(--cat-blue); } .fam-teal { --fam: var(--cat-teal); } .fam-magenta { --fam: var(--cat-magenta); }
   .fam-orange { --fam: var(--cat-orange); } .fam-slate { --fam: var(--cat-slate); }
-  .node .band { fill: var(--fam, transparent); fill-opacity: .16; }
-  :root[data-theme="dark"] .node .band { fill-opacity: .26; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .node .band { fill-opacity: .26; } }
+  .node .band, .fig-box .band { fill: var(--fam, transparent); fill-opacity: .16; }
+  :root[data-theme="dark"] .node .band, :root[data-theme="dark"] .fig-box .band { fill-opacity: .26; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .node .band, :root:not([data-theme="light"]) .fig-box .band { fill-opacity: .26; } }
   .chip .chip-bg { fill: var(--fam); }
   .chip .chip-icon { fill: none; stroke: #fff; stroke-linecap: round; stroke-linejoin: round; }
   .node .badge-bg { fill: var(--modified); }
@@ -230,9 +230,9 @@
   .node.st-reviewed .badge-text { fill: var(--muted); }
   .node.st-reviewed .box { stroke: var(--muted); stroke-width: 1.5; }
   .node.other .box { stroke-dasharray: 1 3; }
-  .node .title { font-size: 12px; font-weight: 600; letter-spacing: .08em; fill: var(--fg); }
-  .node .title.small { font-size: 10px; }
-  .node .meta { font-size: 10.5px; fill: var(--muted); }
+  .node .title, .fig-box .title { font-size: 12px; font-weight: 600; letter-spacing: .08em; fill: var(--fg); }
+  .node .title.small, .fig-box .title.small { font-size: 10px; }
+  .node .meta, .fig-box .meta { font-size: 10.5px; fill: var(--muted); }
   .node .meta.grouping { font-style: italic; }
   .node .enter-glyph { font-size: 13px; fill: var(--muted); cursor: pointer; }
   .node .enter-glyph:hover { fill: var(--accent); }
@@ -262,6 +262,15 @@
   svg#stage .patterns-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--accent); }
   svg#stage .node.pattern-touched .box, svg#stage .node.brought .box { stroke: var(--accent); stroke-width: 2.5; }
   svg#stage .node.pattern-held .box { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; }
+  /* A figure Claude drew for a slide is drawn as the map is: its boxes as blocks with a band in the accent, its arrows
+     and their labels as edges, and its groups as dashed outlines. A box whose type the change has is a link. */
+  .fig-box { --fam: var(--accent); }
+  .fig-box:focus { outline: none; }
+  .fig-box.link { cursor: pointer; }
+  .fig-box.link .meta { fill: var(--accent); text-decoration: underline; }
+  .fig-box.link:hover .box, .fig-box.link:focus .box { stroke: var(--accent); stroke-width: 2.5; }
+  .fig-group { fill: var(--bg); stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 5 4; }
+  .fig-group-label { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; fill: var(--muted); }
   /* A leaf's Tests section, and the test methods under a test type in the Tests switch. */
   .tests-section { margin: 12px 0; }
   .tests-section > summary { font-weight: 600; }

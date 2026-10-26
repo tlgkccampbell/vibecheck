@@ -7,9 +7,10 @@ window.CHANGESET = {"base":"633703ee","head":"4a9e30d6","map":{"version":0,"solu
 // checked without Claude. It has one slide of each kind of target, and the view and level slides bring out blocks.
 // This changeset has no reading path, decisions, patterns, concepts or changed tests, so the decision, pattern,
 // concept and tests slides and the uncovered step name nothing here, and the card and the face show how such targets
-// are reported. With no path, no slide offers Open on the path or shows a read state.
+// are reported. With no path, no slide offers Open on the path or shows a read state. The figure slide has two groups,
+// labeled arrows, boxes whose types the changeset has, which open the type, and one box whose type it does not have.
 window.CHANGESET_EXPLAINER = {
-  "type": "explainer", "state": "done", "dropped": 1,
+  "type": "explainer", "state": "done", "figures": 1, "dropped": 1,
   "reasons": ["Slide 'Hovers name the flags': its target editor.hover→flow.flags is not in the catalog"],
   "uncovered": [{ "kind": "block", "id": "flow.registers" }, { "kind": "step", "id": "step-3" }],
   "slides": [
@@ -29,6 +30,30 @@ window.CHANGESET_EXPLAINER = {
     { "title": "A pull of P inside one region hands back what the push saw", "target": { "kind": "hunk", "file": "src/Norristown.Core/Flow/Registers/FlagAnalysis.cs", "index": 3, "id": "src/Norristown.Core/Flow/Registers/FlagAnalysis.cs#3" },
       "cites": ["src/Norristown.Core/Flow/Registers/FlagAnalysis.cs"],
       "text": "The status saves now carry the region marks with the held flags. A round trip that stays in the same regions keeps the marks the push saw; one that leaves or enters a region on the way keeps nothing of what that region started with." },
+    { "title": "A round trip of P carries the flags and the marks", "cites": ["src/Norristown.Core/Flow/Registers/FlagAnalysis.cs"],
+      "target": { "kind": "figure", "id": "figure", "figure": {
+        "boxes": [
+          { "id": "php", "label": "php pushes P" },
+          { "id": "saves", "label": "Status saves", "type": "Norristown.Flow.StatusSaves" },
+          { "id": "marks", "label": "Region marks", "type": "Norristown.Flow.RegionMarks" },
+          { "id": "bytes", "label": "Pushed bytes", "type": "Norristown.Flow.PushedBytes" },
+          { "id": "known", "label": "Known registers", "type": "Norristown.Flow.KnownRegisters" },
+          { "id": "trip", "label": "Round trip", "type": "Norristown.Flow.FlagRoundTrip" },
+          { "id": "plp", "label": "plp pulls P" }
+        ],
+        "arrows": [
+          { "from": "php", "to": "saves", "label": "saves" },
+          { "from": "saves", "to": "marks", "label": "carries" },
+          { "from": "php", "to": "bytes", "label": "records" },
+          { "from": "bytes", "to": "known", "label": "holds" },
+          { "from": "saves", "to": "trip" },
+          { "from": "trip", "to": "plp", "label": "hands back" }
+        ],
+        "groups": [
+          { "label": "Flow state", "boxes": ["saves", "marks"] },
+          { "label": "Registers", "boxes": ["bytes", "known"] }
+        ] } },
+      "text": "A `php` saves the status with the flags it holds and the regions open at that point, and records the pushed byte with the register values behind it. The matching `plp` hands back what was saved when the regions still match. The round trip has no type of its own in this change, so its box names one as text." },
     { "title": "Signatures declare which flags a routine changes", "target": { "kind": "decision", "id": "src/Norristown.Core/Semantics/Signature.cs#0" },
       "cites": ["src/Norristown.Core/Semantics/Signature.cs"],
       "text": "`Signature` gains the D and I flags among the parts a routine may declare it changes. This changeset has no decisions, so the card reports that this target is not in it." },

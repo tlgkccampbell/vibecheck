@@ -35,6 +35,18 @@ Each slide has:
 
 A slide whose target or cites name anything outside the catalog is discarded, so point only at what is listed.
 
+## Figures
+
+A figure is a small drawing that the viewer shows in place of the diagram, for something the diagram has no place for: the fields of a new record and what they refer to, the states of a new state machine, or the order of calls in a new flow. A figure is the last resort. Point a slide at what the catalog lists whenever that can show what the slide says. A slide about a type whose declaration the viewer can show points at the type, not at a figure of it. At most two slides of the explainer may carry a figure.
+
+A slide with a figure has the target kind `figure` with the id `figure`, and a `figure` with:
+
+- `boxes`: two to twelve boxes, each with an `id` that the arrows and groups name it by, a `label` of a few words, and optionally the `type` it stands for, by its full name. The reviewer can click a box whose type is in the change to open it.
+- `arrows`: at most sixteen arrows, each `from` one box `to` another by their ids, with an optional `label` of a few words.
+- `groups`: optionally, at most four groups, each with a `label` and the ids of the boxes it holds. A box is in one group at most.
+
+A label has at most 40 characters. A figure that names a box it does not have, or is larger than this, is discarded with its slide. The cites of a slide with a figure name the files and type pairs the figure rests on.
+
 Write for a peer who has not seen the change and has ten minutes. Use plain words and short sentences, one idea each. Say what a thing is for before saying what it does. Name types and members in backticks. Lead with the reason, and use the commit messages when they state it. Do not praise the change.
 
 Say only what the catalog and the code show. Where a change has no explanation, such as a test changed in a way that no changed declaration explains, say so and point at it; never offer a reading of your own, since a guess on a slide is harder for a reviewer to catch than no slide. Never write in the first person.

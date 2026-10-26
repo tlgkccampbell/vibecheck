@@ -614,11 +614,12 @@
 
   // Places the labels of a level's labeled edges along their cubic paths and returns their centers by edge id.
   // Edges with a higher priority are placed first, and each label goes at the first point along its path, from the
-  // middle outward, where it overlaps no label already placed and none of the given obstacles.
-  function placeLabels(level, paths, priority, obstacles = []) {
+  // middle outward, where it overlaps no label already placed and none of the given obstacles. The text of each label
+  // comes from partsOf, which is labelParts for a level's edges.
+  function placeLabels(level, paths, priority, obstacles = [], partsOf = labelParts) {
     const labels = new Map(), placed = [...obstacles];
     const overlaps = (r) => placed.some((q) => r.x < q.x + q.w + 4 && q.x < r.x + r.w + 4 && r.y < q.y + q.h + 2 && q.y < r.y + r.h + 2);
-    const labeled = level.edges.map((e, i) => ({ e, i, parts: labelParts(e) })).filter((x) => x.parts && paths.has("e" + x.i)).sort((p, q) => priority(q.e) - priority(p.e));
+    const labeled = level.edges.map((e, i) => ({ e, i, parts: partsOf(e) })).filter((x) => x.parts && paths.has("e" + x.i)).sort((p, q) => priority(q.e) - priority(p.e));
     for (const { i, parts } of labeled) {
       const w = labelWidth(parts), h = 18, path = paths.get("e" + i);
       let at = bezierAt(path, 0.5);
@@ -798,6 +799,17 @@
     const all = [...rects.values()];
     const x0 = Math.min(...all.map((r) => r.x)), y0 = Math.min(...all.map((r) => r.y));
     for (const r of all) { r.x += SPLINE.pad - x0; r.y += SPLINE.pad - y0; }
+    // A settled control point moved with the layout, so it is shifted the same way.
+    const paths = arcPaths(level.edges, rects, bows && bows.map((q) => ({ x: q.x + SPLINE.pad - x0, y: q.y + SPLINE.pad - y0 })));
+    const labels = placeLabels(level, paths, (e) => Math.max(e.base, e.head), [...rects.values()]);
+    const w = Math.max(...all.map((r) => r.x + r.w)) + SPLINE.pad, h = Math.max(...all.map((r) => r.y + r.h)) + SPLINE.pad;
+    return { rects, labels, paths, w, h };
+  }
+
+  // Returns the path of each edge by edge id, as one arc from the border of its source rect to the border of its target
+  // rect, through the edge's settled control point when bows gives one and through its resting bow otherwise. The
+  // quadratic arc is drawn as the cubic with the same shape, starting and ending where its tangents leave the rects.
+  function arcPaths(edges, rects, bows) {
     const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
     // Returns the point where a ray from a rect's center toward a point leaves the rect.
     const exit = (r, toward) => {
@@ -806,18 +818,77 @@
       return { x: c.x + dx * t, y: c.y + dy * t };
     };
     const paths = new Map();
-    level.edges.forEach((e, i) => {
+    edges.forEach((e, i) => {
       const ra = rects.get(e.from), rb = rects.get(e.to);
-      const ca = center(ra), cb = center(rb);
-      // A settled control point moved with the layout, so it is shifted the same way. The quadratic arc through it is
-      // drawn as the cubic with the same shape, starting and ending where the arc's tangents leave the blocks.
-      const q = bows ? { x: bows[i].x + SPLINE.pad - x0, y: bows[i].y + SPLINE.pad - y0 } : restingBow(ca, cb);
+      const q = bows ? bows[i] : restingBow(center(ra), center(rb));
       const a = exit(ra, q), b = exit(rb, q);
       paths.set("e" + i, [a, { x: a.x + (q.x - a.x) * 2 / 3, y: a.y + (q.y - a.y) * 2 / 3 }, { x: b.x + (q.x - b.x) * 2 / 3, y: b.y + (q.y - b.y) * 2 / 3 }, b]);
     });
-    const labels = placeLabels(level, paths, (e) => Math.max(e.base, e.head), [...rects.values()]);
+    return paths;
+  }
+
+  // The bounds of a figure's boxes, and the room a group's outline leaves around its boxes and above them for its label.
+  const FIGURE = { minW: 110, maxW: 250, band: 28, pad: 18, top: 32 };
+  const figureLayouts = new WeakMap();
+
+  // Returns how a box of a figure is drawn: its width and height, its fitted label, the height of its header band, and
+  // its type's short name or null. The label is set as a block's title is, and the type under it as a block's meta line.
+  function figureBoxShape(b) {
+    const type = b.type ? shortName(b.type) : null;
+    const w = Math.max(FIGURE.minW, Math.min(FIGURE.maxW, Math.max(b.label.length * MONO.title, type ? type.length * MONO.meta : 0) + 24));
+    const title = fitTitle(b.label, w - 20), band = title.lines.length > 1 ? 35 : FIGURE.band;
+    return { w, h: band + (type ? 26 : 12), title, band, type };
+  }
+
+  // Lays out a figure of an explainer's slide with ELK's layered algorithm, in a direction of "RIGHT" or "DOWN", with
+  // each group as a node that holds its boxes. Its arrows are drawn as the map's edges are, by arcPaths and
+  // placeLabels, with a gentler bow, since the layers already keep them apart. The result has the shape of a level's
+  // layout, with the boxes' rects keyed "box:" and their identifier, and with the groups' rects beside them, so that
+  // frameOf, routeOf and the fitting of the view serve a figure as they serve a level. The layout is kept with the
+  // figure, one for each direction.
+  async function figureLayout(fig, direction) {
+    const kept = figureLayouts.get(fig) || {};
+    if (kept[direction]) return kept[direction];
+    const groupOf = new Map();
+    fig.groups.forEach((g, i) => { for (const b of g.boxes) groupOf.set(b, i); });
+    const node = (b) => { const shape = figureBoxShape(b); return { id: "box:" + b.id, width: shape.w, height: shape.h }; };
+    // The layers stand far enough apart for the label of an arrow between them: its width across, or its height down.
+    const between = direction === "RIGHT" ? 36 + Math.max(0, ...fig.arrows.map((a) => a.label ? labelWidth([{ t: a.label }]) : 0)) : 60;
+    const res = await elk.layout({
+      id: "figure",
+      layoutOptions: { "elk.algorithm": "layered", "elk.direction": direction, "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+        "elk.spacing.nodeNode": "40", "elk.layered.spacing.nodeNodeBetweenLayers": String(between) },
+      children: [
+        ...fig.boxes.filter((b) => !groupOf.has(b.id)).map(node),
+        ...fig.groups.map((g, i) => ({ id: "group:" + i, layoutOptions: { "elk.padding": `[top=${FIGURE.top},left=${FIGURE.pad},bottom=${FIGURE.pad},right=${FIGURE.pad}]` },
+          children: fig.boxes.filter((b) => groupOf.get(b.id) === i).map(node) })),
+      ],
+      edges: fig.arrows.map((a, i) => ({ id: "e" + i, sources: ["box:" + a.from], targets: ["box:" + a.to] })),
+    });
+    // A group's boxes are placed relative to the group, so the walk adds up the offsets.
+    const rects = new Map(), groups = [];
+    const walk = (n, ox, oy) => {
+      for (const c of n.children || []) {
+        const r = { x: ox + c.x, y: oy + c.y, w: c.width, h: c.height };
+        if (c.id.startsWith("group:")) { groups.push({ ...r, index: +c.id.slice(6) }); walk(c, r.x, r.y); } else rects.set(c.id, r);
+      }
+    };
+    walk(res, 0, 0);
+    const all = [...rects.values(), ...groups];
+    const x0 = Math.min(...all.map((r) => r.x)), y0 = Math.min(...all.map((r) => r.y));
+    for (const r of all) { r.x += SPLINE.pad - x0; r.y += SPLINE.pad - y0; }
+    const edges = fig.arrows.map((a) => ({ from: "box:" + a.from, to: "box:" + a.to, label: a.label }));
+    const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+    const bows = edges.map((e) => {
+      const a = center(rects.get(e.from)), b = center(rects.get(e.to)), q = restingBow(a, b);
+      return { x: (a.x + b.x) / 2 + ((q.x - (a.x + b.x) / 2)) * 0.35, y: (a.y + b.y) / 2 + (q.y - (a.y + b.y) / 2) * 0.35 };
+    });
+    const paths = arcPaths(edges, rects, bows);
+    const labels = placeLabels({ edges }, paths, () => 0, [...rects.values()], (e) => e.label ? [{ t: e.label, cls: "lbl-count" }] : null);
     const w = Math.max(...all.map((r) => r.x + r.w)) + SPLINE.pad, h = Math.max(...all.map((r) => r.y + r.h)) + SPLINE.pad;
-    return { rects, labels, paths, w, h };
+    kept[direction] = { rects, groups, labels, paths, w, h };
+    figureLayouts.set(fig, kept);
+    return kept[direction];
   }
 
   // Pushes overlapping rects apart along the axis where they overlap least, until each pair keeps the margin.
@@ -1015,6 +1086,9 @@
     term: null,
     termOthers: new Set(),
     current: null, // { level, layout }
+    // The figure the stage shows in place of the map, with the title of its slide and its layout, or null. While it is
+    // shown, current is null and the trail still names the location the stage returns to.
+    figure: null,
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
     saved: new Map(), // the last view of each location, by layout key
@@ -1279,6 +1353,52 @@
       pinLayer.append(g);
     }
     root.append(pinLayer);
+    root.append(labelLayer);
+    return root;
+  }
+
+  // Draws a figure of an explainer's slide in the stage's own style: a frame with the slide's title, each group as a
+  // dashed outline with its label, each arrow as an edge with its label, and each box as a block with its label in the
+  // header band and the type it stands for under it. A box whose type the changeset has is a link that opens the type,
+  // and one whose type it does not have shows the name as text. See docs/explainers.md section 3.3.
+  function renderFigure(fig, layout, title) {
+    const root = svg("g", { class: "level figure" });
+    const f = frameOf(layout);
+    root.append(svg("rect", { x: f.x, y: f.y, width: f.w, height: f.h, class: "frame" }));
+    root.append(text(f.x, f.y - 34, fitText(title.toUpperCase(), Math.max(f.w, 360), MONO.frameTitle), { class: "frame-title" }));
+    root.append(text(f.x, f.y - 16, fitText("DRAWN BY CLAUDE FOR THIS SLIDE, NOT PART OF THE MAP", Math.max(f.w, 360), MONO.frameMeta), { class: "frame-meta" }));
+    for (const g of layout.groups) {
+      const x = f.x + g.x, y = f.y + g.y, label = fig.groups[g.index].label;
+      root.append(svg("rect", { x, y, width: g.w, height: g.h, rx: 4, class: "fig-group" }));
+      root.append(text(x + 10, y + 19, fitText(label.toUpperCase(), g.w - 20, MONO.frameMeta), { class: "fig-group-label" }));
+    }
+    const edgeLayer = svg("g", { class: "fig-arrows" }), labelLayer = svg("g", { class: "edge-labels" });
+    fig.arrows.forEach((a, i) => {
+      const route = routeOf(null, layout, i);
+      if (!route) return;
+      edgeLayer.append(svg("path", { d: route.d, class: "edge-line", "stroke-width": 1.5, "marker-end": "url(#arrow-unchanged)" }));
+      const at = a.label && layout.labels.get("e" + i);
+      if (!at) return;
+      const w = labelWidth([{ t: a.label }]), x = f.x + at.x, y = f.y + at.y;
+      labelLayer.append(svg("rect", { x: x - w / 2, y: y - 9, width: w, height: 18, rx: 2, class: "lbl-bg" }), text(x, y + 4, a.label, { class: "lbl-count", "text-anchor": "middle" }));
+    });
+    root.append(edgeLayer);
+    for (const b of fig.boxes) {
+      const r = rectOf(null, layout, "box:" + b.id);
+      if (!r) continue;
+      const { title: t, band, type } = figureBoxShape(b), known = !!b.type && TYPE_BY_NAME.has(b.type);
+      const open = (ev) => { ev.stopPropagation(); if (!dragged) openType(b.type); };
+      const g = svg("g", known
+        ? { class: "fig-box link", tabindex: 0, role: "link", onclick: open, onkeydown: (ev) => { if (ev.key === "Enter") open(ev); } }
+        : { class: "fig-box" });
+      g.append(svg("rect", { x: r.x, y: r.y, width: r.w, height: r.h, rx: 2, class: "box" }));
+      g.append(svg("path", { d: `M${r.x + 2},${r.y} H${r.x + r.w - 2} Q${r.x + r.w},${r.y} ${r.x + r.w},${r.y + 2} V${r.y + band} H${r.x} V${r.y + 2} Q${r.x},${r.y} ${r.x + 2},${r.y} Z`, class: "band" }));
+      const ys = t.lines.length > 1 ? [r.y + 16, r.y + 27] : [r.y + (t.small ? 18 : 19)];
+      t.lines.forEach((line, i) => g.append(text(r.x + 10, ys[i], line, { class: "title" + (t.small ? " small" : "") })));
+      if (type) g.append(text(r.x + 10, r.y + band + 17, fitText(type, r.w - 20, MONO.meta), { class: "meta" }));
+      g.append(svg("title", {}, known ? `Open ${b.type}` : b.type ? `${b.type}, which the change does not have` : b.label));
+      root.append(g);
+    }
     root.append(labelLayer);
     return root;
   }
@@ -2097,19 +2217,23 @@
 
   // ---------- Panels ----------
 
+  // Draws the trail of the location on show as crumbs, each returning to its place, and the switch among the views of
+  // the level. While a figure is on show, a last crumb names it, every crumb of the trail returns to the map, and the
+  // switch is hidden.
   function renderBreadcrumb() {
     const bc = $("#crumbs");
     bc.replaceChildren();
     state.trail.forEach((l, i) => {
-      const last = i === state.trail.length - 1;
+      const last = i === state.trail.length - 1 && !state.figure;
       bc.append(el("button", { class: "crumb" + (last ? " current" : ""), disabled: last, onclick: () => goTo(i) }, locName(l)));
       if (!last) bc.append(el("span", { class: "crumb-sep" }, "›"));
     });
+    if (state.figure) bc.append(el("button", { class: "crumb current", disabled: true, title: "A figure Claude drew for the current slide" }, "Figure"));
     const seg = $("#viewseg");
     const l = loc();
     const views = l.leaf ? [] : viewsAt(l.level);
     const sw = $("#viewswitch");
-    sw.hidden = views.length === 0;
+    sw.hidden = views.length === 0 || !!state.figure;
     if (!sw.querySelector(".help")) sw.append(help(HELP.groupings));
     seg.replaceChildren();
     if (views.length) {
@@ -2901,6 +3025,7 @@
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
     if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
+    if (state.figure) { box.append(figurePanel()); return; }
     const l = loc();
     const cur = state.current;
     if (l.leaf) {
@@ -3072,8 +3197,12 @@
     return fitView(layout);
   }
 
+  // Draws the location the trail names: the leaf view for a leaf, and otherwise the level, laid out. Every mount ends
+  // a figure on show, so that any navigation returns the stage to the map.
   let mountToken = 0;
   async function mount() {
+    if (state.figure) for (const old of stage().querySelectorAll(".figure")) old.remove();
+    state.figure = null;
     state.back = [];
     const token = ++mountToken;
     const l = loc();
@@ -3109,8 +3238,10 @@
     return { level, layout };
   }
 
-  // Zooms the view out, or in, to show the whole of the current level. A leaf has no diagram, so it does nothing there.
+  // Zooms the view out, or in, to show the whole of the current level, or the whole of the figure on show in the room
+  // above the card. A leaf has no diagram, so it does nothing there.
   function zoomToFit() {
+    if (state.figure) { animateViewBox(state.view, figureView(state.figure.layout), 280); return; }
     if (!state.current) return;
     animateViewBox(state.view, fitAll(state.current.layout), 280);
   }
@@ -3137,7 +3268,7 @@
 
 
   function refreshChrome() {
-    $("#fit").disabled = !state.current;
+    $("#fit").disabled = !state.current && !state.figure;
     renderBreadcrumb();
     renderDetails();
     renderChanges();
@@ -3410,7 +3541,7 @@
       return { x: state.view.x + (ev.clientX - b.left) / b.width * state.view.w, y: state.view.y + (ev.clientY - b.top) / b.height * state.view.h };
     };
     s.addEventListener("wheel", (ev) => {
-      if (!state.current || !(ev.ctrlKey || ev.metaKey)) return;
+      if (!(state.current || state.figure) || !(ev.ctrlKey || ev.metaKey)) return;
       ev.preventDefault();
       const p = toUser(ev);
       const k = Math.exp(ev.deltaY * 0.0012);
@@ -3620,7 +3751,7 @@
   const EXPL = { state: API && META.narratives ? "none" : "off", slides: [], dropped: 0, reasons: [], uncovered: [], message: "",
     current: -1, open: false, asked: false, note: null, earlier: false };
   // The word each kind of target shows by on a slide's row in the face and on the card.
-  const SLIDE_KIND = { level: "level", edge: "edge", block: "block", decision: "decision", hunk: "hunk", type: "type", pattern: "pattern", concept: "concept", tests: "tests" };
+  const SLIDE_KIND = { level: "level", edge: "edge", block: "block", decision: "decision", hunk: "hunk", type: "type", pattern: "pattern", concept: "concept", tests: "tests", figure: "figure" };
   if (CANNED_EXPLAINER) takeExplainer(CANNED_EXPLAINER);
 
   // Takes an explainer event's state and message, and from a finished explainer its slides, the slides dropped with
@@ -3833,6 +3964,8 @@
   async function showSlideTarget(t) {
     if (state.tab !== "map") showTab("map");
     const missing = () => { EXPL.note = "This slide's target is not in the changeset, so the panel stays where it is."; renderCard(); };
+    // A figure gives way to any other target, and the stage returns to the map before the target opens.
+    if (t.kind !== "figure") await leaveFigure();
     // The pattern and the comparison a pattern slide opened give way when another slide opens.
     if (t.kind !== "pattern") { state.pattern = null; state.compare = null; }
     switch (t.kind) {
@@ -3884,6 +4017,10 @@
       }
       case "concept":
         return TERMS.has(t.id) ? showGlossary(null, t.id) : missing();
+      case "figure": {
+        const slide = EXPL.slides[EXPL.current];
+        return t.figure && (t.figure.boxes || []).length ? showFigure(t.figure, slide ? slide.title : "Figure") : missing();
+      }
       case "tests": {
         // The test type opens at its first changed hunk with the Tests face in the panel.
         const tt = TEST_TYPES.find((x) => x.name === t.id);
@@ -3895,6 +4032,64 @@
         EXPL.note = `This slide's target is of a kind this viewer does not know, ${t.kind}.`;
         renderCard();
     }
+  }
+
+  // Shows the figure of a slide in the stage in place of the map, fitted to the room above the card. The trail keeps
+  // the location the stage returns to, and the breadcrumb names the figure after it. A mount that starts while the
+  // figure is laid out cancels it, and any later mount ends it. See docs/explainers.md section 3.3.
+  async function showFigure(fig, title) {
+    const token = ++mountToken;
+    const layouts = await Promise.all(["RIGHT", "DOWN"].map((d) => figureLayout(fig, d)));
+    if (token !== mountToken) return;
+    rememberView();
+    $(".stage-wrap").hidden = false; $("#leafview").hidden = true; $("#legend-panel").hidden = true;
+    // The figure runs in the direction that draws it larger in the room above the card.
+    const layout = figureScale(layouts[1]) > figureScale(layouts[0]) ? layouts[1] : layouts[0];
+    state.figure = { figure: fig, title, layout };
+    state.current = null;
+    const s = stage();
+    for (const old of s.querySelectorAll(".level")) old.remove();
+    $("#dots").removeAttribute("patternTransform");
+    s.classList.remove("hovering", "focused", "bringing-out");
+    s.append(renderFigure(fig, layout, title));
+    $("#statusline").textContent = `figure · ${plural(fig.boxes.length, "box", "boxes")} · ${plural(fig.arrows.length, "arrow", "arrows")}`;
+    refreshChrome();
+    setViewBox(figureView(layout));
+  }
+
+  // Returns the scale at which a figure's whole drawing fits the room above the card, in pixels per unit.
+  function figureScale(layout) {
+    const total = frameOf(layout).total;
+    return Math.min(stage().getBoundingClientRect().width / total.w, roomAbove() / total.h);
+  }
+
+  // Returns the view that fits a figure into the room above the card. A small figure is drawn no larger than the map's
+  // own scale, so that its text is the size of a block's, and is centered in the room.
+  function figureView(layout) {
+    const r = levelRect(layout), grow = Math.max(1, figureScale(layout));
+    return fitInRoom({ x: r.x - r.w * (grow - 1) / 2, y: r.y - r.h * (grow - 1) / 2, w: r.w * grow, h: r.h * grow }, 10);
+  }
+
+  // Ends the figure on show, when there is one, and draws the location the trail names again, at the view it was left at.
+  async function leaveFigure() {
+    if (!state.figure) return;
+    const m = await mount();
+    if (m) setViewBox(arrive(m));
+  }
+
+  // Returns the details panel's section for the figure on show: what it is, and the types its boxes stand for, each a
+  // link that opens the type when the changeset has it.
+  function figurePanel() {
+    const { figure, title } = state.figure;
+    const box = el("section", { class: "figure-panel" }, el("h2", {}, "Figure"),
+      el("p", { class: "purpose" }, `Claude drew this figure for the slide "${title}". It is not part of the map; check it against the code.`));
+    const typed = figure.boxes.filter((b) => b.type);
+    if (typed.length) box.append(el("h3", {}, "Types"), el("ul", { class: "list" }, ...typed.map((b) => el("li", {},
+      TYPE_BY_NAME.has(b.type) ? el("button", { class: "link", onclick: () => openType(b.type), title: b.type }, shortName(b.type))
+        : el("code", { title: "The change does not have this type" }, shortName(b.type)),
+      " ", el("span", { class: "hint" }, b.label)))));
+    box.append(el("p", { class: "hint" }, "Close the card, move to another slide or click a crumb to return to the map."));
+    return box;
   }
 
   // Returns the rectangle of a level's whole drawing, in stage coordinates.
@@ -3956,7 +4151,8 @@
   function renderCard() {
     const card = $("#slidecard"), canvas = $(".canvas");
     const s = EXPL.open && EXPL.slides[EXPL.current];
-    if (!s) { card.hidden = true; canvas.style.removeProperty("--card-room"); return; }
+    // A figure belongs to its slide's card, so the stage returns to the map when the card goes.
+    if (!s) { card.hidden = true; canvas.style.removeProperty("--card-room"); leaveFigure(); return; }
     const n = EXPL.slides.length, at = EXPL.current, step = slideStep(s);
     const body = el("div", { class: "slide-body" }, el("p", { class: "slide-text" }, ...richText(s.text || "")));
     const intent = slideIntent(s);
@@ -4968,6 +5164,8 @@
   // Draws the current location again once per frame, keeping the view, the selection and the leaf view's scroll.
   let redrawFrame = 0;
   function redraw() {
+    // A figure shows nothing that a mark or an option changes, and a mount would end it.
+    if (state.figure) { renderDetails(); return; }
     if (redrawFrame) return;
     redrawFrame = requestAnimationFrame(async () => {
       redrawFrame = 0;
@@ -5038,7 +5236,7 @@
     // Keeps the view's aspect equal to the stage's when the window resizes, holding the center and the horizontal scale.
     new ResizeObserver(() => {
       const a = stageAspect();
-      if (!state.current || Math.abs(a - state.aspect) < 1e-3) return;
+      if (!(state.current || state.figure) || Math.abs(a - state.aspect) < 1e-3) return;
       const v = state.view, h = v.w / a;
       state.aspect = a;
       setViewBox({ x: v.x, y: v.y + v.h / 2 - h / 2, w: v.w, h });

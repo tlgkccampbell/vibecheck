@@ -12,7 +12,7 @@ the reading path and concepts of [attention.md](attention.md), the compare view 
 [patterns.md](patterns.md) and the intents of [intent.md](intent.md), and it lists, in
 section 9, the changes it makes to those documents.
 
-Phases 1 and 2 of section 11 are built; phase 3, figures, is not.
+All three phases of section 11 are built.
 
 The design rests on two principles. First, an explainer is a story, and the viewer is
 its illustrations. Every slide points at something the changeset already holds, by an
@@ -152,6 +152,34 @@ may carry one, and that a slide about a type whose declaration the viewer can sh
 points at the type instead. Figures are phase 3 of section 11, so that the first two
 phases find out how often Claude reaches for one when it is not offered.
 
+As built, a slide with a figure has the target kind `figure`, and its answer carries a
+`figure` of `boxes`, each with an `id`, a `label` and an optional `type`, `arrows`, each
+`from` one box `to` another with an optional `label`, and optional `groups`, each with a
+`label` and the ids of its `boxes`. The check moves the figure onto the resolved target,
+as `Figure` in `Vibecheck.Assist`, and rejects it when it is missing, has fewer than two
+boxes or more than twelve, more than sixteen arrows or more than four groups, a label
+longer than forty characters, a box without an id or a label, an id given twice, an arrow
+or a group that names a box the figure does not have, an arrow from a box to itself, or a
+box in two groups. A box's type is kept whether or not the changeset has it, and the
+viewer draws a type it does not have as text rather than as a link. The limit of two is
+the check's as well as the prompt's: the third figure of an answer is rejected with that
+reason, the retry may not add a figure past those that passed the first time, and a
+figure that fails twice is dropped like any slide. A figure covers what its cites name
+and nothing else, since it names nothing in the catalog.
+
+The viewer lays a figure out with ELK's layered algorithm, each group a node that holds
+its boxes, both left to right and top to bottom, and keeps the direction that draws it
+larger in the room above the card, at no more than the map's own scale. Boxes are drawn
+as blocks, with the label in the header band and the type's short name under it, and
+arrows and their labels as the map's edges. The frame is titled with the slide's title
+and says that Claude drew it and that it is not part of the map. While a figure is shown,
+the trail keeps the location the stage returns to, the breadcrumb ends in **Figure**, the
+view switch is hidden, and the details panel describes the figure and lists its types.
+Any mount of a location ends the figure: another slide, closing the card, a crumb, a box
+that opens its type, or any other navigation. A redraw, as when a mark or an option
+changes, leaves it in place. The done event and the server log count the slides that
+carry a figure, so that a real run reports how often Claude reaches for one.
+
 ## 4. Writing an explainer
 
 ### 4.1 The catalog
@@ -220,7 +248,7 @@ narrative prompts, versioned together.
 `ExplainerWriter.Check` resolves each slide against the catalog. A slide is rejected when
 its target names nothing in the catalog, when a block it brings out is not under its
 level, or when a cite names a file not changed or a pair not in some changed edge's
-evidence. As with narratives, the rejected slides are requested once more together, with
+evidence. A figure slide is also rejected by the rules of section 3.3. As with narratives, the rejected slides are requested once more together, with
 the slides that passed as context and the reason each was rejected, and a slide that
 fails twice is dropped. The explainer keeps its order with the gaps closed, and the face
 says how many slides were dropped and why. An answer with no slide that passes counts as
@@ -252,7 +280,7 @@ The server gains `POST /api/reviews/{id}/explainer`, with `regenerate` in its bo
 which answers Accepted and writes in the background. Progress and the result go to the
 page as `explainer` events carrying the run of the result they belong to, as narrative
 events do, with `state` of `waiting`, `writing`, `done` or `failed`, and on `done` the
-slides and the number dropped. The prompt holds the narratives, so a request made while
+slides, the number of them that carry a figure, and the number dropped. The prompt holds the narratives, so a request made while
 they are still being written waits for them: the server sends `waiting`, with the
 narratives written so far and their total, and `writing` once it asks Claude. The events are replayed to a page that opens later, so a reload keeps
 the explainer. A request for a review whose Claude is not available answers as the
@@ -386,8 +414,12 @@ in the sub-second unit suite. They state:
   count and what stays uncovered.
 - The request's key holds no path of this machine, a second write with the same key
   reads the cache, and a regeneration replaces what is stored.
+- The check accepts a figure and keeps a box type the changeset does not have, rejects a
+  figure whose arrow names a missing box and the other malformed or oversized figures of
+  section 3.3, and rejects a third figure on the first answer and on the retry.
 - The server accepts the request, sends `writing` and `done` events with the run, and
-  replays them to a later watcher, driven by the canned `IClaude`.
+  replays them to a later watcher, driven by the canned `IClaude`; the `done` event and
+  the log count the slides with a figure.
 
 The viewer has no test suite, as the other designs note; a manual pass on the sample
 and on `mock/changeset.js` with a canned explainer covers the card and the keys.

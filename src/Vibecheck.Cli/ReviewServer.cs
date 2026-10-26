@@ -643,7 +643,8 @@ public sealed class ReviewServer : IAsyncDisposable
     /// for it and <paramref name="regenerate"/> is false. The explainer waits for the result's narratives, which its
     /// prompt holds. Its progress and result are sent as <c>explainer</c> events carrying the run of the result: a
     /// <c>waiting</c> event with the narratives written so far while it waits for them, then <c>writing</c> once Claude
-    /// is asked, and <c>done</c> or <c>failed</c>. See <c>docs/explainers.md</c> section 4.4.
+    /// is asked, and <c>done</c> or <c>failed</c>. The <c>done</c> event and the log say how many slides carry a figure.
+    /// See <c>docs/explainers.md</c> section 4.4.
     /// </summary>
     private void WriteExplainer(Review review, bool regenerate)
     {
@@ -687,8 +688,8 @@ public sealed class ReviewServer : IAsyncDisposable
                 var catalog = ExplainerPlanner.Plan(result.Changeset);
                 options.Log?.Invoke($"  {review.Id} explainer: {catalog.Entries.Count} catalog entries, {catalog.FirstTier.Count} first-tier steps");
                 var explainer = await ExplainerWriter.WriteAsync(catalog, context, options.Claude, options.Cache, regenerate, ct);
-                options.Log?.Invoke($"  {review.Id} explainer: {explainer.Slides.Count} slides, {explainer.Dropped} dropped, {explainer.Uncovered.Count} uncovered");
-                review.Add(new { type = "explainer", run, state = "done", slides = explainer.Slides, dropped = explainer.Dropped, reasons = explainer.Reasons, uncovered = explainer.Uncovered });
+                options.Log?.Invoke($"  {review.Id} explainer: {explainer.Slides.Count} slides, {explainer.Figures} with a figure, {explainer.Dropped} dropped, {explainer.Uncovered.Count} uncovered");
+                review.Add(new { type = "explainer", run, state = "done", slides = explainer.Slides, figures = explainer.Figures, dropped = explainer.Dropped, reasons = explainer.Reasons, uncovered = explainer.Uncovered });
             }
             catch (OperationCanceledException)
             {
