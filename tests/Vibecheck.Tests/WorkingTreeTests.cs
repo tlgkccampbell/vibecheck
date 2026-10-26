@@ -1,3 +1,4 @@
+using Vibecheck.Analysis;
 using Vibecheck.Diffing;
 using Vibecheck.Format;
 using Vibecheck.Reviewing;
@@ -80,7 +81,7 @@ public class WorkingTreeTests
         ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
         var (baseCommit, snapshot) = RevisionChangeset.ResolveRange(repo.Path, WorkingTree.Name);
 
-        var result = await ReviewPipeline.RunAsync(new ReviewRequest(Path.Combine(repo.Path, "app"), baseCommit, snapshot) { Build = false }, ReviewPipelineTests.Fake([]));
+        var result = await ReviewPipeline.RunAsync(new ReviewRequest(Path.Combine(repo.Path, "app"), baseCommit, snapshot) { Preparation = SolutionPreparation.None }, ReviewPipelineTests.Fake([]));
 
         Assert.Equal($"{head[..7]}..working tree", result.Info.Range);
         Assert.Equal("Uncommitted changes", result.Info.Title);

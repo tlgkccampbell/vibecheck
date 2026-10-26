@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Vibecheck.Analysis;
 using Vibecheck.Assist;
 using Vibecheck.Checking;
 using Vibecheck.Diffing;
@@ -43,8 +44,8 @@ public sealed record ReviewServerOptions
     /// <summary>Gets the solution a review without a map analyzes, relative to <see cref="Directory"/>, or <see langword="null"/> to find it.</summary>
     public string? Solution { get; init; }
 
-    /// <summary>Gets a value indicating whether each end is built before it is analyzed.</summary>
-    public bool Build { get; init; } = true;
+    /// <summary>Gets how each end is prepared before it is analyzed. It defaults to a restore.</summary>
+    public SolutionPreparation Preparation { get; init; } = SolutionPreparation.Restore;
 
     /// <summary>Gets a directory to serve the viewer's files from instead of the copies embedded in the tool, or <see langword="null"/>.</summary>
     public string? ViewerDirectory { get; init; }
@@ -227,7 +228,7 @@ public sealed class ReviewServer : IAsyncDisposable
             if (!rerun) await PreparePullAsync(review, progress);
             var request = new ReviewRequest(options.Directory, review.Base!, review.Head)
             {
-                MapPath = options.MapPath, Root = options.Root, Solution = options.Solution, Build = options.Build, Renames = review.Renames,
+                MapPath = options.MapPath, Root = options.Root, Solution = options.Solution, Preparation = options.Preparation, Renames = review.Renames,
             };
             var result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
             // The result and its narratives job are recorded together, so that an explainer asked for at any point of the

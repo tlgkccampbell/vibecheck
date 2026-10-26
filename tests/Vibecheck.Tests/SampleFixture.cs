@@ -27,7 +27,7 @@ public sealed class SampleFixture : IAsyncLifetime
         // The build restores packages and writes generator output to disk under Generated, which is what the
         // generated-code tests depend on. An up-to-date build takes a few seconds.
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
-        await SolutionBuild.RunAsync(Path.Combine(Root, Map.Solution), timeout.Token);
+        await SolutionBuild.RunAsync(Path.Combine(Root, Map.Solution), SolutionPreparation.Build, timeout.Token);
         Analysis = await RoslynAnalyzer.AnalyzeAsync(Root, Path.Combine(Root, Map.Solution));
     }
 

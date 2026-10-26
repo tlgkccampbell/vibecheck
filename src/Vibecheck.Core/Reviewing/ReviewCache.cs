@@ -11,9 +11,9 @@ namespace Vibecheck.Reviewing;
 
 /// <summary>
 /// Identifies what is analyzed at a commit: the directory, relative to the repository's top, that the analysis's paths
-/// are relative to, the solution relative to that directory, and whether the solution is built first.
+/// are relative to, the solution relative to that directory, and how the solution is prepared first.
 /// </summary>
-public sealed record AnalysisTarget(string Root, string Solution, bool Build);
+public sealed record AnalysisTarget(string Root, string Solution, SolutionPreparation Preparation);
 
 /// <summary>
 /// Represents the cache of one repository's analyses and changesets, kept outside the repository so that a second look
@@ -84,7 +84,7 @@ public sealed class ReviewCache : INarrativeCache, IExplainerCache
     /// </summary>
     public async Task<AnalysisResult> AnalysisAsync(AnalysisTarget target, string commit, Func<Task<AnalysisResult>> produce, IProgress<string>? progress = null)
     {
-        var path = Path.Combine(Directory, "analyses", $"{commit}-{Hash(target.Root, target.Solution, target.Build ? "build" : "no-build", ToolId)}.json.gz");
+        var path = Path.Combine(Directory, "analyses", $"{commit}-{Hash(target.Root, target.Solution, Key(target.Preparation), ToolId)}.json.gz");
         var lazy = running.GetOrAdd(path, _ => new Lazy<Task<AnalysisResult>>(async () =>
         {
             var cached = Read<AnalysisResult>(path);
@@ -115,7 +115,7 @@ public sealed class ReviewCache : INarrativeCache, IExplainerCache
         Write(ChangesetPath(baseCommit, headCommit, target, mapText, layoutText, variant), changeset);
 
     private string ChangesetPath(string baseCommit, string headCommit, AnalysisTarget target, string mapText, string? layoutText, string variant) =>
-        Path.Combine(Directory, "changesets", $"{baseCommit[..12]}-{headCommit[..12]}-{Hash(baseCommit, headCommit, target.Root, target.Solution, target.Build ? "build" : "no-build", mapText, layoutText ?? "", variant, ToolId)}.json.gz");
+        Path.Combine(Directory, "changesets", $"{baseCommit[..12]}-{headCommit[..12]}-{Hash(baseCommit, headCommit, target.Root, target.Solution, Key(target.Preparation), mapText, layoutText ?? "", variant, ToolId)}.json.gz");
 
     /// <summary>
     /// Returns the latest version of the map Claude generated for a solution, and its version number, or
@@ -164,6 +164,17 @@ public sealed class ReviewCache : INarrativeCache, IExplainerCache
     private string GeneratedMapDirectory(AnalysisTarget target) => Path.Combine(Directory, "maps", Hash(target.Root, target.Solution));
 
     /// <summary>Returns a short hexadecimal hash of strings, each kept distinct from its neighbors.</summary>
+    /// <summary>
+    /// Returns the part of a cache key that names a preparation. A build and no preparation keep the names they had
+    /// when the only choice was whether to build, so that analyses cached then are still found.
+    /// </summary>
+    private static string Key(SolutionPreparation preparation) => preparation switch
+    {
+        SolutionPreparation.Build => "build",
+        SolutionPreparation.None => "no-build",
+        _ => "restore",
+    };
+
     private static string Hash(params string[] parts) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0', parts))))[..16];
 

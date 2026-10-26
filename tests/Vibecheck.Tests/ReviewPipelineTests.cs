@@ -53,7 +53,7 @@ public class ReviewPipelineTests
     }
 
     private static ReviewRequest Request(TempRepo repo, string dir, string baseCommit, string headCommit) =>
-        new(Path.Combine(repo.Path, dir), baseCommit, headCommit) { Build = false };
+        new(Path.Combine(repo.Path, dir), baseCommit, headCommit) { Preparation = SolutionPreparation.None };
 
     [Fact]
     public async Task PairsRenamesAsTheRequestPairsThemWithPathsFromTheRepositorysTop()
@@ -177,7 +177,7 @@ public class ReviewPipelineTests
     {
         using var temp = new TempDirectory();
         var cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo"));
-        var target = new AnalysisTarget(".", "Example.sln", false);
+        var target = new AnalysisTarget(".", "Example.sln", SolutionPreparation.None);
         var calls = 0;
         var gate = new TaskCompletionSource<AnalysisResult>();
         Task<AnalysisResult> Produce() { Interlocked.Increment(ref calls); return gate.Task; }
@@ -198,7 +198,7 @@ public class ReviewPipelineTests
     {
         using var temp = new TempDirectory();
         var cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo"), limit: 1);
-        var target = new AnalysisTarget(".", "Example.sln", false);
+        var target = new AnalysisTarget(".", "Example.sln", SolutionPreparation.None);
         await cache.AnalysisAsync(target, new string('a', 40), () => Task.FromResult(TestData.Analysis()));
         var calls = 0;
         await cache.AnalysisAsync(target, new string('a', 40), () => { calls++; return Task.FromResult(TestData.Analysis()); });

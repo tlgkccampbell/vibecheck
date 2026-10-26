@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Vibecheck.Analysis;
 using Vibecheck.Assist;
 using Vibecheck.Bootstrap;
 using Vibecheck.Format;
@@ -243,7 +244,7 @@ public class MapGeneratorTests
         ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
         var after = repo.Commit("two");
         var cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo"));
-        var request = new ReviewRequest(repo.Path, before, after) { Build = false };
+        var request = new ReviewRequest(repo.Path, before, after) { Preparation = SolutionPreparation.None };
 
         var first = await ReviewPipeline.RunAsync(request, ReviewPipelineTests.Fake([]), cache);
         Assert.Equal("skeleton", first.Info.MapKind);

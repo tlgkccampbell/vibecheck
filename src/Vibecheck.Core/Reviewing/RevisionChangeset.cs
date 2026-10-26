@@ -10,9 +10,9 @@ public delegate Task<AnalysisResult> SolutionAnalyzer(string root, string soluti
 
 /// <summary>
 /// Describes one changeset to produce: the directory inside the repository that the map's paths are relative to, the
-/// map that describes both ends, the layout beside it, the two commits, and whether to build each before analysis.
+/// map that describes both ends, the layout beside it, the two commits, and how to prepare each before analysis.
 /// </summary>
-public sealed record ChangesetRequest(string Root, ArchitectureMap Map, string MapText, string? LayoutText, string BaseCommit, string HeadCommit, bool Build = true);
+public sealed record ChangesetRequest(string Root, ArchitectureMap Map, string MapText, string? LayoutText, string BaseCommit, string HeadCommit, SolutionPreparation Preparation = SolutionPreparation.Restore);
 
 /// <summary>Holds a changeset together with the facts of its two ends, whose warnings a caller may want to report.</summary>
 public sealed record ChangesetResult(Changeset Changeset, Facts Base, Facts Head);
@@ -51,7 +51,7 @@ public static class RevisionChangeset
         Git.TryRun(dir, "rev-parse", "--verify", "--quiet", rev + "^{commit}") ?? throw new ArgumentException($"\"{rev}\" does not name a commit");
 
     /// <summary>
-    /// Checks out both commits of a request into temporary worktrees, builds and analyzes them in parallel, and
+    /// Checks out both commits of a request into temporary worktrees, prepares and analyzes them in parallel, and
     /// combines their facts with the hunks between them. The worktrees are removed afterward, also on failure. With a
     /// cache, an end analyzed before is read from it instead.
     /// </summary>
@@ -59,7 +59,7 @@ public static class RevisionChangeset
     {
         var root = Path.GetFullPath(request.Root);
         var top = Path.GetFullPath(Git.Run(root, "rev-parse", "--show-toplevel"));
-        var target = new AnalysisTarget(Path.GetRelativePath(top, root), request.Map.Solution, request.Build);
+        var target = new AnalysisTarget(Path.GetRelativePath(top, root), request.Map.Solution, request.Preparation);
         var sides = new[] { ("base", request.BaseCommit), ("head", request.HeadCommit) };
         var analyses = await Task.WhenAll(sides.Select(s => AnalyzeAsync(top, target, s.Item2, analyze, cache, Prefix(progress, s.Item1), ct)));
         var facts = sides.Select((s, i) => Check(request.Map, request.MapText, request.LayoutText, analyses[i], s.Item2)).ToArray();
@@ -69,7 +69,7 @@ public static class RevisionChangeset
 
     /// <summary>
     /// Returns the analysis of one commit. A cached analysis is returned when there is one. Otherwise the commit is
-    /// checked out into a temporary worktree, built when the target asks for it, and analyzed, and the worktree is
+    /// checked out into a temporary worktree, restored or built as the target asks, and analyzed, and the worktree is
     /// removed afterward, also on failure.
     /// </summary>
     public static Task<AnalysisResult> AnalyzeAsync(string top, AnalysisTarget target, string commit, SolutionAnalyzer analyze, ReviewCache? cache, IProgress<string>? progress, CancellationToken ct)
@@ -85,10 +85,10 @@ public static class RevisionChangeset
         var root = Path.GetFullPath(Path.Combine(worktree.Path, target.Root));
         var solution = Path.Combine(root, target.Solution);
         if (!File.Exists(solution)) throw new IOException($"{target.Solution} does not exist at {commit[..Math.Min(8, commit.Length)]}");
-        if (target.Build)
+        if (target.Preparation != SolutionPreparation.None)
         {
-            progress?.Report("building");
-            await SolutionBuild.RunAsync(solution, ct);
+            progress?.Report(target.Preparation == SolutionPreparation.Build ? "building" : "restoring");
+            await SolutionBuild.RunAsync(solution, target.Preparation, ct);
         }
         var analysis = await analyze(root, solution, progress, ct);
         foreach (var w in analysis.Warnings) progress?.Report("warning: " + w);

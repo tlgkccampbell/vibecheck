@@ -18,7 +18,7 @@ public static class Program
         usage:
           vibecheck           [review options]
           vibecheck review    [<base> [<head>] | <range>] [--map <vibecheck.json>] [--root <dir>] [--solution <sln>]
-                            [--no-build] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+                            [--build | --no-restore] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
           vibecheck pr        <number> | <url> [review options]
           vibecheck init      --solution <path.sln> [--root <dir>] [--map <vibecheck.json>] [--facts <out.json>]
           vibecheck units     [--map <vibecheck.json>] [--root <dir>] [--out <units.txt>]
@@ -27,7 +27,7 @@ public static class Program
           vibecheck fmt       [--map <vibecheck.json>] [--check]
           vibecheck facts     [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
           vibecheck diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
-          vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
+          vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--build | --no-restore] [--no-cache]
           vibecheck guide
           vibecheck intent    [<file>] [--map <vibecheck.json>] [--root <dir>] [--base <rev>]
 
@@ -41,6 +41,8 @@ public static class Program
         which the map's solution path and every reported path are relative to, defaults to the map's
         directory; pass --root when the map is kept outside the repository. changeset takes two
         revisions or one range (a..b, or a...b for a pull request), and the head defaults to HEAD.
+        Each end is restored before it is analyzed. --build builds it instead, for a solution whose code
+        generation does not run in a design-time build, and --no-restore analyzes it as it is checked out.
 
         vibecheck guide prints the guide for coding agents: how to keep the map in sync with a change, and how to state
         the change's intent in the pull request description. vibecheck intent checks the Intent section of a draft
@@ -355,7 +357,7 @@ public static class Program
             RoslynAnalyzer.EnsureMSBuild();
             var progress = new Progress(m => Console.Error.WriteLine("  " + m));
             var sw = Stopwatch.StartNew();
-            var request = new ChangesetRequest(root, map, text, ReadLayout(mapDir), baseCommit, headCommit, Build: !options.ContainsKey("no-build"));
+            var request = new ChangesetRequest(root, map, text, ReadLayout(mapDir), baseCommit, headCommit, Preparation(options));
             var cache = options.ContainsKey("no-cache") ? null : ReviewCache.ForRepository(root);
             var result = await RevisionChangeset.BuildAsync(request, RoslynAnalyzer.AnalyzeAsync, progress, cancel.Token, cache);
             foreach (var (name, facts) in new[] { ("base", result.Base), ("head", result.Head) })
@@ -422,7 +424,7 @@ public static class Program
             MapPath = options.GetValueOrDefault("map"),
             Root = options.GetValueOrDefault("root"),
             Solution = options.GetValueOrDefault("solution"),
-            Build = !options.ContainsKey("no-build"),
+            Preparation = Preparation(options),
             ViewerDirectory = options.TryGetValue("viewer", out var viewer) ? Path.GetFullPath(viewer) : null,
             Port = int.Parse(options.GetValueOrDefault("port", "0")),
             Log = Console.Error.WriteLine,
@@ -452,6 +454,16 @@ public static class Program
         Console.Error.WriteLine("stopping");
         return 0;
     }
+
+    /// <summary>Returns the preparation that the --build and --no-restore options ask for, which is a restore when neither is given.</summary>
+    private static SolutionPreparation Preparation(Dictionary<string, string> options) =>
+        (options.ContainsKey("build"), options.ContainsKey("no-restore")) switch
+        {
+            (true, true) => throw new ArgumentException("--build and --no-restore cannot be used together"),
+            (true, false) => SolutionPreparation.Build,
+            (false, true) => SolutionPreparation.None,
+            _ => SolutionPreparation.Restore,
+        };
 
     /// <summary>Opens a URL in the default browser, and says so when it cannot.</summary>
     private static void OpenBrowser(string url)

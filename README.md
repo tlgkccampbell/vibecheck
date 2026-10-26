@@ -104,7 +104,7 @@ own reviews it against `HEAD`; `main...:worktree` reviews everything since the b
 left `main`, committed or not. The tool snapshots the work as a commit object without
 touching the index, the files or any ref.
 
-The review checks out both ends into temporary worktrees, builds and analyzes them in
+The review checks out both ends into temporary worktrees, restores and analyzes them in
 parallel, and draws the changeset. The map is the `--map` file when given, then the
 `vibecheck.json` nearest the current directory at the head revision, then the one at
 the base revision, then the concept map Claude generated for the solution in an
@@ -184,7 +184,7 @@ request is read-only.
 ```
 vibecheck           [review options]
 vibecheck review    [<base> [<head>] | <range>] [--map <vibecheck.json>] [--root <dir>] [--solution <sln>]
-                  [--no-build] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
+                  [--build | --no-restore] [--no-cache] [--no-ai] [--no-github] [--model <model>] [--no-open] [--port <n>] [--viewer <dir>]
 vibecheck pr        <number> | <url> [review options]
 vibecheck init      --solution <path.sln> [--root <dir>] [--map <vibecheck.json>] [--facts <out.json>]
 vibecheck units     [--map <vibecheck.json>] [--root <dir>] [--out <units.txt>]
@@ -193,7 +193,7 @@ vibecheck why       <from> <to> [--map <vibecheck.json>] [--root <dir>] [--facts
 vibecheck fmt       [--map <vibecheck.json>] [--check]
 vibecheck facts     [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--commit <sha>]
 vibecheck diff      <base-facts.json> <head-facts.json> [--out <out.json>] [--repo <dir> --base-rev <rev> --head-rev <rev>]
-vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--no-build] [--no-cache]
+vibecheck changeset <base> [<head>] [--map <vibecheck.json>] [--root <dir>] [--out <out.json>] [--build | --no-restore] [--no-cache]
 vibecheck guide
 vibecheck intent    [<file>] [--map <vibecheck.json>] [--root <dir>] [--base <rev>]
 ```
@@ -424,6 +424,10 @@ vibecheck changeset main...feature --out changeset.json
 ```
 
 It analyzes the two ends as a review does, with the same cache, applies the map to
-both, and writes the document. The builds matter because source generators run only
-in a build; `--no-build` skips them and leaves the generated types out. `facts` and
-`diff` remain for doing the same steps by hand.
+both, and writes the document. Each end is restored before it is analyzed. The
+analysis runs source generators itself, and its design-time build runs the code
+generation targets that hook into compilation, so a restore is enough for most
+solutions and is much faster than a build. `--build` builds each end instead, for a
+solution whose code generation turns itself off in design-time builds or that
+references build output from outside the solution. `--no-restore` analyzes each end
+as it is checked out. `facts` and `diff` remain for doing the same steps by hand.

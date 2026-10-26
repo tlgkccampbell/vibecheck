@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Vibecheck.Analysis;
 using Vibecheck.Assist;
 using Vibecheck.Cli;
 using Vibecheck.Format;
@@ -497,7 +498,7 @@ public class ReviewServerTests
     {
         Directory = repo.Path,
         Analyze = ReviewPipelineTests.Fake([]),
-        Build = false,
+        Preparation = SolutionPreparation.None,
         Log = Console.Error.WriteLine,
     };
 

@@ -21,8 +21,8 @@ public sealed record ReviewRequest(string Directory, string BaseCommit, string H
     /// <summary>Gets the solution a review without a map analyzes, relative to <see cref="Directory"/>, or <see langword="null"/> to find it.</summary>
     public string? Solution { get; init; }
 
-    /// <summary>Gets a value indicating whether each end is built before it is analyzed, so that source generators run.</summary>
-    public bool Build { get; init; } = true;
+    /// <summary>Gets how each end is prepared before it is analyzed. It defaults to a restore.</summary>
+    public SolutionPreparation Preparation { get; init; } = SolutionPreparation.Restore;
 
     /// <summary>
     /// Gets the renames to pair files by in place of git's, by head path with each base path, relative to the
@@ -73,7 +73,7 @@ public static class ReviewPipeline
         Report("map", "looking for a map");
         var chosen = ChooseMap(request, top, start, baseCommit, headCommit, warnings, cache);
         Report("map", chosen.Source);
-        var target = new AnalysisTarget(chosen.Root, chosen.Solution, request.Build);
+        var target = new AnalysisTarget(chosen.Root, chosen.Solution, request.Preparation);
 
         var sides = new[] { ("base", baseCommit), ("head", headCommit) };
         var analyses = await Task.WhenAll(sides.Select(s =>
@@ -151,7 +151,7 @@ public static class ReviewPipeline
             ? MapLocator.Relative(top, Path.GetFullPath(Path.Combine(top, start, request.Solution)))
             : MapLocator.FindSolution(top, start, headCommit);
         var (solutionDir, solutionName) = (MapLocator.DirectoryOf(solution), solution[(solution.LastIndexOf('/') + 1)..]);
-        if (cache?.ReadGeneratedMap(new AnalysisTarget(solutionDir, solutionName, request.Build)) is var (generatedText, version))
+        if (cache?.ReadGeneratedMap(new AnalysisTarget(solutionDir, solutionName, request.Preparation)) is var (generatedText, version))
         {
             var errors = new List<string>();
             var generated = MapReader.Read(generatedText, errors);

@@ -36,7 +36,7 @@ public class RevisionChangesetTests
     private static ChangesetRequest Request(TempRepo repo, string baseCommit, string headCommit)
     {
         var map = TestData.Map();
-        return new ChangesetRequest(Path.Combine(repo.Path, "app"), map, MapWriter.Write(map), null, baseCommit, headCommit, Build: false);
+        return new ChangesetRequest(Path.Combine(repo.Path, "app"), map, MapWriter.Write(map), null, baseCommit, headCommit, SolutionPreparation.None);
     }
 
     [Fact]

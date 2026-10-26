@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Vibecheck.Analysis;
 using Vibecheck.Bootstrap;
 using Vibecheck.Checking;
@@ -26,6 +27,37 @@ public class SampleIntegrationTests(SampleFixture sample)
         Assert.Empty(sample.Analysis.Unresolvable);
         var known = sample.Analysis.Types.Select(t => t.Name).ToHashSet();
         Assert.All(sample.Analysis.Dependencies, d => { Assert.Contains(d.FromType, known); Assert.Contains(d.ToType, known); });
+    }
+
+    [Fact]
+    public async Task RestoringAloneGivesTheAnalysisThatBuildingGives()
+    {
+        // A fresh copy without build output stands in for a worktree. The fixture's analysis is of a built sample.
+        var copy = Path.Combine(Path.GetTempPath(), "vibecheck-restore-" + Guid.NewGuid().ToString("N")[..12]);
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(sample.Root, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(sample.Root, file);
+                if (relative.Split(Path.DirectorySeparatorChar).Any(s => s is "bin" or "obj" or "Generated")) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(copy, relative))!);
+                File.Copy(file, Path.Combine(copy, relative));
+            }
+            var solution = Path.Combine(copy, sample.Map.Solution);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
+            await SolutionBuild.RunAsync(solution, SolutionPreparation.Restore, timeout.Token);
+            Assert.False(Directory.Exists(Path.Combine(copy, "src", "Orchard.Billing", "bin")), "a restore compiles nothing");
+
+            var restored = await RoslynAnalyzer.AnalyzeAsync(copy, solution);
+            Assert.Equal(JsonSerializer.Serialize(sample.Analysis.Types), JsonSerializer.Serialize(restored.Types));
+            Assert.Equal(JsonSerializer.Serialize(sample.Analysis.Files), JsonSerializer.Serialize(restored.Files));
+            Assert.Equal(JsonSerializer.Serialize(sample.Analysis.Dependencies), JsonSerializer.Serialize(restored.Dependencies));
+            Assert.Empty(restored.Warnings);
+        }
+        finally
+        {
+            if (Directory.Exists(copy)) Directory.Delete(copy, recursive: true);
+        }
     }
 
     [Fact]
