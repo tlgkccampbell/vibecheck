@@ -412,6 +412,18 @@ public sealed class ReviewServer : IAsyncDisposable
         review.Add(new { type = "intents", run, intents = changeset.Intents, coverage, decisions });
     }
 
+    /// <summary>
+    /// Returns the web address on GitHub that a file's path follows to show the file at a review's head, or
+    /// <see langword="null"/> when GitHub is unavailable. A head that snapshots the working tree exists only here, so its
+    /// files are shown at the commit the snapshot was taken on, the latest commit the review examines.
+    /// </summary>
+    private string? BlobUrl(Review review)
+    {
+        if (options.GitHub is not { } github) return null;
+        var commit = WorkingTree.IsSnapshot(options.Directory, review.Head) ? Git.TryRun(options.Directory, "rev-parse", review.Head + "^") : review.Head;
+        return commit is null ? null : github.Repository.BlobUrl(commit);
+    }
+
     /// <summary>Returns a review's changeset with the intents of its pull request's description, which a cached changeset never carries.</summary>
     private static Changeset WithIntents(Review review, ReviewResult result)
     {
@@ -970,6 +982,7 @@ public sealed class ReviewServer : IAsyncDisposable
                 mapVersion = info.MapVersion, warnings = info.Warnings, home = "/", review = r.Id, events = r.Count, run,
                 narratives = options.Claude is not null, reviewed = reviewed.Marks(result.Changeset, result.Target.Root), settings = new { theme = settings.Theme },
                 pull = r.Snapshot, pullThreads = Placements(r, r.Snapshot), pullAnnotations = AnnotationPlaces(r, r.Snapshot), pullCommits = r.OpenedCommits, pullStale = r.Stale,
+                blob = BlobUrl(r),
             };
             var script = $"window.CHANGESET_META = {JsonSerializer.Serialize(meta, FactsJson.Options)};\nwindow.CHANGESET = {FactsJson.Serialize(WithIntents(r, result))}";
             return Results.Text(script, "text/javascript; charset=utf-8");

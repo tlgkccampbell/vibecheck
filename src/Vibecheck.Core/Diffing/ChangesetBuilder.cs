@@ -45,6 +45,7 @@ public static class ChangesetBuilder
             Content = Rollup(baseFacts.Map, headFacts.Map, files),
             Files = files,
             Types = DiffTypes(baseFacts, headFacts),
+            Locations = TypeLocations.Build(headFacts),
             Edges = DiffEdges(baseFacts, headFacts),
             Metrics = DiffMetrics(baseFacts, headFacts),
             Levels = headFacts.Levels,
