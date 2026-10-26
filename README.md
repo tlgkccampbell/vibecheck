@@ -35,6 +35,9 @@ Stated intent, in which the coding agent that writes a change says why it made t
 of its phases are built: the format, the guide's section on it, `vibecheck intent`, which checks a draft,
 intents in a review, shown beside Claude's narratives with flags for those that name nothing the change touches,
 and the surprises on the reading path that no intent covers.
+Explainers, a linear narrative that walks a reviewer through a change as its author would, slide by slide over
+the viewer's own drawing of each part, are designed in [docs/explainers.md](docs/explainers.md); none of its
+three phases is built.
 
 ## Layout
 
