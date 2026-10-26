@@ -149,6 +149,14 @@ figure looks like the map rather than like a picture pasted over it, and so that
 legible in both themes. A box whose type names a type of the changeset is a link that
 opens the type.
 
+A figure is laid out in layers, in the direction it reads, and not settled as the map's
+blocks are. Its arrows say what refers to or calls what, so its order is its meaning, and
+a settling layout would give that order up to keep the boxes apart. ELK also routes the
+arrows, at right angles and clear of the boxes, and sets each label on its own arrow in
+room it leaves between the layers. The first figure drawn in a real review, on pull
+request 3, showed why: drawn as the map draws its edges, its arrows crossed and two
+labels sat on the wrong arrows.
+
 The prompt says that a figure is the last resort, that at most two slides of an explainer
 may carry one, and that a slide about a type whose declaration the viewer can show
 points at the type instead. Figures are phase 3 of section 11, so that the first two

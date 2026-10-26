@@ -614,12 +614,11 @@
 
   // Places the labels of a level's labeled edges along their cubic paths and returns their centers by edge id.
   // Edges with a higher priority are placed first, and each label goes at the first point along its path, from the
-  // middle outward, where it overlaps no label already placed and none of the given obstacles. The text of each label
-  // comes from partsOf, which is labelParts for a level's edges.
-  function placeLabels(level, paths, priority, obstacles = [], partsOf = labelParts) {
+  // middle outward, where it overlaps no label already placed and none of the given obstacles.
+  function placeLabels(level, paths, priority, obstacles = []) {
     const labels = new Map(), placed = [...obstacles];
     const overlaps = (r) => placed.some((q) => r.x < q.x + q.w + 4 && q.x < r.x + r.w + 4 && r.y < q.y + q.h + 2 && q.y < r.y + r.h + 2);
-    const labeled = level.edges.map((e, i) => ({ e, i, parts: partsOf(e) })).filter((x) => x.parts && paths.has("e" + x.i)).sort((p, q) => priority(q.e) - priority(p.e));
+    const labeled = level.edges.map((e, i) => ({ e, i, parts: labelParts(e) })).filter((x) => x.parts && paths.has("e" + x.i)).sort((p, q) => priority(q.e) - priority(p.e));
     for (const { i, parts } of labeled) {
       const w = labelWidth(parts), h = 18, path = paths.get("e" + i);
       let at = bezierAt(path, 0.5);
@@ -841,29 +840,32 @@
   }
 
   // Lays out a figure of an explainer's slide with ELK's layered algorithm, in a direction of "RIGHT" or "DOWN", with
-  // each group as a node that holds its boxes. Its arrows are drawn as the map's edges are, by arcPaths and
-  // placeLabels, with a gentler bow, since the layers already keep them apart. The result has the shape of a level's
-  // layout, with the boxes' rects keyed "box:" and their identifier, and with the groups' rects beside them, so that
-  // frameOf, routeOf and the fitting of the view serve a figure as they serve a level. The layout is kept with the
-  // figure, one for each direction.
+  // each group as a node that holds its boxes. ELK also routes the arrows, as splines that keep clear of the boxes, and
+  // places their labels in room it leaves between the layers, so that no label sits on another arrow or a box. A
+  // figure is read in its direction, as a record and what it refers to or calls in their order, which is why it is
+  // laid out in layers rather than settled as the map's blocks are. The result has the shape of a level's layout, with
+  // the boxes' rects keyed "box:" and their identifier, and with the groups' rects beside them, so that frameOf,
+  // routeOf and the fitting of the view serve a figure as they serve a level. The layout is kept with the figure, one
+  // for each direction.
   async function figureLayout(fig, direction) {
     const kept = figureLayouts.get(fig) || {};
     if (kept[direction]) return kept[direction];
     const groupOf = new Map();
     fig.groups.forEach((g, i) => { for (const b of g.boxes) groupOf.set(b, i); });
     const node = (b) => { const shape = figureBoxShape(b); return { id: "box:" + b.id, width: shape.w, height: shape.h }; };
-    // The layers stand far enough apart for the label of an arrow between them: its width across, or its height down.
-    const between = direction === "RIGHT" ? 36 + Math.max(0, ...fig.arrows.map((a) => a.label ? labelWidth([{ t: a.label }]) : 0)) : 60;
     const res = await elk.layout({
       id: "figure",
       layoutOptions: { "elk.algorithm": "layered", "elk.direction": direction, "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-        "elk.spacing.nodeNode": "40", "elk.layered.spacing.nodeNodeBetweenLayers": String(between) },
+        "elk.edgeRouting": "ORTHOGONAL", "elk.edgeLabels.placement": "CENTER", "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+        "elk.spacing.nodeNode": "40", "elk.layered.spacing.nodeNodeBetweenLayers": "56", "elk.spacing.edgeLabel": "6",
+        "elk.spacing.edgeNode": "18", "elk.layered.spacing.edgeNodeBetweenLayers": "18" },
       children: [
         ...fig.boxes.filter((b) => !groupOf.has(b.id)).map(node),
         ...fig.groups.map((g, i) => ({ id: "group:" + i, layoutOptions: { "elk.padding": `[top=${FIGURE.top},left=${FIGURE.pad},bottom=${FIGURE.pad},right=${FIGURE.pad}]` },
           children: fig.boxes.filter((b) => groupOf.get(b.id) === i).map(node) })),
       ],
-      edges: fig.arrows.map((a, i) => ({ id: "e" + i, sources: ["box:" + a.from], targets: ["box:" + a.to] })),
+      edges: fig.arrows.map((a, i) => ({ id: "e" + i, sources: ["box:" + a.from], targets: ["box:" + a.to],
+        labels: a.label ? [{ id: "l" + i, text: a.label, width: labelWidth([{ t: a.label }]), height: 18, layoutOptions: { "elk.edgeLabels.inline": "true" } }] : [] })),
     });
     // A group's boxes are placed relative to the group, so the walk adds up the offsets.
     const rects = new Map(), groups = [];
@@ -874,18 +876,32 @@
       }
     };
     walk(res, 0, 0);
+    // Each arrow's route is its start, the control points ELK gives in threes, and its end, which is the run of cubic
+    // pieces that routeOf draws. A route whose points do not make whole pieces is drawn as straight pieces through them.
+    // ELK gives a route and its label relative to the group that holds the arrow, which it names as the container. A
+    // label's center is kept by its arrow's id.
+    const origin = new Map([["figure", { x: 0, y: 0 }], ...groups.map((g) => ["group:" + g.index, { x: g.x, y: g.y }])]);
+    const straight = (a, b) => [{ x: a.x + (b.x - a.x) / 3, y: a.y + (b.y - a.y) / 3 }, { x: a.x + (b.x - a.x) * 2 / 3, y: a.y + (b.y - a.y) * 2 / 3 }, b];
+    const paths = new Map(), labels = new Map(), marks = [];
+    for (const e of res.edges || []) {
+      const s = (e.sections || [])[0], o = origin.get(e.container) || { x: 0, y: 0 };
+      if (!s) continue;
+      let pts = [s.startPoint, ...(s.bendPoints || []), s.endPoint].map((p) => ({ x: p.x + o.x, y: p.y + o.y }));
+      if ((pts.length - 1) % 3) pts = [pts[0], ...pts.slice(1).flatMap((p, k) => straight(pts[k], p))];
+      paths.set(e.id, pts);
+      marks.push(...pts);
+      for (const l of e.labels || []) if (l.x !== undefined) {
+        labels.set(e.id, { x: o.x + l.x + l.width / 2, y: o.y + l.y + l.height / 2 });
+        marks.push({ x: o.x + l.x, y: o.y + l.y }, { x: o.x + l.x + l.width, y: o.y + l.y + l.height });
+      }
+    }
     const all = [...rects.values(), ...groups];
-    const x0 = Math.min(...all.map((r) => r.x)), y0 = Math.min(...all.map((r) => r.y));
+    const x0 = Math.min(...all.map((r) => r.x), ...marks.map((p) => p.x)), y0 = Math.min(...all.map((r) => r.y), ...marks.map((p) => p.y));
     for (const r of all) { r.x += SPLINE.pad - x0; r.y += SPLINE.pad - y0; }
-    const edges = fig.arrows.map((a) => ({ from: "box:" + a.from, to: "box:" + a.to, label: a.label }));
-    const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
-    const bows = edges.map((e) => {
-      const a = center(rects.get(e.from)), b = center(rects.get(e.to)), q = restingBow(a, b);
-      return { x: (a.x + b.x) / 2 + ((q.x - (a.x + b.x) / 2)) * 0.35, y: (a.y + b.y) / 2 + (q.y - (a.y + b.y) / 2) * 0.35 };
-    });
-    const paths = arcPaths(edges, rects, bows);
-    const labels = placeLabels({ edges }, paths, () => 0, [...rects.values()], (e) => e.label ? [{ t: e.label, cls: "lbl-count" }] : null);
-    const w = Math.max(...all.map((r) => r.x + r.w)) + SPLINE.pad, h = Math.max(...all.map((r) => r.y + r.h)) + SPLINE.pad;
+    for (const pts of paths.values()) for (const p of pts) { p.x += SPLINE.pad - x0; p.y += SPLINE.pad - y0; }
+    for (const p of labels.values()) { p.x += SPLINE.pad - x0; p.y += SPLINE.pad - y0; }
+    const w = Math.max(...all.map((r) => r.x + r.w), ...marks.map((p) => p.x + SPLINE.pad - x0)) + SPLINE.pad;
+    const h = Math.max(...all.map((r) => r.y + r.h), ...marks.map((p) => p.y + SPLINE.pad - y0)) + SPLINE.pad;
     kept[direction] = { rects, groups, labels, paths, w, h };
     figureLayouts.set(fig, kept);
     return kept[direction];
