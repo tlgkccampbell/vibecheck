@@ -39,6 +39,9 @@ Explainers, a linear narrative that walks a reviewer through a change as its aut
 the viewer's own drawing of each part, are designed in [docs/explainers.md](docs/explainers.md); all three of
 its phases are built: the request, the face and the card over every kind of target, the bridge to the reading
 path, and figures for what the map has no place for.
+Fewer rounds of map generation spent on cycles, by keeping types that reference each other in a loop in one leaf,
+trying moves against the checker before asking Claude, and letting the reviewer settle what remains, are designed in
+[docs/map-cycles.md](docs/map-cycles.md); none of its three phases is built.
 
 ## Layout
 
