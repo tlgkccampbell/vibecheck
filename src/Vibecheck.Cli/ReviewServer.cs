@@ -641,8 +641,9 @@ public sealed class ReviewServer : IAsyncDisposable
     /// <summary>
     /// Starts writing the explainer of a review's current result, in the background, unless one is already being written
     /// for it and <paramref name="regenerate"/> is false. The explainer waits for the result's narratives, which its
-    /// prompt holds, and its progress and result are sent as <c>explainer</c> events carrying the run of the result. See
-    /// <c>docs/explainers.md</c> section 4.4.
+    /// prompt holds. Its progress and result are sent as <c>explainer</c> events carrying the run of the result: a
+    /// <c>waiting</c> event with the narratives written so far while it waits for them, then <c>writing</c> once Claude
+    /// is asked, and <c>done</c> or <c>failed</c>. See <c>docs/explainers.md</c> section 4.4.
     /// </summary>
     private void WriteExplainer(Review review, bool regenerate)
     {
@@ -662,9 +663,20 @@ public sealed class ReviewServer : IAsyncDisposable
             var ct = job.Cancellation.Token;
             try
             {
-                review.Add(new { type = "explainer", run, state = "writing", message = "Claude is writing the explainer." });
                 // The prompt holds the narratives, so the explainer waits for them, and a second request finds the same key.
-                if (narratives?.Task is { } writing) await writing.WaitAsync(ct);
+                if (narratives?.Task is { IsCompleted: false } writing)
+                {
+                    var total = narratives.Plan?.Sum(b => b.Keys.Count());
+                    var soFar = narratives.Written.Count;
+                    review.Add(new
+                    {
+                        type = "explainer", run, state = "waiting", written = soFar, total,
+                        message = total is null ? "Waiting for Claude to finish the narratives; the explainer is written from them."
+                            : $"Waiting for Claude to finish the narratives ({soFar} of {total} written); the explainer is written from them.",
+                    });
+                    await writing.WaitAsync(ct);
+                }
+                review.Add(new { type = "explainer", run, state = "writing", message = "Claude is writing the explainer." });
                 var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
                 var written = narratives?.Plan?.SelectMany(b => b.Keys).Select(k => narratives.Written.GetValueOrDefault(k)).OfType<Narrative>().ToList() ?? [];
                 var context = new ExplainerContext(narratives?.Context?.Commits ?? NarrativeContext.ReadCommits(top, review.Base!, review.Head), written)

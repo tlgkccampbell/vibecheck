@@ -31,6 +31,12 @@ public sealed record ExplainerTarget(string Kind, string Id)
 
     /// <summary>Gets the identifier of the pattern a pattern target's instance belongs to, or <see langword="null"/> for any other kind.</summary>
     public string? Pattern { get; init; }
+
+    /// <summary>
+    /// Gets the <see cref="PathStep.Id"/> of the first step of the reading path's first two tiers that opens the same
+    /// target, or <see langword="null"/> when no such step does. The viewer's <b>Open on the path</b> opens that step.
+    /// </summary>
+    public string? Step { get; init; }
 }
 
 /// <summary>

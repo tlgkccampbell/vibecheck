@@ -168,16 +168,30 @@ public class ExplainerTests
         Assert.Equal(
         [
             new ExplainerTarget("level", "root") { Blocks = ["a", "c"] },
-            new ExplainerTarget("edge", "c→a") { Location = "root" },
-            new ExplainerTarget("block", "a"),
-            new ExplainerTarget("decision", "src/Clock.cs#0"),
+            new ExplainerTarget("edge", "c→a") { Location = "root", Step = "edge:root:c→a" },
+            new ExplainerTarget("block", "a") { Step = "node:a" },
+            new ExplainerTarget("decision", "src/Clock.cs#0") { Step = "decision:src/Clock.cs#0" },
             new ExplainerTarget("hunk", "src/Timer.cs#0") { File = "src/Timer.cs", Index = 0 },
             new ExplainerTarget("type", "A.Timer"),
-            new ExplainerTarget("pattern", "A.RetryPolicy") { Pattern = "policy" },
+            new ExplainerTarget("pattern", "A.RetryPolicy") { Pattern = "policy", Step = "pattern:policy:A.RetryPolicy" },
             new ExplainerTarget("concept", "term:policy"),
-            new ExplainerTarget("tests", "Snippets.Tests.ClockTests"),
+            new ExplainerTarget("tests", "Snippets.Tests.ClockTests") { Step = "test:Snippets.Tests.ClockTests" },
         ], checks.Select(c => c.Slide!.Target with { Blocks = c.Slide.Target.Blocks?.ToList() }), new TargetComparer());
         Assert.Equal(["C.Other → A.Clock"], checks[1].Slide!.Cites);
+    }
+
+    [Fact]
+    public void NamesTheStepThatOpensTheSameTargetAndNoneForATargetNoStepOpens()
+    {
+        var catalog = ExplainerPlanner.Plan(Scenario());
+
+        var checks = Check(catalog,
+            S("Cycle", "edge", "edge:a→b"),
+            S("Overview", "level", "level:root"),
+            S("Clock's hunk", "hunk", "hunk:src/Clock.cs#0"));
+
+        // The edge that closes a cycle opens the cycle's step, and a level or a hunk that no step targets opens none.
+        Assert.Equal(["cycle:root:a→b", null, null], checks.Select(c => c.Slide!.Target.Step));
     }
 
     [Fact]

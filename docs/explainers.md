@@ -12,7 +12,7 @@ the reading path and concepts of [attention.md](attention.md), the compare view 
 [patterns.md](patterns.md) and the intents of [intent.md](intent.md), and it lists, in
 section 9, the changes it makes to those documents.
 
-None of the phases of section 11 is built.
+Phases 1 and 2 of section 11 are built; phase 3, figures, is not.
 
 The design rests on two principles. First, an explainer is a story, and the viewer is
 its illustrations. Every slide points at something the changeset already holds, by an
@@ -251,8 +251,10 @@ its place.
 The server gains `POST /api/reviews/{id}/explainer`, with `regenerate` in its body,
 which answers Accepted and writes in the background. Progress and the result go to the
 page as `explainer` events carrying the run of the result they belong to, as narrative
-events do, with `state` of `writing`, `done` or `failed`, and on `done` the slides and the
-number dropped. The events are replayed to a page that opens later, so a reload keeps
+events do, with `state` of `waiting`, `writing`, `done` or `failed`, and on `done` the
+slides and the number dropped. The prompt holds the narratives, so a request made while
+they are still being written waits for them: the server sends `waiting`, with the
+narratives written so far and their total, and `writing` once it asks Claude. The events are replayed to a page that opens later, so a reload keeps
 the explainer. A request for a review whose Claude is not available answers as the
 narratives endpoint does. A changeset published as an artifact carries no explainer, as
 it carries no narratives.
@@ -269,7 +271,10 @@ cache under its key.
 The face appears in the switch whenever the review has Claude, since unlike the other
 faces it has something to offer before it has data. Before an explainer exists it shows
 its paragraph and **Write it**. While one is being written it shows the spinner and the
-message the server sends, and the reviewer can leave the face. Once one exists it lists
+message the server sends, and the reviewer can leave the face. While it waits for the
+narratives it says so, with how many are written, such as "Waiting for Claude to finish
+the narratives (12 of 30 written); the explainer is written from them.", and the count
+follows the narratives as they arrive. Once one exists it lists
 the slides, numbered, each with its title and a word for its target's kind, with the
 current slide marked as the current step is. Its pinned head holds the arrows and
 "3 of 9", as the path's head does. Clicking a slide opens it. Under the slides, **Not in the explainer** lists the
@@ -320,7 +325,10 @@ and the explainer is a reader over that state. **Open on the path** is the one b
 it opens the step that shares the slide's target, where the step's files and
 **Mark read** are. A slide whose target has a step of its own shows that step's read
 state as a word on the slide's row in the face, so that a reviewer taking the tour a
-second time sees what is finished.
+second time sees what is finished. The check of section 4.3 names that step on the
+slide's resolved target, as `step`: the first step of the path's first two tiers whose
+target is the same catalog entry, such as the cycle whose closing edge the slide
+targets.
 
 ## 6. Claude's part
 

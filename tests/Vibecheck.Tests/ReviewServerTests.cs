@@ -662,6 +662,8 @@ public class ReviewServerTests
         Assert.Equal((1, 0), (done.GetProperty("run").GetInt32(), done.GetProperty("dropped").GetInt32()));
         var target = done.GetProperty("slides")[0].GetProperty("target");
         Assert.Equal(("edge", "a→b", "root"), (target.GetProperty("kind").GetString(), target.GetProperty("id").GetString(), target.GetProperty("location").GetString()));
+        // The target names the step of the path that opens it, which Open on the path opens.
+        Assert.Equal("edge:root:a→b", target.GetProperty("step").GetString());
         Assert.Equal("A.X.Thing → B.Service", done.GetProperty("slides")[0].GetProperty("cites")[0].GetString());
         // The explainer waited for the narratives, and its prompt holds them.
         var request = Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("explainer.schema.json"));
@@ -673,6 +675,44 @@ public class ReviewServerTests
         var replayed = await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "done") && e.GetProperty("seq").GetInt32() > done.GetProperty("seq").GetInt32());
         Assert.Equal(2, replayed.Count(e => Is(e, "explainer", "done")));
         Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("explainer.schema.json"));
+    }
+
+    [Fact]
+    public async Task SaysTheExplainerWaitsForTheNarrativesBeforeItSaysClaudeIsWritingIt()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("call the service");
+        // The narratives are held until the explainer has been asked for, so that it must wait for them.
+        using var gate = new ManualResetEventSlim();
+        var claude = new FakeClaude(r =>
+        {
+            if (r.Schema == Prompts.Read("explainer.schema.json"))
+                return """{ "slides": [ { "title": "Thing runs the service", "text": "Thing now calls `B.Service`.", "target": { "kind": "edge", "id": "edge:a→b" }, "cites": [] } ] }""";
+            if (r.Schema == Prompts.Read("explainer-retry.schema.json")) return """{ "slides": [] }""";
+            gate.Wait(TimeSpan.FromSeconds(20));
+            return r.Schema.Contains("\"parts\"", StringComparison.Ordinal) ? """{ "text": "Thing starts using the service.", "parts": ["a", "b"] }""" : """{ "edges": [], "nodes": [] }""";
+        });
+        await using var server = new ReviewServer(Options(repo) with { Directory = Path.Combine(repo.Path, "app"), Claude = claude });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        await ReadEventsAsync(client, api + "/events", e => Is(e, "narratives", "writing"));
+
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/explainer", new { regenerate = false })).StatusCode);
+        var waiting = (await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "waiting")))[^1];
+        Assert.Equal((0, 4), (waiting.GetProperty("written").GetInt32(), waiting.GetProperty("total").GetInt32()));
+        Assert.Equal("Waiting for Claude to finish the narratives (0 of 4 written); the explainer is written from them.", waiting.GetProperty("message").GetString());
+        gate.Set();
+
+        var events = await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "done"));
+        var order = events.Where(e => e.GetProperty("type").GetString() is "explainer" or "narratives")
+            .Select(e => $"{e.GetProperty("type").GetString()} {e.GetProperty("state").GetString()}").ToList();
+        Assert.Equal(["narratives writing", "explainer waiting", "narratives done", "explainer writing", "explainer done"], order);
     }
 
     private static bool Is(JsonElement e, string type, string state) =>

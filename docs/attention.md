@@ -337,6 +337,13 @@ decision, shows the claim of the first intent that covers it under its signal, w
 count when more do, and a surprise that no intent covers shows "no stated intent".
 Coverage never reorders the path. A changeset with no intents shows neither.
 
+An explainer of [explainers.md](explainers.md) is a reader over the path and the marks,
+and changes neither. Its one bridge to them is **Open on the path**: a slide whose
+target is also the target of a step of the first two tiers offers it on its card, and it
+switches the panel to the path and opens that step, where its files and **Mark read**
+are. The slide's row in the Explainer face shows that step's read state as a word, so
+that a second tour shows what is finished.
+
 ### 6.3 Claude's part
 
 The order within the first tier is deterministic and is enough. A later phase may

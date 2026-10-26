@@ -390,6 +390,8 @@
     return contentOf(key).status;
   }
   function groupLeaves(key) { const [v, g] = key.slice(2).split("/"); return VIEWS[v].groups[g].leaves; }
+  // Returns a value indicating whether a key of the form "g:<view>/<group>" names a group of a view of this changeset.
+  function isGroup(key) { const [v, g] = key.slice(2).split("/"); return !!(VIEWS[v] && VIEWS[v].groups[g]); }
   function metricsOf(key) {
     if (key.startsWith("g:")) {
       const [v, g] = key.slice(2).split("/");
@@ -2363,6 +2365,14 @@
         el("span", { class: "chip chip-added" }, "added"), el("span", { class: "row-name" }, shortName(i.type)), el("span", { class: "row-meta" }, nameOf(i.leaf))))))));
     }
   }
+  // Returns the keys of the drawn blocks of the current level that hold a pattern's instances, or a term's types, as
+  // touched, and the keys of those that hold only its others, as held. An instance names its leaf or its type.
+  function patternBlocks(p) {
+    const owner = ownerMap(state.current.level);
+    const touched = new Set((p.instances || []).map((i) => owner.get(i.leaf || leafOfType(i.type))).filter(Boolean));
+    const held = new Set((p.others || []).map((o) => owner.get(o.leaf)).filter((k) => k && !touched.has(k)));
+    return { touched, held };
+  }
   // Outlines the blocks of the drawing that hold a pattern's instances, or a term's types, while it is under the
   // pointer, solid for those with new or changed ones and dashed for those with only others, and fades everything else.
   // A null pattern ends it. A leaf view has no drawing, so it does nothing there.
@@ -2371,9 +2381,7 @@
     const s = stage();
     for (const n of s.querySelectorAll(".hot, .pattern-touched, .pattern-held")) n.classList.remove("hot", "pattern-touched", "pattern-held");
     if (!p) { s.classList.remove("hovering"); return; }
-    const owner = ownerMap(state.current.level);
-    const touched = new Set((p.instances || []).map((i) => owner.get(i.leaf || leafOfType(i.type))).filter(Boolean));
-    const held = new Set((p.others || []).map((o) => owner.get(o.leaf)).filter((k) => k && !touched.has(k)));
+    const { touched, held } = patternBlocks(p);
     const mark = (keys, cls) => { for (const k of keys) for (const n of s.querySelectorAll(`.node[data-key="${CSS.escape(k)}"]`)) n.classList.add("hot", cls); };
     mark(touched, "pattern-touched");
     mark(held, "pattern-held");
@@ -3086,6 +3094,7 @@
     s.append(renderLevel(level, layout));
     s.classList.remove("hovering");
     s.classList.toggle("focused", markFocus(state.selected, "in-focus"));
+    bringOut();
     document.body.classList.toggle("dim", state.opts.dim);
     $("#statusline").textContent = `${locKey(l)} · ${level.children.length} blocks · ${level.edges.length} edges`;
     refreshChrome();
@@ -3561,7 +3570,7 @@
       narrativeFrame = 0;
       renderSummary();
       if (state.current || loc().leaf) renderDetails();
-      if (state.panel === "path" || state.panel === "glossary" || state.panel === "patterns") renderChanges();
+      if (state.panel === "path" || state.panel === "glossary" || state.panel === "patterns" || state.panel === "explainer" && EXPL.state === "waiting") renderChanges();
       refreshPatternChips();
       if (tipKey) showTip(tipKey);
       if (termTip) showTermTip();
@@ -3601,13 +3610,15 @@
   // slide has a title, a few sentences, the cites they rest on and a target, the one thing the viewer shows while the
   // slide is current. EXPL holds the explainer of this page's result as the server's explainer events deliver it, with
   // the number of slides the check dropped and why, and the first-tier steps and changed blocks no slide covers.
-  // The state is "off" when the page can have no explainer, "none" before one is asked for, "waiting" between the
-  // request and the first event, and otherwise "writing", "done" or "failed". The current slide is an index into the
+  // The state is "off" when the page can have no explainer, "none" before one is asked for, "asking" between the
+  // request and the first event, "waiting" while the server waits for the narratives the explainer is written from, and
+  // otherwise "writing", "done" or "failed". The current slide is an index into the
   // slides, or -1, and the card shows it while the card is open. A page opened from a file can carry a canned
-  // explainer as window.CHANGESET_EXPLAINER, in the form of a done event. See docs/explainers.md section 5.
+  // explainer as window.CHANGESET_EXPLAINER, in the form of a done event. The earlier flag is set when the review
+  // finished an explainer for an earlier result, which this page drops. See docs/explainers.md section 5.
   const CANNED_EXPLAINER = window.CHANGESET_EXPLAINER || null;
   const EXPL = { state: API && META.narratives ? "none" : "off", slides: [], dropped: 0, reasons: [], uncovered: [], message: "",
-    current: -1, open: false, asked: false, note: null };
+    current: -1, open: false, asked: false, note: null, earlier: false };
   // The word each kind of target shows by on a slide's row in the face and on the card.
   const SLIDE_KIND = { level: "level", edge: "edge", block: "block", decision: "decision", hunk: "hunk", type: "type", pattern: "pattern", concept: "concept", tests: "tests" };
   if (CANNED_EXPLAINER) takeExplainer(CANNED_EXPLAINER);
@@ -3627,8 +3638,13 @@
 
   // Records an explainer event of this page's run. A finished explainer that this page asked for opens at its first
   // slide; one replayed to a page that opens later only lists its slides, and closes the card of the one it replaces.
+  // An explainer of an earlier result names that result's blocks and edges, so the page drops it, and the face offers
+  // to write one for this result.
   function explainerEvent(e) {
-    if (e.run !== META.run) return;
+    if (e.run !== META.run) {
+      if (e.run < META.run && e.state === "done" && !EXPL.earlier) { EXPL.earlier = true; refreshExplainer(); }
+      return;
+    }
     const asked = EXPL.asked && e.state === "done";
     if (e.state === "done" || e.state === "failed") EXPL.asked = false;
     takeExplainer(e);
@@ -3643,7 +3659,7 @@
   // the request's progress in the face. A refused request shows the server's reason.
   async function writeExplainer(regenerate) {
     EXPL.asked = true;
-    EXPL.state = "waiting";
+    EXPL.state = "asking";
     EXPL.message = "";
     refreshExplainer();
     const r = await send(`${API}/explainer`, { regenerate });
@@ -3660,6 +3676,14 @@
     renderCard();
   }
 
+  // Returns what the face says while the explainer is on its way. While the server waits for the narratives, the count
+  // of those written follows the narratives events as they arrive, and otherwise the server's message is shown.
+  function explainerProgress() {
+    if (EXPL.state === "waiting" && NARR.state === "writing" && NARR.total)
+      return `Waiting for Claude to finish the narratives (${NARR.items.size} of ${NARR.total} written); the explainer is written from them.`;
+    return EXPL.message || "Asking Claude for the explainer…";
+  }
+
   // Returns the word a slide's target shows by: its kind, or "view" for a level target that names a view.
   function slideKindText(t) {
     if (t.kind === "level" && String(t.id).startsWith("view:")) return "view";
@@ -3671,7 +3695,7 @@
   // one marked, the arrows and the count in the pinned head, the steps and blocks no slide covers, how many slides the
   // check dropped, and Regenerate.
   function renderExplainer(box, head) {
-    const busy = EXPL.state === "waiting" || EXPL.state === "writing";
+    const busy = EXPL.state === "asking" || EXPL.state === "waiting" || EXPL.state === "writing";
     const have = EXPL.slides.length > 0;
     const offline = !API ? "Writing an explainer needs the vibecheck server with Claude." : null;
     if (have) {
@@ -3682,9 +3706,11 @@
         el("span", {}, at < 0 ? plural(n, "slide", "slides") : `${at + 1} of ${n}`)));
     }
     if (busy) box.append(el("p", { class: "hint explainer-progress" }, el("span", { class: "spin", "aria-hidden": "true" }), " ",
-      EXPL.message || "Asking Claude for the explainer…"));
+      explainerProgress()));
     if (EXPL.state === "failed") box.append(el("p", { class: "warn" }, EXPL.message || "Claude could not write the explainer."));
     if (!have) {
+      if (EXPL.earlier && !busy) box.append(el("p", { class: "hint" }, "The explainer written for this review's earlier result named the blocks and edges of that map, " +
+        "so it was dropped. Write one for the map shown now."));
       box.append(el("p", { class: "explainer-intro" }, "An explainer walks you through the change the way its author would walk a peer through it: " +
         "what it is for, where it lives on the map, its main new structures and decisions, how it is tested, and what to look at closely. " +
         "It is a run of short slides, and each slide moves the map to the part it describes. Claude writes it, and the path stays the account the review rests on."));
@@ -3696,8 +3722,11 @@
     box.append(el("p", { class: "hint" }, "Written by Claude; check it against the code. A slide opens where its target lives, and opening one marks nothing read."));
     const ol = el("ol", { class: "list slides" });
     EXPL.slides.forEach((s, i) => {
+      // A slide whose target has a step of its own shows whether that step is read, so that a second tour shows what is finished.
+      const step = slideStep(s);
+      const read = step && step.files.length ? el("span", { class: "step-meta slide-read", title: "The step on the path that opens this slide's target" }, stepRead(step) ? "read" : "unread") : null;
       ol.append(el("li", {}, el("button", { class: "row step" + (i === EXPL.current ? " current" : ""), onclick: () => openSlide(i), title: s.title },
-        el("span", { class: "slide-number" }, String(i + 1)), el("span", { class: "step-text" }, s.title),
+        el("span", { class: "slide-number" }, String(i + 1)), el("span", { class: "step-text" }, s.title), read,
         el("span", { class: "step-kind slide-kind" }, slideKindText(s.target || {})))));
     });
     box.append(ol);
@@ -3727,7 +3756,39 @@
     return el("span", { class: "row step", title: "The changeset no longer has it" }, el("span", { class: "step-kind" }, u.kind), el("span", { class: "step-text" }, u.id));
   }
 
-  // Makes a slide current, shows the card with it, and opens its target.
+  // Returns the step of the path that opens the same target as a slide, as the server names it, or null when none does.
+  function slideStep(s) {
+    const id = s.target && s.target.step;
+    return id ? PATH.find((x) => x.id === id) || null : null;
+  }
+
+  // Opens the step of the path that shares a slide's target, with the path in the panel, where the step's files and
+  // Mark read are. It is the one bridge from the explainer to the reviewed marks. See docs/explainers.md section 5.4.
+  function openOnPath(step) {
+    state.panel = "path";
+    return openStep(step);
+  }
+
+  // Returns the line that shows the stated intents covering a slide's target, as the path shows them for a step: those
+  // of the step that opens the same target, or else those of its decision, block or drawn edge, as the details panel
+  // finds them. Returns null when the changeset has no intents or none covers the target.
+  function slideIntent(s) {
+    if (!INTENTS.length) return null;
+    const t = s.target || {}, step = slideStep(s);
+    if (step && (step.intents || step.uncovered)) return stepIntent(step);
+    let list = [];
+    if (t.kind === "decision") list = ((DECISIONS.get(t.id) || {}).intents || []).map((i) => INTENTS[i]).filter(Boolean);
+    else if (t.kind === "block" && String(t.id).startsWith("g:")) list = isGroup(t.id) ? intentsOfBlock(null, groupLeaves(t.id)) : [];
+    else if (t.kind === "block") list = NODES[t.id] || isOther(t.id) ? intentsOfBlock(t.id, leavesUnder(t.id)) : [];
+    else if (t.kind === "edge") {
+      const e = state.current && state.current.level.edges.find((x) => x.key === "edge:" + t.id);
+      list = e ? intentsOfEdge(e) : [];
+    }
+    return intentLine(list, false);
+  }
+
+  // Makes a slide current, shows the card with it, and opens its target. The card is drawn again once the target is
+  // open, since the intents of an edge are found from the edge as drawn.
   async function openSlide(i) {
     if (i < 0 || i >= EXPL.slides.length) return;
     EXPL.current = i;
@@ -3735,13 +3796,35 @@
     EXPL.note = null;
     if (state.panel === "explainer") renderChanges();
     renderCard();
+    bringOut();
     await showSlideTarget(EXPL.slides[i].target || {});
+    if (EXPL.current === i && EXPL.open) renderCard();
   }
 
   // Closes the card, which ends the tour and keeps the explainer and its current slide.
   function closeCard() {
     EXPL.open = false;
     renderCard();
+    bringOut();
+  }
+
+  // Outlines the blocks a level slide brings out and dims the rest of the drawing, as hovering a pattern does, while the
+  // slide is current, the card is open and the stage draws the slide's level or view. Hovering and selecting take
+  // over while they last. Otherwise it clears the outline. See docs/explainers.md section 5.3.
+  function bringOut() {
+    const s = stage();
+    for (const n of s.querySelectorAll(".brought")) n.classList.remove("brought");
+    const slide = EXPL.open && EXPL.slides[EXPL.current], t = slide && slide.target, l = loc();
+    const id = t && t.kind === "level" && (t.blocks || []).length ? String(t.id) : null;
+    const here = id && state.current && !l.leaf && !l.group && (id.startsWith("view:") ? l.view === id.slice(5) : !l.view && l.level === id);
+    if (!here) { s.classList.remove("bringing-out"); return; }
+    const leaves = t.blocks.flatMap((b) => b.startsWith("g:") ? (isGroup(b) ? groupLeaves(b) : []) : NODES[b] || isOther(b) ? leavesUnder(b) : []);
+    const keys = patternBlocks({ instances: leaves.map((leaf) => ({ leaf })) }).touched;
+    for (const k of keys) for (const n of s.querySelectorAll(`.node[data-key="${CSS.escape(k)}"]`)) n.classList.add("brought");
+    // The edges at a brought-out block stay, with their labels, so that what the blocks use and are used by still shows.
+    for (const e of state.current.level.edges) if (keys.has(e.from) || keys.has(e.to))
+      for (const k of [e.key, e.key + ":label"]) for (const n of s.querySelectorAll(`[data-key="${CSS.escape(k)}"]`)) n.classList.add("brought");
+    s.classList.toggle("bringing-out", keys.size > 0);
   }
 
   // Opens a slide's target as the path opens its steps, and fits it into the room above the card. A target the
@@ -3750,6 +3833,8 @@
   async function showSlideTarget(t) {
     if (state.tab !== "map") showTab("map");
     const missing = () => { EXPL.note = "This slide's target is not in the changeset, so the panel stays where it is."; renderCard(); };
+    // The pattern and the comparison a pattern slide opened give way when another slide opens.
+    if (t.kind !== "pattern") { state.pattern = null; state.compare = null; }
     switch (t.kind) {
       case "level": {
         const id = String(t.id);
@@ -3771,9 +3856,8 @@
         const id = String(t.id);
         if (id.startsWith("g:")) {
           // A view's group is drawn at its view's level.
-          const [v, g] = id.slice(2).split("/");
-          if (!VIEWS[v] || !VIEWS[v].groups[g]) return missing();
-          const m = await openLocation("view:" + v);
+          if (!isGroup(id)) return missing();
+          const m = await openLocation("view:" + id.slice(2).split("/")[0]);
           if (m) { select(id); bringIntoRoom(id); }
           return;
         }
@@ -3789,8 +3873,26 @@
         return (HUNKS.get(t.file) || [])[t.index] ? openHunk(t.file, t.index) : missing();
       case "type":
         return TYPE_BY_NAME.has(t.id) ? openType(t.id) : missing();
+      case "pattern": {
+        // The instance opens with its pattern in the details panel, as a pattern step opens it, and beside its nearest
+        // example in the compare view when it has one.
+        const p = PATTERNS.get(t.pattern), instance = p && p.instances.find((i) => i.type === t.id);
+        if (!instance) return missing();
+        state.pattern = { id: p.id, type: t.id };
+        const near = instance.examples && instance.examples.nearest;
+        return near && instance.compare[near] && p.sources[t.id] ? startCompare(p.id, t.id, near) : openType(t.id);
+      }
+      case "concept":
+        return TERMS.has(t.id) ? showGlossary(null, t.id) : missing();
+      case "tests": {
+        // The test type opens at its first changed hunk with the Tests face in the panel.
+        const tt = TEST_TYPES.find((x) => x.name === t.id);
+        if (!tt) return missing();
+        state.panel = "tests";
+        return openTestType(tt);
+      }
       default:
-        EXPL.note = SLIDE_KIND[t.kind] ? "This slide's target opens in a later version." : `This slide's target is of a kind this viewer does not know, ${t.kind}.`;
+        EXPL.note = `This slide's target is of a kind this viewer does not know, ${t.kind}.`;
         renderCard();
     }
   }
@@ -3847,15 +3949,18 @@
   }
 
   // Draws the card of the current slide over the lower part of the main panel, or hides it when the card is closed.
-  // The card holds the slide's number, title, text and cites, its arrows, Show again and a close, and it is marked as
+  // The card holds the slide's number, title, text and cites, the stated intents that cover its target, its arrows,
+  // Show again, Open on the path when a step of the path opens the same target, and a close, and it is marked as
   // written by Claude. The main panel keeps room under the leaf view for the card, so that the end of a file can scroll
   // above it.
   function renderCard() {
     const card = $("#slidecard"), canvas = $(".canvas");
     const s = EXPL.open && EXPL.slides[EXPL.current];
     if (!s) { card.hidden = true; canvas.style.removeProperty("--card-room"); return; }
-    const n = EXPL.slides.length, at = EXPL.current;
+    const n = EXPL.slides.length, at = EXPL.current, step = slideStep(s);
     const body = el("div", { class: "slide-body" }, el("p", { class: "slide-text" }, ...richText(s.text || "")));
+    const intent = slideIntent(s);
+    if (intent) body.append(el("p", { class: "slide-intent", title: "Stated in the pull request description; a claim, not evidence." }, intent));
     if (EXPL.note) body.append(el("p", { class: "warn" }, EXPL.note));
     if ((s.cites || []).length) body.append(el("div", { class: "slide-cites" }, el("span", { class: "by" }, "Rests on"),
       ...s.cites.map((c) => el("span", { class: "slide-cite" }, citeLink(c)))));
@@ -3870,6 +3975,7 @@
         el("button", { class: "btn step-arrow", disabled: at <= 0, onclick: () => openSlide(at - 1), "aria-label": "Previous slide", title: "Previous slide (Left arrow)" }, "←"),
         el("button", { class: "btn step-arrow", disabled: at >= n - 1, onclick: () => openSlide(at + 1), "aria-label": "Next slide", title: "Next slide (Right arrow)" }, "→"),
         el("button", { class: "link", onclick: () => showSlideTarget(s.target || {}), title: "Show this slide's target again" }, "Show again"),
+        step ? el("button", { class: "link", onclick: () => openOnPath(step), title: "Open the step of the path that opens this target, where its files can be marked reviewed" }, "Open on the path") : null,
         el("span", { class: "spacer" }),
         el("span", { class: "by" }, "written by Claude")));
     card.hidden = false;
@@ -3990,10 +4096,16 @@
   // it, with a count when more do, or a flag for a surprise that none covers. A changeset with no intents shows neither.
   function stepIntent(s) {
     if (!INTENTS.length) return null;
-    const covering = (s.intents || []).map((i) => INTENTS[i]).filter(Boolean);
+    return intentLine((s.intents || []).map((i) => INTENTS[i]).filter(Boolean), s.uncovered);
+  }
+
+  // Returns the line that shows the claim of the first of some covering intents, labeled as the author's, with a count
+  // when there are more. With none, it returns the flag for a surprise that no intent covers when uncovered is true,
+  // and otherwise null.
+  function intentLine(covering, uncovered) {
     if (covering.length) return el("span", { class: "step-intent" }, el("span", { class: "intent-label" }, "Author: "), ...richText(covering[0].claim),
       covering.length > 1 ? el("span", { class: "intent-label" }, ` +${covering.length - 1} more`) : null);
-    return s.uncovered ? el("span", { class: "step-intent intent-flag" }, "no stated intent") : null;
+    return uncovered ? el("span", { class: "step-intent intent-flag" }, "no stated intent") : null;
   }
 
   // Renders the Intent panel: how many intents the description states and the discrepancies among them, every intent in

@@ -182,7 +182,7 @@ public static class ExplainerWriter
                 result.Add(new SlideCheck(title.Length > 0 ? title : "(untitled)", null, null, reason));
                 continue;
             }
-            var resolved = brought.Count > 0 ? entry!.Target with { Blocks = brought } : entry!.Target;
+            var resolved = entry!.Target with { Blocks = brought.Count > 0 ? brought : entry.Target.Blocks, Step = StepOf(catalog, entry.Id) };
             result.Add(new SlideCheck(title, new Slide(title, text, cites, resolved), entry, null));
         }
         return result;
@@ -195,6 +195,10 @@ public static class ExplainerWriter
             if (catalog.Entries.TryGetValue(candidate, out var e) && (kind.Length == 0 || e.Kind == kind)) return e;
         return null;
     }
+
+    /// <summary>Returns the identifier of the first step of the catalog's two tiers whose target is an entry, in the path's order, or <see langword="null"/> when none is.</summary>
+    private static string? StepOf(ExplainerCatalog catalog, string entry) =>
+        catalog.FirstTier.Concat(catalog.SecondTier).FirstOrDefault(s => catalog.StepTargets.TryGetValue(s.Id, out var t) && t == entry)?.Id;
 
     /// <summary>Returns a cite with a type pair written as <see cref="Narrative.PairCite"/> writes it, whatever arrow or spacing it came with.</summary>
     private static string NormalizeCite(string cite)
