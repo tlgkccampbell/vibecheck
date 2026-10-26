@@ -380,8 +380,10 @@ the slowest. The reviewer waits on narratives, so they use `claude-sonnet-5-5`.
 
 The explainer uses `claude-opus-5-5`, which wrote the clearer explainer in the trial
 of [explainers.md](explainers.md) section 6. An explainer is read once and slowly, so
-the clearer text is worth the higher cost and the longer wait. Its cost and time with
-the narratives in its prompt are to be measured on the sample.
+the clearer text is worth the higher cost and the longer wait. On pull request 3 of this
+repository, with its 58 narratives in the prompt, it wrote 26 slides in 83 s for $0.65,
+against $0.41 for the seven narrative requests that were not already cached;
+[explainers.md](explainers.md) section 8 has the details.
 
 Each narrative request, and the explainer's request, is abandoned after five minutes and counts as failed, so that
 one hung call cannot keep the narratives from finishing.

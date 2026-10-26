@@ -430,8 +430,21 @@ The trial of section 6 puts an explainer at under a dollar and under a minute an
 half with Opus on a change of 63 files, which is about half of what the narratives of
 such a range cost with Sonnet in [review-workflow.md](review-workflow.md) section 7.
 The cost grows with the first tier and the decisions on the path, which the path caps,
-rather than with the change. Phase 1 measures it again with the narratives in the prompt,
-which the trial left out because none were cached for the range.
+rather than with the change.
+
+Once built, the explainer was measured on pull request 3 of this repository, which added
+stated intents: 28 changed files, 23 changed edges, and 58 narratives in its prompt. Its
+catalog held 124 entries and 7 first-tier steps.
+
+| Request | Slides | Words | Covered | Dropped | Figures | Time | Cost |
+|---|---|---|---|---|---|---|---|
+| Explainer, `claude-opus-5-5` | 26 | 1456 | all | 0 | 1 | 83 s | $0.65 |
+| Narratives, `claude-sonnet-5-5`, 7 of 10 requests not cached | — | — | — | 0 | — | 20 s longest | $0.41 |
+
+The first answer passed its check and covered everything, so no retry was needed. With
+the narratives in its prompt the explainer still cost under a dollar and took under a
+minute and a half. Claude drew one figure, of the kinds of anchor and the path steps each
+kind covers.
 
 ## 9. Changes to other documents
 
