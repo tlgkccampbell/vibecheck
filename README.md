@@ -427,7 +427,9 @@ It analyzes the two ends as a review does, with the same cache, applies the map 
 both, and writes the document. Each end is restored before it is analyzed. The
 analysis runs source generators itself, and its design-time build runs the code
 generation targets that hook into compilation, so a restore is enough for most
-solutions and is much faster than a build. `--build` builds each end instead, for a
+solutions and is much faster than a build. A generator that the solution builds
+itself is the exception, so the analysis builds those projects alone when their
+output is missing. `--build` builds each end instead, for a
 solution whose code generation turns itself off in design-time builds or that
 references build output from outside the solution. `--no-restore` analyzes each end
 as it is checked out. `facts` and `diff` remain for doing the same steps by hand.

@@ -40,7 +40,7 @@ internal sealed class FakeClaude : IClaude
 public class MapGeneratorTests
 {
     /// <summary>Records each progress message as it is reported, on the reporting thread.</summary>
-    private sealed class Progress(List<string> messages) : IProgress<string>
+    internal sealed class Progress(List<string> messages) : IProgress<string>
     {
         public void Report(string value) => messages.Add(value);
     }

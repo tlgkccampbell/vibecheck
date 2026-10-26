@@ -51,13 +51,41 @@ public static class RoslynAnalyzer
     {
         repoRoot = Path.GetFullPath(repoRoot);
         var warnings = new List<string>();
-        using var workspace = MSBuildWorkspace.Create();
-        workspace.RegisterWorkspaceFailedHandler(e =>
+        async Task<(MSBuildWorkspace Workspace, Solution Solution)> OpenAsync()
         {
-            if (e.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure) warnings.Add(e.Diagnostic.Message);
-        });
-        progress?.Report($"opening {solutionPath}");
-        var solution = await workspace.OpenSolutionAsync(Path.GetFullPath(solutionPath), cancellationToken: ct);
+            var workspace = MSBuildWorkspace.Create();
+            workspace.RegisterWorkspaceFailedHandler(e =>
+            {
+                if (e.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure) warnings.Add(e.Diagnostic.Message);
+            });
+            progress?.Report($"opening {solutionPath}");
+            return (workspace, await workspace.OpenSolutionAsync(Path.GetFullPath(solutionPath), cancellationToken: ct));
+        }
+        var (workspace, solution) = await OpenAsync();
+
+        // A restored solution has not compiled the generators it builds itself, and Roslyn skips a generator whose
+        // assembly is missing without a word. Those projects are built, and the solution is opened again to load them.
+        var generators = UnbuiltGeneratorProjects(solution);
+        if (generators.Count > 0)
+        {
+            // The second opening reports the solution's failures again.
+            workspace.Dispose();
+            warnings.Clear();
+            foreach (var project in generators)
+            {
+                progress?.Report($"building generator {project.Name}");
+                try
+                {
+                    await SolutionBuild.RunAsync(project.FilePath!, SolutionPreparation.Build, ct);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    warnings.Add($"{project.Name}: the generator could not be built, so the code it generates is missing. {ex.Message}");
+                }
+            }
+            (workspace, solution) = await OpenAsync();
+        }
+        using var opened = workspace;
         var projects = solution.Projects.Where(p => p.Language == LanguageNames.CSharp).OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
 
         // Index every document first, so that a reference into any project resolves by
@@ -86,6 +114,22 @@ public static class RoslynAnalyzer
             inputs.Add(new ProjectTrees(project.Name, projectDir, compilation, trees));
         }
         return Collect(resolver, inputs, warnings, progress, ct);
+    }
+
+    /// <summary>
+    /// Returns the projects of a solution whose output another project loads as an analyzer, such as a source generator
+    /// the solution builds itself, and whose output does not exist yet.
+    /// </summary>
+    private static List<Project> UnbuiltGeneratorProjects(Solution solution)
+    {
+        var byOutput = solution.Projects.Where(p => p.OutputFilePath is not null && p.FilePath is not null)
+            .GroupBy(p => Path.GetFullPath(p.OutputFilePath!), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        return solution.Projects.SelectMany(p => p.AnalyzerReferences)
+            .Select(r => r.FullPath).OfType<string>().Select(Path.GetFullPath)
+            .Where(path => !File.Exists(path) && byOutput.ContainsKey(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Select(path => byOutput[path])
+            .OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>A compiled project and its source documents' syntax trees, each with its path and the generator that produced it.</summary>
