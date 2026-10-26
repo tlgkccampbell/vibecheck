@@ -296,11 +296,19 @@ public class ReviewServerTests
         using var preview = await client.PostAsJsonAsync(server.BaseAddress + "/api/markdown", new { text = "**x**" });
         Assert.Equal("<strong>**x**</strong>", (await preview.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("html").GetString());
 
-        // A merged pull request is read-only.
-        github.Snapshots[3] = opened with { State = "MERGED" };
+        // A merged pull request takes comments, as on GitHub, but not an approval or a request for changes, even from
+        // someone who did not open it.
+        github.Snapshots[3] = opened with { State = "MERGED", ViewerDidAuthor = false };
         await Post("/pull/refresh", new { });
-        Assert.Equal(HttpStatusCode.Conflict, (await Post("/pull/comments", new { body = "x" })).Status);
         Assert.Equal(writes, github.Writes.Count);
+        var late = await Post("/pull/review", new { @event = "APPROVE", body = "" });
+        Assert.Equal(HttpStatusCode.BadRequest, late.Status);
+        Assert.Contains("merged", late.Body, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post("/pull/review", new { @event = "REQUEST_CHANGES", body = "no" })).Status);
+        Assert.Equal(writes, github.Writes.Count);
+        Assert.Equal(HttpStatusCode.OK, (await Post("/pull/comments", new { body = "after merging", path = TestData.X1, hunk = 0, last = 1, side = "RIGHT" })).Status);
+        Assert.Equal(HttpStatusCode.OK, (await Post("/pull/comments", new { body = "after merging" })).Status);
+        Assert.Equal(writes + 2, github.Writes.Count);
     }
 
     [Fact]

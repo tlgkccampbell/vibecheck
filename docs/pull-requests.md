@@ -378,9 +378,10 @@ the box says so before it sends. **Discard review** deletes the pending review a
 comments, after a confirmation.
 
 GitHub refuses an approval or a request for changes from the pull request's author.
-The box disables both for an author, using `viewerDidAuthor`, and says why. A closed
-or merged pull request is shown read-only. Any other refusal is shown with GitHub's
-message.
+The box disables both for an author, using `viewerDidAuthor`, and says why. GitHub also
+refuses both on a closed or merged pull request, which otherwise still takes line
+comments, replies, resolutions and reviews that only comment; the box disables both
+there too. Any other refusal is shown with GitHub's message.
 
 ### 8.4 Logging
 
