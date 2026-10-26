@@ -4070,9 +4070,10 @@
         const id = String(t.id);
         const view = id.startsWith("view:") ? id.slice(5) : null;
         if (view ? !VIEWS[view] : id !== ROOT && !NODES[id]) return missing();
-        if (!view && isLeaf(id)) { await showInContext(id); return bringIntoRoom(id); }
+        if (!view && isLeaf(id)) { await showInContext(id); return zoomIntoRoom(id); }
+        // A level that names blocks zooms to them, and one that names none fits whole.
         const m = await openLocation(id);
-        if (m) setViewBox(fitInRoom(levelRect(m.layout), 10));
+        if (m && !zoomIntoRoom(null)) setViewBox(fitInRoom(levelRect(m.layout), 10));
         return;
       }
       case "edge": {
@@ -4080,7 +4081,7 @@
         if (view ? !VIEWS[view] : loc !== ROOT && !NODES[loc]) return missing();
         const m = await openLocation(loc, t.id);
         if (m && !m.level.edges.some((e) => e.key === "edge:" + t.id)) { EXPL.note = "This slide's edge is not drawn at its level."; renderCard(); return; }
-        return bringIntoRoom("edge:" + t.id);
+        return zoomIntoRoom("edge:" + t.id);
       }
       case "block": {
         const id = String(t.id);
@@ -4088,12 +4089,12 @@
           // A view's group is drawn at its view's level.
           if (!isGroup(id)) return missing();
           const m = await openLocation("view:" + id.slice(2).split("/")[0]);
-          if (m) { select(id); bringIntoRoom(id); }
+          if (m) { select(id); zoomIntoRoom(id); }
           return;
         }
         if (!NODES[id] && !isOther(id) && id !== UNSORTED) return missing();
         await showInContext(id);
-        return bringIntoRoom(id);
+        return zoomIntoRoom(id);
       }
       case "decision": {
         const d = DECISIONS.get(t.id);
@@ -4220,20 +4221,41 @@
     return { x: v.x, y: v.y, w: v.w, h: v.h * s.height / room };
   }
 
-  // Moves the view so that the drawn element with a key sits in the room above the card. An element already in the
-  // room stays where it is, one that fits at the present zoom is centered in the room, and a larger one is fitted to it.
-  function bringIntoRoom(key) {
-    const node = state.current && stage().querySelector(`[data-key="${CSS.escape(key)}"]`);
-    if (!node) return;
-    const s = stage().getBoundingClientRect(), b = node.getBoundingClientRect(), room = roomAbove();
-    if (!s.width) return;
-    if (b.left >= s.left && b.right <= s.right && b.top >= s.top && b.bottom <= s.top + room) return;
-    const k = state.view.w / s.width, pad = 30;
-    const r = { x: state.view.x + (b.left - s.left) * k, y: state.view.y + (b.top - s.top) * k, w: b.width * k, h: b.height * k };
-    const to = r.w + 2 * pad <= state.view.w && r.h + 2 * pad <= room * k
-      ? { x: r.x + r.w / 2 - state.view.w / 2, y: r.y + r.h / 2 - room * k / 2, w: state.view.w, h: state.view.h }
-      : fitInRoom(r, pad);
-    animateViewBox(state.view, to, 280);
+  // The largest scale a slide zooms the map to, in pixels per unit. At 1 a block's text is drawn at its own size, so
+  // a small block fills the room no further than twice that.
+  const SLIDE_ZOOM_MAX = 2;
+
+  // Zooms the view so that what the current slide brings out fills the room above the card, at no more than
+  // SLIDE_ZOOM_MAX. A level slide fits its named blocks, a block slide its block, and an edge slide the edge with its
+  // label and the blocks at its ends. When the slide brings out nothing, it fits the drawn element with the key, when
+  // there is one.
+  // Returns true when the view moved, and false when nothing it would fit is drawn.
+  function zoomIntoRoom(key) {
+    if (!state.current) return false;
+    const slide = EXPL.open && EXPL.slides[EXPL.current];
+    let keys = (slide && slideEmphasis(slide.target)) || (key ? [key] : []);
+    // A level slide brings out the edges at its blocks too, but those run off to blocks it does not name.
+    if (slide && slide.target.kind === "level") keys = [...keys].filter((k) => !k.startsWith("edge:"));
+    const s = stage().getBoundingClientRect();
+    if (!s.width) return false;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const k of keys) for (const n of stage().querySelectorAll(`[data-key="${CSS.escape(k)}"]`)) {
+      const b = n.getBoundingClientRect();
+      if (!b.width && !b.height) continue;
+      x0 = Math.min(x0, b.left); y0 = Math.min(y0, b.top); x1 = Math.max(x1, b.right); y1 = Math.max(y1, b.bottom);
+    }
+    if (x0 === Infinity) return false;
+    const k = state.view.w / s.width;
+    const r = { x: state.view.x + (x0 - s.left) * k, y: state.view.y + (y0 - s.top) * k, w: (x1 - x0) * k, h: (y1 - y0) * k };
+    let v = fitInRoom(r, 16);
+    // Past the cap, the view grows to the largest scale about the center of the room, which is the center of what it fits.
+    const grow = s.width / v.w / SLIDE_ZOOM_MAX;
+    if (grow > 1) {
+      const f = roomAbove() / s.height / 2, cx = v.x + v.w / 2, cy = v.y + v.h * f;
+      v = { x: cx - v.w * grow / 2, y: cy - v.h * grow * f, w: v.w * grow, h: v.h * grow };
+    }
+    animateViewBox(state.view, v, 280);
+    return true;
   }
 
   // Returns a slide's cite as a link where the changeset has what it names: a file opens its diff, a type of a type

@@ -337,8 +337,9 @@ from slide to slide until it is shown in full again, since a reviewer who minimi
 is reading the targets and not the text.
 
 The card covers part of the panel, so the viewer fits a slide's target to the room above
-it: a level fits to the stage less the card's height, a selected block or edge is brought
-into that room, and a hunk is scrolled so that its header sits above the card. The map's
+it: the view zooms so that what a level, block or edge slide brings out fills that room,
+at no more than twice the map's own scale. A level slide that names no blocks fits
+whole, and a hunk is scrolled so that its header sits above the card. The map's
 pan and zoom stay live under the card.
 
 ### 5.3 Moving among the slides
