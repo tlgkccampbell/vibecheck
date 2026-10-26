@@ -400,8 +400,9 @@ as the author's, as a path step does. A slide whose target is also a step of the
 offers **Open on the path**, which opens that step where its files can be marked, and
 its row in the face says whether that step is read. While the card is open,
 the right and left arrow keys move among the slides, Home and End go to the first and
-last, and Escape closes the card; the map's own use of those keys waits until it is
-closed. Looking around never changes the slide, and **Show again** returns to its
+last, M minimizes the card to one line of number, title and arrows so that what it
+covered shows, and Escape closes the card; the map's own use of those keys waits until it
+is closed. Looking around never changes the slide, and **Show again** returns to its
 target. Opening a slide marks nothing reviewed. When the review gets a new result, as
 when it switches to the generated concept map, the page drops the explainer, which
 named the old map's blocks, and the face offers to write one for the new map. `mock/changeset.js` carries a canned

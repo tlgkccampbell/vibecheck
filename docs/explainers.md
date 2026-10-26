@@ -322,6 +322,12 @@ and a close. It is marked "written by Claude" as the summary is. Its width is th
 measure, about eighty characters, centered, and its height is at most a third of the
 panel, with the text scrolling inside it past that.
 
+The card can be minimized, with its button or the M key, to one line that holds the
+slide's number, its title, the arrows and the close. The reviewer then sees the whole
+panel under it, and the tour goes on by the arrows and keys. The card stays minimized
+from slide to slide until it is shown in full again, since a reviewer who minimizes it
+is reading the targets and not the text.
+
 The card covers part of the panel, so the viewer fits a slide's target to the room above
 it: a level fits to the stage less the card's height, a selected block or edge is brought
 into that room, and a hunk is scrolled so that its header sits above the card. The map's

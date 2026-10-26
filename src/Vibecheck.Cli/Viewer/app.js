@@ -3797,7 +3797,7 @@
   // finished an explainer for an earlier result, which this page drops. See docs/explainers.md section 5.
   const CANNED_EXPLAINER = window.CHANGESET_EXPLAINER || null;
   const EXPL = { state: API && META.narratives ? "none" : "off", slides: [], dropped: 0, reasons: [], uncovered: [], message: "",
-    current: -1, open: false, asked: false, note: null, earlier: false };
+    current: -1, open: false, minimized: false, asked: false, note: null, earlier: false };
   // The word each kind of target shows by on a slide's row in the face and on the card.
   const SLIDE_KIND = { level: "level", edge: "edge", block: "block", decision: "decision", hunk: "hunk", type: "type", pattern: "pattern", concept: "concept", tests: "tests", figure: "figure" };
   if (CANNED_EXPLAINER) takeExplainer(CANNED_EXPLAINER);
@@ -4207,6 +4207,24 @@
     // A figure belongs to its slide's card, so the stage returns to the map when the card goes.
     if (!s) { card.hidden = true; canvas.style.removeProperty("--card-room"); leaveFigure(); return; }
     const n = EXPL.slides.length, at = EXPL.current, step = slideStep(s);
+    const previous = () => el("button", { class: "btn step-arrow", disabled: at <= 0, onclick: () => openSlide(at - 1), "aria-label": "Previous slide", title: "Previous slide (Left arrow)" }, "←");
+    const next = () => el("button", { class: "btn step-arrow", disabled: at >= n - 1, onclick: () => openSlide(at + 1), "aria-label": "Next slide", title: "Next slide (Right arrow)" }, "→");
+    const size = el("button", { class: "card-size", onclick: toggleCard, "aria-expanded": String(!EXPL.minimized),
+      title: EXPL.minimized ? "Show the slide's text (M)" : "Minimize the card to one line, to see what is behind it (M)",
+      "aria-label": EXPL.minimized ? "Show the slide's text" : "Minimize the card" }, EXPL.minimized ? "▴" : "▾");
+    const close = el("button", { class: "close", onclick: closeCard, title: "Close the card (Escape)", "aria-label": "Close the card" }, "×");
+    card.classList.toggle("min", EXPL.minimized);
+    if (EXPL.minimized) {
+      // A minimized card keeps the slide's number and title and the arrows on one line, so the tour goes on beside
+      // what the text covered.
+      card.replaceChildren(el("div", { class: "slide-head" },
+        el("span", { class: "slide-count" }, `${at + 1} of ${n}`),
+        el("h2", { class: "slide-title" }, s.title),
+        previous(), next(), size, close));
+      card.hidden = false;
+      canvas.style.setProperty("--card-room", `${card.offsetHeight + 24}px`);
+      return;
+    }
     const body = el("div", { class: "slide-body" }, el("p", { class: "slide-text" }, ...richText(s.text || "")));
     const intent = slideIntent(s);
     if (intent) body.append(el("p", { class: "slide-intent", title: "Stated in the pull request description; a claim, not evidence." }, intent));
@@ -4218,11 +4236,10 @@
         el("span", { class: "slide-count" }, `${at + 1} of ${n}`),
         el("h2", { class: "slide-title" }, s.title),
         el("span", { class: "step-kind slide-kind" }, slideKindText(s.target || {})),
-        el("button", { class: "close", onclick: closeCard, title: "Close the card (Escape)", "aria-label": "Close the card" }, "×")),
+        size, close),
       body,
       el("div", { class: "slide-foot" },
-        el("button", { class: "btn step-arrow", disabled: at <= 0, onclick: () => openSlide(at - 1), "aria-label": "Previous slide", title: "Previous slide (Left arrow)" }, "←"),
-        el("button", { class: "btn step-arrow", disabled: at >= n - 1, onclick: () => openSlide(at + 1), "aria-label": "Next slide", title: "Next slide (Right arrow)" }, "→"),
+        previous(), next(),
         el("button", { class: "link", onclick: () => showSlideTarget(s.target || {}), title: "Show this slide's target again" }, "Show again"),
         step ? el("button", { class: "link", onclick: () => openOnPath(step), title: "Open the step of the path that opens this target, where its files can be marked reviewed" }, "Open on the path") : null,
         el("span", { class: "spacer" }),
@@ -4231,10 +4248,18 @@
     canvas.style.setProperty("--card-room", `${card.offsetHeight + 24}px`);
   }
 
+  // Minimizes the card to one line, or shows the slide's text again. The choice holds as the reviewer moves among the
+  // slides, until it is toggled back. The room the map and the leaf view leave for the card follows its new height.
+  function toggleCard() {
+    EXPL.minimized = !EXPL.minimized;
+    renderCard();
+  }
+
   // Moves among the slides with the keyboard while the card is open: the right and left arrows to the next and
-  // previous slide, Home and End to the first and last, and Escape closes the card. These keys go to the card before
-  // the stage, whose arrows select siblings and whose Escape goes up a level. The help tip still takes Escape first.
-  // The room the card takes follows the card's height as the window resizes.
+  // previous slide, Home and End to the first and last, M minimizes the card or shows its text again, and Escape
+  // closes the card. These keys go to the card before the stage, whose arrows select siblings and whose Escape goes
+  // up a level. The help tip still takes Escape first. The room the card takes follows the card's height as the
+  // window resizes.
   function installSlideCard() {
     new ResizeObserver(() => { if (!$("#slidecard").hidden) $(".canvas").style.setProperty("--card-room", `${$("#slidecard").offsetHeight + 24}px`); }).observe($("#slidecard"));
     document.addEventListener("keydown", (ev) => {
@@ -4243,6 +4268,7 @@
       const last = EXPL.slides.length - 1;
       const to = { ArrowRight: EXPL.current + 1, ArrowLeft: EXPL.current - 1, Home: 0, End: last }[ev.key];
       if (ev.key === "Escape") closeCard();
+      else if (ev.key === "m" || ev.key === "M") toggleCard();
       else if (to === undefined) return;
       else if (to >= 0 && to <= last && to !== EXPL.current) openSlide(to);
       ev.preventDefault();

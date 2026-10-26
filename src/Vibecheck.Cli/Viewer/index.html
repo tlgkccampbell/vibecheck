@@ -366,6 +366,12 @@
   .slide-title { flex: 1; min-width: 0; margin: 0; font-size: 14px; }
   .slide-head .close { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
   .slide-head .close:hover { color: var(--fg); }
+  .slide-head .card-size { border: 0; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .slide-head .card-size:hover { color: var(--fg); }
+  /* A minimized card is one line: the number, the title, the arrows and the buttons. */
+  .slide-card.min .slide-head { align-items: center; padding: 5px 8px 5px 14px; }
+  .slide-card.min .slide-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  .slide-card.min .step-arrow { padding: 1px 8px; font-size: 13px; line-height: 1.2; }
   .slide-body { flex: 1; min-height: 0; overflow: auto; padding: 0 14px; }
   .slide-text { margin: 2px 0 6px; line-height: 1.5; }
   .slide-text code { font-family: var(--mono); font-size: .92em; }
