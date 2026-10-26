@@ -230,12 +230,15 @@ public sealed class ReviewServer : IAsyncDisposable
                 MapPath = options.MapPath, Root = options.Root, Solution = options.Solution, Build = options.Build, Renames = review.Renames,
             };
             var result = await ReviewPipeline.RunAsync(request, options.Analyze, options.Cache, progress, stopping.Token);
-            review.Publish(result);
+            // The result and its narratives job are recorded together, so that an explainer asked for at any point of the
+            // new run finds the narratives it must wait for.
+            var narratives = review.Publish(result, NewNarratives);
             foreach (var w in result.Info.Warnings) options.Log?.Invoke($"  {review.Id} warning: {w}");
             options.Log?.Invoke($"  {review.Id} ready");
             review.Add(new { type = "ready", url = $"/reviews/{review.Id}/" });
+            // The job is started before anything else can throw, since an explainer may already be waiting for it.
+            if (narratives is not null) Explain(review, result, narratives, regenerate: false);
             ImproveMap(review, result);
-            Explain(review, regenerate: false);
         }
         catch (Exception ex)
         {
@@ -543,26 +546,29 @@ public sealed class ReviewServer : IAsyncDisposable
         }
     }
 
+    /// <summary>Returns a new narratives job for a run, or <see langword="null"/> when Claude is not available to write narratives.</summary>
+    private NarrativeJob? NewNarratives(int run) =>
+        options.Claude is null ? null : new NarrativeJob(run, CancellationTokenSource.CreateLinkedTokenSource(stopping.Token));
+
     /// <summary>
-    /// Starts writing the narratives of a review's current result, in the background, and cancels any narratives still
-    /// being written for an earlier result. Each narrative that passes its check is sent as a <c>narrative</c> event,
-    /// and the job's progress as <c>narratives</c> events, all carrying the run of the result they explain. Claude reads
-    /// the code in a worktree of the head commit, which is kept for the life of the review. See
-    /// <c>docs/review-workflow.md</c> section 6.
+    /// Writes every narrative of a review's current result anew, in the background, in place of the narratives being
+    /// written or written before. An explainer waiting for the narratives waits for the new ones.
     /// </summary>
-    private void Explain(Review review, bool regenerate)
+    private void Renarrate(Review review)
     {
-        if (options.Claude is null) return;
-        var (result, run) = review.Current;
-        if (result is null) return;
-        var job = new NarrativeJob(run, CancellationTokenSource.CreateLinkedTokenSource(stopping.Token));
-        lock (review)
-        {
-            review.Narratives?.Cancel();
-            review.Narratives = job;
-            // An explainer names the blocks and edges of the result it was written for, so a new result stops it.
-            if (review.Explainer is { } explainer && explainer.Run != run) explainer.Cancel();
-        }
+        var (result, job) = review.Renarrate(NewNarratives);
+        if (result is not null && job is not null) Explain(review, result, job, regenerate: true);
+    }
+
+    /// <summary>
+    /// Starts a narratives job that the review already holds for a result, in the background. Each narrative that passes
+    /// its check is sent as a <c>narrative</c> event, and the job's progress as <c>narratives</c> events, all carrying
+    /// the run of the result they explain. Claude reads the code in a worktree of the head commit, which is kept for the
+    /// life of the review. See <c>docs/review-workflow.md</c> section 6.
+    /// </summary>
+    private void Explain(Review review, ReviewResult result, NarrativeJob job, bool regenerate)
+    {
+        var run = job.Run;
         job.Task = Task.Run(async () =>
         {
             var ct = job.Cancellation.Token;
@@ -597,6 +603,10 @@ public sealed class ReviewServer : IAsyncDisposable
             {
                 options.Log?.Invoke($"  {review.Id} narratives failed: {ex.Message}");
                 review.Add(new { type = "narratives", run, state = "failed", message = "Claude could not explain the changes: " + ex.Message });
+            }
+            finally
+            {
+                job.Finish();
             }
         });
     }
@@ -651,31 +661,31 @@ public sealed class ReviewServer : IAsyncDisposable
         var (result, run) = review.Current;
         if (result is null || options.Claude is null) return;
         var job = new ExplainerJob(run, CancellationTokenSource.CreateLinkedTokenSource(stopping.Token));
-        NarrativeJob? narratives;
         lock (review)
         {
             if (!regenerate && review.Explainer is { } current && current.Run == run && current.Task?.IsCompleted == false) return;
             review.Explainer?.Cancel();
             review.Explainer = job;
-            narratives = review.Narratives is { } n && n.Run == run ? n : null;
         }
         job.Task = Task.Run(async () =>
         {
             var ct = job.Cancellation.Token;
             try
             {
-                // The prompt holds the narratives, so the explainer waits for them, and a second request finds the same key.
-                if (narratives?.Task is { IsCompleted: false } writing)
+                // The prompt holds the narratives, so the explainer waits for them, and a second request finds the same
+                // key. Narratives written anew replace the job, so the wait ends only when the review's latest job is done.
+                NarrativeJob? narratives;
+                while ((narratives = review.NarrativesOf(run)) is { Finished.IsCompleted: false } pending)
                 {
-                    var total = narratives.Plan?.Sum(b => b.Keys.Count());
-                    var soFar = narratives.Written.Count;
+                    var total = pending.Plan?.Sum(b => b.Keys.Count());
+                    var soFar = pending.Written.Count;
                     review.Add(new
                     {
                         type = "explainer", run, state = "waiting", written = soFar, total,
                         message = total is null ? "Waiting for Claude to finish the narratives; the explainer is written from them."
                             : $"Waiting for Claude to finish the narratives ({soFar} of {total} written); the explainer is written from them.",
                     });
-                    await writing.WaitAsync(ct);
+                    await pending.Finished.WaitAsync(ct);
                 }
                 review.Add(new { type = "explainer", run, state = "writing", message = "Claude is writing the explainer." });
                 var top = Git.Run(options.Directory, "rev-parse", "--show-toplevel");
@@ -894,7 +904,7 @@ public sealed class ReviewServer : IAsyncDisposable
             var body = await JsonSerializer.DeserializeAsync<NarrativesBody>(ctx.Request.Body, FactsJson.Options);
             if (body?.Key is null)
             {
-                Explain(review, regenerate: true);
+                Renarrate(review);
                 return Results.Accepted();
             }
             return Regenerate(review, body.Key) ? Results.Accepted() : Results.NotFound(new { message = $"{body.Key} is not among the review's narratives." });
@@ -1287,6 +1297,17 @@ public sealed class ReviewServer : IAsyncDisposable
         /// <summary>Gets the narratives that passed their check, by key, the latest of each.</summary>
         public ConcurrentDictionary<string, Narrative> Written { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Gets a task that completes when the job stops, whether its narratives were written, failed or were cancelled.
+        /// It exists from the job's creation, before the job is started.
+        /// </summary>
+        public Task Finished => finished.Task;
+
+        private readonly TaskCompletionSource finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Records that the job has stopped, which completes <see cref="Finished"/>.</summary>
+        public void Finish() => finished.TrySetResult();
+
         /// <summary>Cancels the job. Its token source is left for its task to observe, and is collected with it.</summary>
         public void Cancel() => Cancellation.Cancel();
     }
@@ -1436,14 +1457,43 @@ public sealed class ReviewServer : IAsyncDisposable
         /// <summary>Gets the current result together with its run, read at one moment.</summary>
         public (ReviewResult? Result, int Run) Current { get { lock (this) return (Result, Run); } }
 
-        /// <summary>Records a new result, which starts a new run.</summary>
-        public void Publish(ReviewResult result)
+        /// <summary>
+        /// Records a new result, which starts a new run, together with the narratives job that <paramref name="narrate"/>
+        /// makes for the run. Both are recorded at one moment, so that the review never has a run without its narratives.
+        /// </summary>
+        /// <returns>The new narratives job, not yet started, or <see langword="null"/> when <paramref name="narrate"/> makes none.</returns>
+        public NarrativeJob? Publish(ReviewResult result, Func<int, NarrativeJob?> narrate)
         {
             lock (this)
             {
                 Result = result;
                 Run++;
+                return Renarrate(narrate).Job;
             }
+        }
+
+        /// <summary>
+        /// Replaces the narratives job of the current run with the one that <paramref name="narrate"/> makes, and cancels
+        /// the job it replaces. An explainer of an earlier run is cancelled too, since it names the blocks and edges of
+        /// the result it was written for.
+        /// </summary>
+        /// <returns>The current result and the new job, not yet started; the job is <see langword="null"/> when <paramref name="narrate"/> makes none.</returns>
+        public (ReviewResult? Result, NarrativeJob? Job) Renarrate(Func<int, NarrativeJob?> narrate)
+        {
+            lock (this)
+            {
+                if (Result is null) return (null, null);
+                Narratives?.Cancel();
+                Narratives = narrate(Run);
+                if (Explainer is { } explainer && explainer.Run != Run) explainer.Cancel();
+                return (Result, Narratives);
+            }
+        }
+
+        /// <summary>Returns the narratives job of a run, or <see langword="null"/> when the review has moved on to a later run or has none.</summary>
+        public NarrativeJob? NarrativesOf(int run)
+        {
+            lock (this) return Narratives is { } job && job.Run == run ? job : null;
         }
 
         /// <summary>Gets the number of events recorded so far.</summary>

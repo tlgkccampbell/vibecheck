@@ -729,6 +729,63 @@ public class ReviewServerTests
         Assert.Equal(["narratives writing", "explainer waiting", "narratives done", "explainer writing", "explainer done"], order);
     }
 
+    [Fact]
+    public async Task KeepsTheExplainerWaitingWhenTheNarrativesAreWrittenAnewWhileItWaits()
+    {
+        using var repo = new TempRepo();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        repo.Write("app/vibecheck.json", MapWriter.Write(TestData.Map()));
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("call the service");
+        var claude = new GatedClaude(r =>
+            r.Schema == Prompts.Read("explainer.schema.json") ? """{ "slides": [ { "title": "Thing runs the service", "text": "Thing now calls `B.Service`.", "target": { "kind": "edge", "id": "edge:a→b" }, "cites": [] } ] }"""
+            : r.Schema == Prompts.Read("explainer-retry.schema.json") ? """{ "slides": [] }"""
+            : r.Schema.Contains("\"parts\"", StringComparison.Ordinal) ? """{ "text": "Thing starts using the service.", "parts": ["a", "b"] }"""
+            : """{ "edges": [ { "from": "a", "to": "b", "text": "Thing now runs the service.", "pairs": [ { "from": "A.X.Thing", "to": "B.Service" } ] } ], "nodes": [] }""");
+        await using var server = new ReviewServer(Options(repo) with { Directory = Path.Combine(repo.Path, "app"), Claude = claude });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        await ReadEventsAsync(client, api + "/events", e => Is(e, "narratives", "writing"));
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/explainer", new { regenerate = false })).StatusCode);
+        var first = (await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "waiting")))[^1];
+
+        // Writing every narrative anew cancels the narratives the explainer waits for, while the new ones are still held.
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/narratives", new { })).StatusCode);
+        var next = (await ReadEventsAsync(client, api + "/events", e =>
+            e.GetProperty("seq").GetInt32() > first.GetProperty("seq").GetInt32() && (Is(e, "explainer", "waiting") || Is(e, "explainer", "writing"))))[^1];
+        Assert.True(Is(next, "explainer", "waiting"), "The explainer went on before the narratives written anew were done.");
+        claude.Open();
+
+        await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "done"));
+        var request = Assert.Single(claude.Requests, r => r.Schema == Prompts.Read("explainer.schema.json"));
+        Assert.Contains("- `edge:a→b`: Thing now runs the service.", request.Prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Represents a canned Claude that holds every narrative request until <see cref="Open"/> is called, and gives up a
+    /// held request when its cancellation is requested, as the real client does.
+    /// </summary>
+    private sealed class GatedClaude(Func<ClaudeRequest, string> answer) : IClaude
+    {
+        private readonly TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<ClaudeRequest> Requests { get; } = [];
+
+        /// <summary>Releases the held narrative requests and every later one.</summary>
+        public void Open() => gate.TrySetResult();
+
+        public async Task<JsonElement> AskAsync(ClaudeRequest request, CancellationToken ct = default)
+        {
+            lock (Requests) Requests.Add(request);
+            if (request.Schema != Prompts.Read("explainer.schema.json") && request.Schema != Prompts.Read("explainer-retry.schema.json"))
+                await gate.Task.WaitAsync(ct);
+            return JsonDocument.Parse(answer(request)).RootElement.Clone();
+        }
+    }
+
     private static bool Is(JsonElement e, string type, string state) =>
         e.GetProperty("type").GetString() == type && e.TryGetProperty("state", out var s) && s.GetString() == state;
 
