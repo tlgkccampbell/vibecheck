@@ -129,8 +129,8 @@ as it opens the path's steps. The kinds are:
 | `hunk` | A changed file and the index of one of its hunks | The file in the leaf view, scrolled to the hunk. |
 | `type` | A type added or moved in the change | The leaf view at the type's first changed file, as a pattern step opens its instance. |
 | `pattern` | An instance of a pattern reported in the change | The compare view, with the instance beside its nearest example. |
-| `concept` | A concept of the glossary | The Concepts face at that concept, with its types listed. |
-| `tests` | A test type with changed methods | Its first changed hunk, with the Tests face open. |
+| `concept` | A concept of the glossary | The level that draws the blocks holding its types, with those blocks brought out, and its entry with its types in the details panel. |
+| `tests` | A test type with changed methods | Its first changed hunk. |
 | `figure` | A figure of section 3.3 | The figure, drawn in the stage. |
 
 Every kind but `figure` names something the viewer already draws, and the row says which
@@ -354,7 +354,10 @@ the card is shown, as the help tip already takes Escape first. The arrows move f
 the current slide, not from where the reviewer has wandered, so that looking around
 never loses the place.
 
-Clicking elsewhere never changes the slide. The card stays with its slide, so that a
+A slide never moves the left panel off the Explainer face, since the face holds the
+reviewer's place in the tour. Only the reviewer's own choice of a face, **Open on the
+path** or a link under **Not in the explainer** moves it. Clicking elsewhere never
+changes the slide. The card stays with its slide, so that a
 reviewer who opens a diff from a slide about a decision still has the slide's words
 beside it. **Show again** opens the target again.
 

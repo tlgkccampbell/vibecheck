@@ -391,8 +391,9 @@ its target names, outlined, and dims the rest of the map for as long as it is cu
 level or view slide its named blocks with their edges, a block slide the block, and an
 edge slide the edge and the blocks at its ends. Hovering does not change it; selecting
 something else does, until **Show again**. A pattern slide opens the compare view beside the
-instance's nearest example, a concept slide the Concepts face at the concept, and a
-tests slide the test type's first changed hunk with the Tests face. A figure slide draws
+instance's nearest example, a concept slide the blocks that hold the concept's types
+with its entry in the details panel, and a tests slide the test type's first changed
+hunk. No slide moves the left panel off the Explainer face; only the reviewer does. A figure slide draws
 a small drawing of boxes, labeled arrows and groups in the stage in place of the map, in
 the map's own style, marked as drawn by Claude; the breadcrumb ends in **Figure**, a box
 whose type the change has opens the type, and moving to another slide, closing the card

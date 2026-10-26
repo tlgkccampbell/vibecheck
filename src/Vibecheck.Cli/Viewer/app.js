@@ -2339,13 +2339,14 @@
     return openLocation(s.location || ROOT, s.target);
   }
   // Clears what an earlier step or slide brought into the details panel: the selected block or edge, the decision and
-  // its tests, and the pattern and its comparison. The next step or slide then selects only what it opens.
+  // its tests, the pattern and its comparison, and a concept slide's entry. The next step or slide then selects only what it opens.
   function clearFocus() {
     state.selected = null;
     state.decision = null;
     state.decisionTests = null;
     state.pattern = null;
     state.compare = null;
+    state.slideTerm = null;
   }
   // Opens a level, or a view given as "view:<id>", at its arrival view, and selects the edge given as "from→to" when
   // the level draws it. Returns the mounted level, or null when a later mount overtook this one.
@@ -3073,6 +3074,7 @@
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
     if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
+    if (state.slideTerm && TERMS.has(state.slideTerm)) box.append(el("section", { class: "glossary-section" }, el("h3", {}, "Concept"), termEntry(TERMS.get(state.slideTerm), false)));
     if (state.figure) { box.append(figurePanel()); return; }
     const l = loc();
     const cur = state.current;
@@ -3995,13 +3997,19 @@
   }
 
   // Returns the keys of the drawing on screen that a slide's target brings out, or null when it brings out nothing
-  // there. A level slide brings out its named blocks with the edges at them, a block slide the block alone, and an
-  // edge slide the edge, its label and the blocks at its ends. A block or edge is brought out only while it is the
+  // there. A level slide brings out its named blocks with the edges at them, a block slide the block alone, an edge
+  // slide the edge, its label and the blocks at its ends, and a concept slide the blocks that hold its types. A block or edge is brought out only while it is the
   // selection, and a level's blocks only while nothing is selected, so that a reviewer's own click takes over.
   function slideEmphasis(t) {
     const l = loc();
     if (!t || !state.current || l.leaf || l.group) return null;
     const level = state.current.level;
+    if (t.kind === "concept") {
+      // A concept brings out the blocks that hold its types, while nothing is selected.
+      const term = TERMS.get(t.id);
+      const keys = term && !state.selected ? patternBlocks(term).touched : null;
+      return keys && keys.size ? keys : null;
+    }
     if (t.kind === "level" && (t.blocks || []).length) {
       const id = String(t.id);
       if (state.selected || (id.startsWith("view:") ? l.view !== id.slice(5) : l.view || l.level !== id)) return null;
@@ -4088,17 +4096,24 @@
         const near = instance.examples && instance.examples.nearest;
         return near && instance.compare[near] && p.sources[t.id] ? startCompare(p.id, t.id, near) : openType(t.id);
       }
-      case "concept":
-        return TERMS.has(t.id) ? showGlossary(null, t.id) : missing();
+      case "concept": {
+        // The concept opens on the map, at the level that draws the blocks holding its types apart, with those blocks
+        // brought out and its entry in the details panel. The panel stays on the explainer.
+        const term = TERMS.get(t.id);
+        if (!term) return missing();
+        state.slideTerm = term.key;
+        const m = await openLocation(levelShowing(term.instances.map((i) => i.leaf).filter(Boolean)));
+        if (m) setViewBox(fitInRoom(levelRect(m.layout), 10));
+        return;
+      }
       case "figure": {
         const slide = EXPL.slides[EXPL.current];
         return t.figure && (t.figure.boxes || []).length ? showFigure(t.figure, slide ? slide.title : "Figure") : missing();
       }
       case "tests": {
-        // The test type opens at its first changed hunk with the Tests face in the panel.
+        // The test type opens at its first changed hunk. The panel stays on the explainer.
         const tt = TEST_TYPES.find((x) => x.name === t.id);
         if (!tt) return missing();
-        state.panel = "tests";
         return openTestType(tt);
       }
       default:
