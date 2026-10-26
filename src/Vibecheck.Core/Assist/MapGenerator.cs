@@ -46,7 +46,7 @@ public static class MapGenerator
     /// fewest findings, preferring the later of two that tie. Each revision edits that proposal. A revision that fails, or takes longer than
     /// <see cref="RequestTimeout"/>, ends the rounds and keeps the best proposal so far. While Claude works, the progress
     /// says every few seconds how long the request has run and how much Claude has thought and written. The log
-    /// receives each reason a proposal could not be used as a map.
+    /// receives each finding of every round, and each reason a proposal could not be used as a map.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null, Action<string>? log = null) =>
@@ -91,7 +91,11 @@ public static class MapGenerator
                 progress?.Report($"round {round}: the map cannot be used, for {found.Count} reason(s)");
                 foreach (var f in findings) log?.Invoke($"round {round} was rejected: {f}");
             }
-            else progress?.Report(found.Count == 0 ? $"round {round}: the checker found nothing to fix" : $"round {round}: the checker reports {found.Count} finding(s)");
+            else
+            {
+                progress?.Report(found.Count == 0 ? $"round {round}: the checker found nothing to fix" : $"round {round}: the checker reports {found.Count} finding(s)");
+                foreach (var f in findings) log?.Invoke($"round {round} finding: {f}");
+            }
             if (map is not null && (best is null || found.Count <= best.Findings.Count))
                 (best, bestFindings) = (new GeneratedMap(map, text, round, findings), found);
             // A usable revision that fixes nothing usually meets a cycle in the code itself, which no grouping removes,

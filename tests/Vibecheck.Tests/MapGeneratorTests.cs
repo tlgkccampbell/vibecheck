@@ -142,6 +142,19 @@ public class MapGeneratorTests
     }
 
     [Fact]
+    public async Task LogsEachFindingAboutAUsableMap()
+    {
+        var claude = new FakeClaude(MissingShared, AddShared);
+        var log = new List<string>();
+
+        await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, log: log.Add);
+
+        var finding = Assert.Single(log);
+        Assert.StartsWith("round 1 finding: 2 type(s) are unsorted", finding, StringComparison.Ordinal);
+        Assert.Contains("Shared.Result", finding, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ListsASolutionByNamespaceWhenItsUnitListingIsTooLong()
     {
         var claude = new FakeClaude(MissingShared, AddShared);
