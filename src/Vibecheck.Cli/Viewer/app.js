@@ -1367,10 +1367,13 @@
     root.append(svg("rect", { x: f.x, y: f.y, width: f.w, height: f.h, class: "frame" }));
     root.append(text(f.x, f.y - 34, fitText(title.toUpperCase(), Math.max(f.w, 360), MONO.frameTitle), { class: "frame-title" }));
     root.append(text(f.x, f.y - 16, fitText("DRAWN BY CLAUDE FOR THIS SLIDE, NOT PART OF THE MAP", Math.max(f.w, 360), MONO.frameMeta), { class: "frame-meta" }));
+    // A group's label is drawn after the arrows, on a backdrop, so that an arrow entering the group passes under it.
+    const groupLabels = svg("g", { class: "fig-group-labels" });
     for (const g of layout.groups) {
-      const x = f.x + g.x, y = f.y + g.y, label = fig.groups[g.index].label;
+      const x = f.x + g.x, y = f.y + g.y, label = fitText(fig.groups[g.index].label.toUpperCase(), g.w - 20, MONO.frameMeta);
       root.append(svg("rect", { x, y, width: g.w, height: g.h, rx: 4, class: "fig-group" }));
-      root.append(text(x + 10, y + 19, fitText(label.toUpperCase(), g.w - 20, MONO.frameMeta), { class: "fig-group-label" }));
+      groupLabels.append(svg("rect", { x: x + 7, y: y + 9, width: label.length * MONO.frameMeta + 6, height: 14, class: "fig-group-label-bg" }),
+        text(x + 10, y + 19, label, { class: "fig-group-label" }));
     }
     const edgeLayer = svg("g", { class: "fig-arrows" }), labelLayer = svg("g", { class: "edge-labels" });
     fig.arrows.forEach((a, i) => {
@@ -1382,7 +1385,7 @@
       const w = labelWidth([{ t: a.label }]), x = f.x + at.x, y = f.y + at.y;
       labelLayer.append(svg("rect", { x: x - w / 2, y: y - 9, width: w, height: 18, rx: 2, class: "lbl-bg" }), text(x, y + 4, a.label, { class: "lbl-count", "text-anchor": "middle" }));
     });
-    root.append(edgeLayer);
+    root.append(edgeLayer, groupLabels);
     for (const b of fig.boxes) {
       const r = rectOf(null, layout, "box:" + b.id);
       if (!r) continue;
@@ -2314,6 +2317,7 @@
   async function openStep(s) {
     state.step = s.id;
     if (state.tab !== "map") showTab("map");
+    clearFocus();
     if (s.kind === "node") return showInContext(s.target);
     if (s.kind === "pattern") {
       // A pattern step opens its instance's file with the pattern in the details panel.
@@ -2333,6 +2337,15 @@
     if (s.kind === "file" || s.kind === "test" || s.kind === "tests") return s.files.length ? openFile(s.files[0]) : renderChanges();
     if (s.kind === "aside" || s.kind === "more") return s.files.length ? openFile(s.files[0]) : renderChanges();
     return openLocation(s.location || ROOT, s.target);
+  }
+  // Clears what an earlier step or slide brought into the details panel: the selected block or edge, the decision and
+  // its tests, and the pattern and its comparison. The next step or slide then selects only what it opens.
+  function clearFocus() {
+    state.selected = null;
+    state.decision = null;
+    state.decisionTests = null;
+    state.pattern = null;
+    state.compare = null;
   }
   // Opens a level, or a view given as "view:<id>", at its arrival view, and selects the edge given as "from→to" when
   // the level draws it. Returns the mounted level, or null when a later mount overtook this one.
@@ -3880,7 +3893,7 @@
   // text when the changeset no longer has it.
   function uncoveredRow(u) {
     const s = u.kind === "step" ? PATH.find((x) => x.id === u.id) : null;
-    if (s) return el("button", { class: "row step", onclick: () => openStep(s), title: "Open the step on the path" },
+    if (s) return el("button", { class: "row step", onclick: () => openOnPath(s), title: "Open the step on the path" },
       el("span", { class: "step-kind " + s.kind }, s.kind === "node" ? "block" : s.kind), el("span", { class: "step-text" }, stepSignal(s)));
     if (u.kind === "block" && (NODES[u.id] || isOther(u.id))) return el("button", { class: "row step", onclick: () => showInContext(u.id), title: u.id },
       el("span", { class: "step-kind node" }, "block"), el("span", { class: "step-text" }, nameOf(u.id)));
@@ -3914,6 +3927,12 @@
     else if (t.kind === "edge") {
       const e = state.current && state.current.level.edges.find((x) => x.key === "edge:" + t.id);
       list = e ? intentsOfEdge(e) : [];
+    }
+    else if (t.kind === "type") list = intentsAnchoredAt("type", t.id);
+    else if (t.kind === "hunk") {
+      // A hunk is covered by an anchor on its file and by the intents of the decision it holds, when it holds one.
+      const ofDecision = ((DECISIONS.get(`${t.file}#${t.index}`) || {}).intents || []).map((i) => INTENTS[i]).filter(Boolean);
+      list = [...new Set([...intentsAnchoredAt("file", t.file), ...ofDecision])];
     }
     return intentLine(list, false);
   }
@@ -3966,8 +3985,7 @@
     const missing = () => { EXPL.note = "This slide's target is not in the changeset, so the panel stays where it is."; renderCard(); };
     // A figure gives way to any other target, and the stage returns to the map before the target opens.
     if (t.kind !== "figure") await leaveFigure();
-    // The pattern and the comparison a pattern slide opened give way when another slide opens.
-    if (t.kind !== "pattern") { state.pattern = null; state.compare = null; }
+    clearFocus();
     switch (t.kind) {
       case "level": {
         const id = String(t.id);
@@ -4236,6 +4254,11 @@
   }
 
   // Returns the intents with an edge anchor that names one of the leaf edges a drawn edge is made of.
+  // Returns the intents with an anchor of one kind on one target: a file by its path, or a type by its full name.
+  function intentsAnchoredAt(kind, target) {
+    return INTENTS.filter((i) => i.anchors.some((a) => a.kind === kind && a.state !== "unknown" && a.target === target));
+  }
+
   function intentsOfEdge(edge) {
     return INTENTS.filter((i) => i.anchors.some((a) => a.kind === "edge" && a.state !== "unknown" && anchoredEdges(a, edge.members).length));
   }

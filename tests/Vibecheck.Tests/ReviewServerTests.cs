@@ -764,11 +764,56 @@ public class ReviewServerTests
         Assert.Contains("- `edge:a→b`: Thing now runs the service.", request.Prompt, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DropsTheExplainerOfTheSkeletonWhenTheReviewSwitchesToTheGeneratedMapAndWritesOneForTheNewResultOnRequest()
+    {
+        using var repo = new TempRepo();
+        using var temp = new TempDirectory();
+        ReviewPipelineTests.WriteApp(repo, "class Thing { }\n");
+        var before = repo.Commit("one");
+        ReviewPipelineTests.WriteApp(repo, "class Thing { void Go() => Service.Run(); }\n");
+        var after = repo.Commit("two");
+        // The explainer is held until the review has switched, so that the switch finds it still being written.
+        var claude = new GatedClaude(r =>
+            r.Schema == Prompts.Read("explainer.schema.json") ? """
+                { "slides": [ { "title": "A call goes one way", "text": "Thing asks and the service answers.", "target": { "kind": "figure", "id": "figure" }, "cites": [],
+                  "figure": { "boxes": [ { "id": "t", "label": "Thing" }, { "id": "s", "label": "Service" } ], "arrows": [ { "from": "t", "to": "s", "label": "runs" } ] } } ] }
+                """
+            : r.Schema == Prompts.Read("explainer-retry.schema.json") ? """{ "slides": [] }"""
+            : r.Schema == Prompts.Read("map.schema.json") ? MapGeneratorTests.Complete
+            : r.Schema == Prompts.Read("summary.schema.json") ? """{ "text": "", "parts": [] }""" : """{ "edges": [], "nodes": [] }""",
+            r => r.Schema == Prompts.Read("explainer.schema.json") || r.Schema == Prompts.Read("explainer-retry.schema.json"));
+        await using var server = new ReviewServer(Options(repo) with { Cache = new ReviewCache(temp.Path, Path.Combine(temp.Path, "repo")), Claude = claude });
+        using var client = Client();
+        await client.GetAsync(await server.StartAsync());
+        var api = $"{server.BaseAddress}/api/reviews/{before[..7]}-{after[..7]}";
+        await client.PostAsJsonAsync(server.BaseAddress + "/api/reviews", new { range = $"{before}..{after}" });
+        await ReadEventsAsync(client, api + "/events", e => Is(e, "map", "ready"));
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/explainer", new { regenerate = false })).StatusCode);
+        var writing = (await ReadEventsAsync(client, api + "/events", e => Is(e, "explainer", "writing")))[^1];
+        Assert.Equal(1, writing.GetProperty("run").GetInt32());
+
+        // The switch to the generated map gives the review a new result, as the viewer's button does.
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/map", new { action = "switch" })).StatusCode);
+        var events = await ReadEventsAsync(client, api + "/events", e => Is(e, "narratives", "done") && e.GetProperty("run").GetInt32() == 2);
+        Assert.Contains("\"mapKind\":\"generated\"", await client.GetStringAsync($"{server.BaseAddress}/reviews/{before[..7]}-{after[..7]}/changeset.js"), StringComparison.Ordinal);
+        claude.Open();
+
+        // The explainer of the skeleton was cancelled, and none is written for the new result until it is asked for.
+        Assert.All(events.Where(e => e.GetProperty("type").GetString() == "explainer"), e => Assert.Equal(1, e.GetProperty("run").GetInt32()));
+        Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(api + "/explainer", new { regenerate = false })).StatusCode);
+        events = await ReadEventsAsync(client, api + "/events", e => e.GetProperty("type").GetString() == "explainer" && e.GetProperty("run").GetInt32() == 2 && Is(e, "explainer", "done") || Is(e, "explainer", "failed"));
+        Assert.True(Is(events[^1], "explainer", "done"), events[^1].ToString());
+        Assert.Equal("A call goes one way", events[^1].GetProperty("slides")[0].GetProperty("title").GetString());
+        Assert.DoesNotContain(events, e => e.GetProperty("type").GetString() == "explainer" && e.GetProperty("run").GetInt32() == 1 && (Is(e, "explainer", "done") || Is(e, "explainer", "failed")));
+    }
+
     /// <summary>
-    /// Represents a canned Claude that holds every narrative request until <see cref="Open"/> is called, and gives up a
-    /// held request when its cancellation is requested, as the real client does.
+    /// Represents a canned Claude that holds the requests that <c>hold</c> selects, or every narrative request when it
+    /// selects none, until <see cref="Open"/> is called. It gives up a held request when its cancellation is requested,
+    /// as the real client does.
     /// </summary>
-    private sealed class GatedClaude(Func<ClaudeRequest, string> answer) : IClaude
+    private sealed class GatedClaude(Func<ClaudeRequest, string> answer, Func<ClaudeRequest, bool>? hold = null) : IClaude
     {
         private readonly TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -780,7 +825,7 @@ public class ReviewServerTests
         public async Task<JsonElement> AskAsync(ClaudeRequest request, CancellationToken ct = default)
         {
             lock (Requests) Requests.Add(request);
-            if (request.Schema != Prompts.Read("explainer.schema.json") && request.Schema != Prompts.Read("explainer-retry.schema.json"))
+            if (hold?.Invoke(request) ?? (request.Schema != Prompts.Read("explainer.schema.json") && request.Schema != Prompts.Read("explainer-retry.schema.json")))
                 await gate.Task.WaitAsync(ct);
             return JsonDocument.Parse(answer(request)).RootElement.Clone();
         }
