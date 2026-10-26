@@ -271,7 +271,9 @@ that targets it or anything inside it. Coverage is a fact about the explainer, n
 rejection, since a story may leave a thing out on purpose. The one retry request
 therefore carries both the rejected slides with their reasons and the uncovered steps
 and blocks, and asks for a slide on each uncovered one or a sentence on an existing
-slide that names it. What is still uncovered after the retry is listed in the face, as
+slide that names it. An uncovered block also names the level slides that show its
+level, so that a slide whose text speaks of the block but leaves it out of `blocks` can
+bring it out. What is still uncovered after the retry is listed in the face, as
 section 5.1 describes, so the reviewer sees what the tour skipped.
 
 The text is not checked. A type named in backticks is rendered as a link when the

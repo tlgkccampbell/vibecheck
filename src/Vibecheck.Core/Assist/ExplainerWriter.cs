@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -338,7 +339,7 @@ public static class ExplainerWriter
         Steps(sb, catalog, catalog.FirstTier);
         sb.Append("\n### The rest of the reading path\n\n");
         Steps(sb, catalog, catalog.SecondTier);
-        sb.Append("\n### Levels and views\n\nA `level` target shows a whole level or view. Name `blocks` from its blocks to bring them out.\n\n");
+        sb.Append("\n### Levels and views\n\nA `level` target shows a whole level or view. Name `blocks` from its blocks to bring them out, and name every one the text speaks of.\n\n");
         List(sb, catalog.Levels);
         sb.Append("\n### Changed edges\n\nAn edge from one block to another counts the references from types in the first to types in the second. Each lists the type pairs whose references changed, base → head.\n\n");
         var hunksOf = cs.Hunks.ToDictionary(h => h.Path, StringComparer.Ordinal);
@@ -405,7 +406,8 @@ public static class ExplainerWriter
 
     /// <summary>
     /// Returns the section added to the prompt for the one retry: the explainer as answered, with the reason each rejected
-    /// slide was rejected, and the steps and blocks no slide covers.
+    /// slide was rejected, and the steps and blocks no slide covers. An uncovered block names the passed level slides that
+    /// show its level, since bringing it out there covers it.
     /// </summary>
     private static string RetrySection(ExplainerCatalog catalog, List<SlideCheck> first, List<ExplainerGap> gaps)
     {
@@ -425,7 +427,15 @@ public static class ExplainerWriter
             {
                 if (g.Kind == "step")
                     sb.Append($"- the first-tier step: {steps[g.Id].Signal}{(catalog.StepTargets.TryGetValue(g.Id, out var t) ? $" (`{t}`)" : "")}\n");
-                else sb.Append($"- the changed block `block:{g.Id}`\n");
+                else
+                {
+                    var shown = first.Select((c, i) => (c, Number: i + 1)).Where(x => x.c.Passed && x.c.Entry!.Kind == "level" && x.c.Entry.Blocks.Contains(g.Id))
+                        .Select(x => x.Number.ToString(CultureInfo.InvariantCulture)).ToList();
+                    sb.Append($"- the changed block `block:{g.Id}`");
+                    if (shown.Count > 0)
+                        sb.Append($", a block of the level that slide {string.Join(" and ", shown)} shows; if that slide's text speaks of it, give the slide again with `{g.Id}` added to its `blocks`");
+                    sb.Append('\n');
+                }
             }
         }
         sb.Append("""

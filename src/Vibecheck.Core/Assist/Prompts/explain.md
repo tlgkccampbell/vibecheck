@@ -30,7 +30,7 @@ Each slide has:
 
 - A **title** of a few words that states what the slide claims, such as "Tokens hold no positions", rather than naming a topic.
 - A **text** of two to five sentences. It says what the thing the slide points at is for and how it fits the story. It does not repeat counts or restate the diff; the viewer shows those beside it.
-- A **target**: the kind and identifier of one catalog entry, which the viewer shows while the slide is on screen. For a `level` target, you may also name the blocks to bring out, from that level's blocks. Choose the target that best illustrates the text: a level with its changed blocks brought out for an overview, a type for a new structure, a decision or a hunk for a particular piece of code, an edge for a dependency, a concept for a family of types, a test type for how something is tested.
+- A **target**: the kind and identifier of one catalog entry, which the viewer shows while the slide is on screen. For a `level` target, you may also name the blocks to bring out, from that level's blocks. The viewer brings out only the blocks you name, so name every block of the level that the text speaks of. Choose the target that best illustrates the text: a level with its changed blocks brought out for an overview, a type for a new structure, a decision or a hunk for a particular piece of code, an edge for a dependency, a concept for a family of types, a test type for how something is tested.
 - **Cites**: the changed files and the type pairs the text rests on, written exactly as the catalog lists them, a type pair as `From → To`. A slide whose target is a level may cite nothing.
 
 A slide whose target or cites name anything outside the catalog is discarded, so point only at what is listed.

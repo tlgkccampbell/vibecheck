@@ -385,6 +385,25 @@ public class ExplainerTests
     }
 
     [Fact]
+    public async Task AsksForEveryBlockTheTextNamesAndPointsAnUncoveredBlockAtTheLevelSlideThatShowsIt()
+    {
+        var catalog = ExplainerPlanner.Plan(Scenario());
+        Assert.Contains("name every block of the level that the text speaks of", ExplainerWriter.Prompt(catalog, Context), StringComparison.Ordinal);
+
+        // The overview shows the top level but brings out only B and C, so A is uncovered until the retry adds it there.
+        var claude = new FakeClaude(
+            Answer(S("Clock learns UTC", "level", "level:root", blocks: ["b", "c"]), Complete[1], Complete[2]),
+            Answer(S("Clock learns UTC", "level", "level:root", blocks: ["a", "b", "c"], replaces: 1)));
+
+        var explainer = await ExplainerWriter.WriteAsync(catalog, Context, claude, null);
+
+        Assert.Contains("- the changed block `block:a`, a block of the level that slide 1 shows; if that slide's text speaks of it, give the slide again with `a` added to its `blocks`\n",
+            claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Equal(["a", "b", "c"], explainer.Slides[0].Target.Blocks);
+        Assert.DoesNotContain(explainer.Uncovered, g => g.Kind == "block");
+    }
+
+    [Fact]
     public async Task ReportsWhatStaysUncoveredAndFailsWhenNoSlidePasses()
     {
         var catalog = ExplainerPlanner.Plan(Scenario());
