@@ -27,6 +27,9 @@ public sealed record Changeset
     /// <summary>Every type at either end, with the leaf it binds to and the files that declare it, so that the viewer can descend from a leaf to its types to their files.</summary>
     public required List<TypeChange> Types { get; init; }
 
+    /// <summary>Gets where each type at head is declared, test types and nested types included, as <see cref="TypeLocations"/> finds them.</summary>
+    public List<TypeLocation> Locations { get; init; } = [];
+
     /// <summary>Every pair of leaves, or leaf and external, with references at base or at head. The viewer aggregates these to the level it draws.</summary>
     public required List<EdgeChange> Edges { get; init; }
 
@@ -191,6 +194,9 @@ public sealed record TypeMove(string Name, string? LeafBase, string? LeafHead, s
 /// the type was removed.
 /// </summary>
 public sealed record TypeChange(string Name, string? LeafBase, string? LeafHead, IReadOnlyList<string> Files, string Status);
+
+/// <summary>Represents where a type is declared at head: its name, the file that declares most of it, and the first line of its declaration there.</summary>
+public sealed record TypeLocation(string Name, string File, int Line);
 
 /// <summary>
 /// File counts under a node at head, and how many of them changed. The status is <c>added</c>, <c>removed</c>,

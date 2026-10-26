@@ -1434,7 +1434,7 @@
     const digits = String(Math.max(nums.a, nums.b) + rows.length).length;
     const ln = () => el("col", { style: `width: calc(${digits}ch + 17px)` });
     const trivial = hunk.trivial && state.opts.mute;
-    const table = el("table", { class: "diff" + (trivial ? " trivial" : "") }, el("caption", {}, hunk.header + (trivial ? " · " + (reasonText(hunk.reason, hunk) || "no code changed") : "")),
+    const table = el("table", { class: "diff" + (trivial ? " trivial" : ""), "data-path": path }, el("caption", {}, hunk.header + (trivial ? " · " + (reasonText(hunk.reason, hunk) || "no code changed") : "")),
       el("colgroup", {}, ln(), el("col", {}), ln(), el("col", {})));
     const body = el("tbody");
     const lit = highlightHunk(path, hunk.lines);
@@ -2634,7 +2634,106 @@
     document.addEventListener("scroll", () => { if (shown) hide(); }, { capture: true, passive: true });
   }
 
-  const PANEL_TITLE = { path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
+  // ---------- Type definitions ----------
+  // Ctrl+click on a type's name in a line of code, or Cmd+click on macOS, opens the type's declaration on GitHub in a new
+  // window, at the latest commit the review examines. Any type at head can be opened, whether or not the change touches
+  // it. While the key is held, the name under the pointer is underlined. The server gives the address of the files on
+  // GitHub, so a page without GitHub opens nothing.
+  const LOCATIONS = new Map();
+  const FILE_TYPES = new Map();
+  for (const l of CS.locations || []) {
+    const name = shortName(l.name).replace(/<.*$/, "");
+    if (!LOCATIONS.has(name)) LOCATIONS.set(name, []);
+    LOCATIONS.get(name).push(l);
+    if (!FILE_TYPES.has(l.file)) FILE_TYPES.set(l.file, []);
+    FILE_TYPES.get(l.file).push(l.name);
+  }
+  // Returns how many leading namespace segments two qualified names share.
+  function sharedSegments(a, b) {
+    const x = a.split("."), y = b.split(".");
+    let n = 0;
+    while (n < x.length - 1 && n < y.length - 1 && x[n] === y[n]) n++;
+    return n;
+  }
+  // Returns the location of the type a simple name most likely means in a file, or null when no type at head has the
+  // name. Among types that share the name, a type declared in the file comes first, then the type that shares the most
+  // namespace segments with a type declared in the file, then the first by name.
+  function locationOf(name, path) {
+    const all = LOCATIONS.get(name);
+    if (!all) return null;
+    if (all.length === 1 || !path) return all[0];
+    const near = FILE_TYPES.get(path) || [];
+    const rank = (l) => (l.file === path ? 1000 : 0) + Math.max(0, ...near.map((n) => sharedSegments(l.name, n)));
+    return byRank(all, (l) => -rank(l))[0];
+  }
+  // Returns the identifier under a point of a code cell, with the cell, the identifier's location at head and the
+  // range of its text, or null when the point is over no type's name.
+  function typeAt(x, y) {
+    const caret = document.caretPositionFromPoint ? document.caretPositionFromPoint(x, y) : null;
+    const node = caret ? caret.offsetNode : document.caretRangeFromPoint?.(x, y)?.startContainer;
+    const offset = caret ? caret.offset : document.caretRangeFromPoint?.(x, y)?.startOffset;
+    const td = node && (node.nodeType === Node.TEXT_NODE ? node.parentElement : node)?.closest("td.code");
+    if (!td) return null;
+    // The cell's text is split among highlight.js and term spans, so the identifier is found in the whole text.
+    const before = document.createRange();
+    before.setStart(td, 0);
+    before.setEnd(node, offset);
+    const at = before.toString().length, text = td.textContent;
+    let start = at, end = at;
+    while (start > 0 && /[\p{L}\p{N}_]/u.test(text[start - 1])) start--;
+    while (end < text.length && /[\p{L}\p{N}_]/u.test(text[end])) end++;
+    const word = text.slice(start, end);
+    if (!/^[\p{L}_]/u.test(word)) return null;
+    const location = locationOf(word, td.closest("[data-path]")?.dataset.path);
+    return location ? { td, location, range: textRange(td, start, end) } : null;
+  }
+  // Returns the range of the characters of an element's text from one offset to another.
+  function textRange(root, start, end) {
+    const range = document.createRange(), walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let seen = 0;
+    while (walker.nextNode()) {
+      const node = walker.currentNode, n = node.data.length;
+      if (start >= seen && start <= seen + n) range.setStart(node, start - seen);
+      if (end >= seen && end <= seen + n) { range.setEnd(node, end - seen); break; }
+      seen += n;
+    }
+    return range;
+  }
+  function installTypeLinks() {
+    if (!META.blob) return;
+    const view = $("#leafview");
+    const mark = typeof Highlight === "function" && CSS.highlights ? new Highlight() : null;
+    if (mark) CSS.highlights.set("type-link", mark);
+    let pointer = null, linked = null;
+    // Underlines the name under the pointer while Ctrl or Cmd is held, and shows where it leads.
+    const show = (held) => {
+      const hit = held && pointer ? typeAt(pointer.x, pointer.y) : null;
+      if (linked && linked !== hit?.td) { linked.classList.remove("type-link"); linked.removeAttribute("title"); }
+      mark?.clear();
+      linked = hit ? hit.td : null;
+      if (!hit) return;
+      hit.td.classList.add("type-link");
+      hit.td.title = `Open ${hit.location.name} on GitHub`;
+      mark?.add(hit.range);
+    };
+    view.addEventListener("mousemove", (ev) => { pointer = { x: ev.clientX, y: ev.clientY }; show(ev.ctrlKey || ev.metaKey); });
+    view.addEventListener("mouseleave", () => { pointer = null; show(false); });
+    document.addEventListener("keydown", (ev) => { if (ev.key === "Control" || ev.key === "Meta") show(true); });
+    document.addEventListener("keyup", (ev) => { if (ev.key === "Control" || ev.key === "Meta") show(false); });
+    window.addEventListener("blur", () => show(false));
+    // The click is taken before a term's own click opens the glossary.
+    view.addEventListener("click", (ev) => {
+      if (!(ev.ctrlKey || ev.metaKey)) return;
+      const hit = typeAt(ev.clientX, ev.clientY);
+      if (!hit) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const path = hit.location.file.split("/").map(encodeURIComponent).join("/");
+      window.open(`${META.blob}${path}#L${hit.location.line}`, "_blank", "noopener");
+    }, { capture: true });
+  }
+
+  const PANEL_TITLE ={ path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
   // The panels that put badges on the blocks, so that switching to or from one draws the map again.
   const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
@@ -4472,6 +4571,7 @@
     installTip();
     installTermTips();
     installHelpTips();
+    installTypeLinks();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
     $("#mute").addEventListener("change", (ev) => { state.opts.mute = ev.target.checked; redraw(); });

@@ -540,6 +540,9 @@
   table.diff td.ln { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--line); font-variant-numeric: tabular-nums; }
   /* A long line wraps within its half, under its own code, so it never widens one side of the split. */
   table.diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* While Ctrl or Cmd is held, the type name under the pointer is underlined as a link to its declaration on GitHub. */
+  table.diff td.code.type-link { cursor: pointer; }
+  ::highlight(type-link) { color: var(--accent); text-decoration: underline; }
   table.diff td.del { background: var(--removed-bg); }
   table.diff td.add { background: var(--added-bg); }
   table.diff td.empty { background: var(--grid); }

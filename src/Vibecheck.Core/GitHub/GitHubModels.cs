@@ -11,6 +11,9 @@ public sealed record GitHubRepository(string Host, string Owner, string Name)
 
     /// <summary>Gets a value indicating whether the repository is on GitHub.com rather than on an Enterprise Server.</summary>
     public bool IsDotCom => Host.Equals("github.com", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Returns the web address that a file's path, relative to the repository's root, follows to show the file at a commit.</summary>
+    public string BlobUrl(string commit) => $"https://{Host}/{Owner}/{Name}/blob/{commit}/";
 }
 
 /// <summary>

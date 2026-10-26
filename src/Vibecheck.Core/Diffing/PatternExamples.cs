@@ -93,8 +93,7 @@ public static class PatternExamples
     /// <param name="texts">The texts of files at head, by path.</param>
     public static Outline? OutlineOf(string type, IReadOnlyList<Declaration> declarations, IReadOnlyDictionary<string, string> texts)
     {
-        var decl = declarations.Where(d => d.Type == type && d.Kind == "type" && d.Container is null)
-            .OrderByDescending(d => d.LastLine - d.FirstLine).ThenBy(d => d.File, StringComparer.Ordinal).FirstOrDefault();
+        var decl = TypeLocations.MainPart(declarations.Where(d => d.Type == type && d.Kind == "type" && d.Container is null));
         if (decl is null || !texts.TryGetValue(decl.File, out var text)) return null;
         var members = declarations.Where(d => d.Type == type && d.Container == decl.Symbol && d.File == decl.File && d.FirstLine >= decl.FirstLine && d.LastLine <= decl.LastLine)
             .OrderBy(d => d.FirstLine).ToList();
