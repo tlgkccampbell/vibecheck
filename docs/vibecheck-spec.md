@@ -761,7 +761,9 @@ as the differences:
   carries the indices of the intents that cover it.
 
 Nothing in the changeset document is interpreted. Narrative summaries, if any, are a
-separate layer that cites entries in this document by identifier. On a solution of a
+separate layer that cites entries in this document by identifier, and so is an
+explainer, whose slides point at entries by identifier and are not members of the
+document. See [explainers.md](explainers.md). On a solution of a
 thousand types the changeset for a commit touching twenty files is under a megabyte,
 most of it the type roster and the hunks.
 

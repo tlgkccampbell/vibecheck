@@ -32,6 +32,13 @@ public sealed record NarrativeBatch(string Id, string Kind, string Location, IRe
     };
 }
 
+/// <summary>Represents a level or a view whose blocks have narratives, with the changed edges it draws and its changed children.</summary>
+/// <param name="Kind">Either <c>level</c> or <c>view</c>.</param>
+/// <param name="Id">The level's node identifier, <see cref="Identifiers.Root"/> for the top level, or the view's identifier.</param>
+/// <param name="Edges">The changed edges the location draws between its blocks, and at the top level to externals.</param>
+/// <param name="Nodes">The changed children of a level, largest change first. A view lists none.</param>
+public sealed record NarrativeLocation(string Kind, string Id, IReadOnlyList<DrawnEdge> Edges, IReadOnlyList<string> Nodes);
+
 /// <summary>
 /// Decides what a changeset's narratives explain and in which order they are requested. Each level of the map draws
 /// its children, and each view draws its groups, with the changeset's leaf-pair edges aggregated to them as the
@@ -53,31 +60,7 @@ public static class NarrativePlanner
     public static List<NarrativeBatch> Plan(Changeset changeset, int batchSize = BatchSize)
     {
         var map = changeset.Map;
-        var home = map.Views.FirstOrDefault(v => v.Value.Level == Identifiers.Root).Key;
-        var locations = new List<(string Kind, string Id, int Depth, List<DrawnEdge> Edges, List<string> Nodes)>();
-        foreach (var level in Levels(map))
-        {
-            var children = DrawnEdges.Children(changeset, level);
-            var edges = DrawnEdges.Edges(changeset, DrawnEdges.Owners(changeset, children), externals: level == Identifiers.Root);
-            var nodes = children.Where(c => changeset.Content.TryGetValue(c, out var content) && content.Status != "unchanged")
-                .OrderByDescending(c => Changed(changeset.Content[c])).ThenBy(c => c, StringComparer.Ordinal).ToList();
-            locations.Add(("level", level, Depth(level), edges, nodes));
-        }
-        foreach (var (id, view) in map.Views)
-        {
-            var owners = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (groupId, group) in view.Groups)
-                foreach (var leaf in group.Leaves) owners[leaf] = DrawnEdges.GroupKey(id, groupId);
-            locations.Add(("view", id, Depth(view.Level), DrawnEdges.Edges(changeset, owners, externals: false), []));
-        }
-
-        var ordered = locations
-            .Where(l => l.Edges.Count + l.Nodes.Count > 0)
-            .OrderBy(l => l.Kind == "view" && l.Id == home ? 0 : 1)
-            .ThenBy(l => home is null && l.Kind == "level" && l.Id == Identifiers.Root ? 0 : 1)
-            .ThenBy(l => l.Depth)
-            .ThenByDescending(l => l.Edges.Sum(e => Math.Abs(e.Head - e.Base)) + l.Nodes.Sum(n => Changed(changeset.Content[n])))
-            .ThenBy(l => l.Kind, StringComparer.Ordinal).ThenBy(l => l.Id, StringComparer.Ordinal);
+        var ordered = Locations(changeset);
 
         var batches = new List<NarrativeBatch> { new(Narrative.SummaryKey, "summary", Identifiers.Root, [], []) };
         // A pattern's name shows on every chip of its instances, so it is asked for early, and its request is cheap.
@@ -102,6 +85,44 @@ public static class NarrativePlanner
         for (var i = 0; i < terms.Count; i += batchSize)
             batches.Add(new NarrativeBatch($"term:{Identifiers.Root}/{i / batchSize + 1}", "term", Identifiers.Root, [], []) { Terms = terms.Skip(i).Take(batchSize).ToList() });
         return batches;
+    }
+
+    /// <summary>
+    /// Returns the levels and views that draw a changed edge or hold a changed node, each with those edges and nodes, in
+    /// the order their narratives are requested: the location the viewer opens on first, which is the top level's first
+    /// view or else the top level, then the others breadth first, larger changes first within each depth. A view's
+    /// groups have no narratives of their own, so a view lists no nodes.
+    /// </summary>
+    public static List<NarrativeLocation> Locations(Changeset changeset)
+    {
+        var map = changeset.Map;
+        var home = map.Views.FirstOrDefault(v => v.Value.Level == Identifiers.Root).Key;
+        var locations = new List<(string Kind, string Id, int Depth, List<DrawnEdge> Edges, List<string> Nodes)>();
+        foreach (var level in Levels(map))
+        {
+            var children = DrawnEdges.Children(changeset, level);
+            var edges = DrawnEdges.Edges(changeset, DrawnEdges.Owners(changeset, children), externals: level == Identifiers.Root);
+            var nodes = children.Where(c => changeset.Content.TryGetValue(c, out var content) && content.Status != "unchanged")
+                .OrderByDescending(c => Changed(changeset.Content[c])).ThenBy(c => c, StringComparer.Ordinal).ToList();
+            locations.Add(("level", level, Depth(level), edges, nodes));
+        }
+        foreach (var (id, view) in map.Views)
+        {
+            var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (groupId, group) in view.Groups)
+                foreach (var leaf in group.Leaves) owners[leaf] = DrawnEdges.GroupKey(id, groupId);
+            locations.Add(("view", id, Depth(view.Level), DrawnEdges.Edges(changeset, owners, externals: false), []));
+        }
+
+        return locations
+            .Where(l => l.Edges.Count + l.Nodes.Count > 0)
+            .OrderBy(l => l.Kind == "view" && l.Id == home ? 0 : 1)
+            .ThenBy(l => home is null && l.Kind == "level" && l.Id == Identifiers.Root ? 0 : 1)
+            .ThenBy(l => l.Depth)
+            .ThenByDescending(l => l.Edges.Sum(e => Math.Abs(e.Head - e.Base)) + l.Nodes.Sum(n => Changed(changeset.Content[n])))
+            .ThenBy(l => l.Kind, StringComparer.Ordinal).ThenBy(l => l.Id, StringComparer.Ordinal)
+            .Select(l => new NarrativeLocation(l.Kind, l.Id, l.Edges, l.Nodes))
+            .ToList();
     }
 
     /// <summary>Returns the top level and every container of a map.</summary>

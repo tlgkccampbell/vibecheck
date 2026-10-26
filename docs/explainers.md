@@ -12,7 +12,7 @@ the reading path and concepts of [attention.md](attention.md), the compare view 
 [patterns.md](patterns.md) and the intents of [intent.md](intent.md), and it lists, in
 section 9, the changes it makes to those documents.
 
-None of the phases of section 11 is built.
+All three phases of section 11 are built.
 
 The design rests on two principles. First, an explainer is a story, and the viewer is
 its illustrations. Every slide points at something the changeset already holds, by an
@@ -57,8 +57,10 @@ has no narratives.
 
 ## 2. The reviewer's path
 
-1. The changeset opens as it does now. The left panel's switch gains **Explainer**
-   beside Path, Changes, Intent, Concepts, Patterns and Tests. Its face says in one
+1. The changeset opens as it does now. The left panel's title is a menu of its faces,
+   and **Explainer** sits second in it, after Path and before Changes, Intent,
+   Concepts, Patterns and Tests. The menu replaced a row of tabs, which seven faces
+   made wider than the panel, so that the last tabs were cut off. Its face says in one
    paragraph what an explainer is and offers **Write it**, with the cost in plain
    words: one request to Claude, about a minute.
 2. While Claude writes, the face shows progress, and the reviewer goes on with the map.
@@ -121,14 +123,14 @@ as it opens the path's steps. The kinds are:
 | Kind | Names | The viewer shows |
 |---|---|---|
 | `level` | A level, or a view, and optionally the blocks to bring out | The level or view, with the named blocks outlined and the rest dimmed, as hovering a pattern outlines its blocks. |
-| `edge` | A changed edge at a level or a view, as `from→to` | The level or view with the edge selected, so that its narrative is in the details panel. |
-| `block` | A changed block, or a view's group | The block in context, selected, with its details. |
+| `edge` | A changed edge at a level or a view, as `from→to` | The level or view with the edge selected and brought out with the blocks at its ends, the rest dimmed, so that its narrative is in the details panel. |
+| `block` | A changed block, or a view's group | The block in context, selected and brought out, the rest dimmed, with its details. |
 | `decision` | A decision | Its hunk in the leaf view, with its reach in the details panel and its arrows on the map, as selecting a decision does. |
 | `hunk` | A changed file and the index of one of its hunks | The file in the leaf view, scrolled to the hunk. |
 | `type` | A type added or moved in the change | The leaf view at the type's first changed file, as a pattern step opens its instance. |
 | `pattern` | An instance of a pattern reported in the change | The compare view, with the instance beside its nearest example. |
-| `concept` | A concept of the glossary | The Concepts face at that concept, with its types listed. |
-| `tests` | A test type with changed methods | Its first changed hunk, with the Tests face open. |
+| `concept` | A concept of the glossary | The level that draws the blocks holding its types, with those blocks brought out, and its entry with its types in the details panel. |
+| `tests` | A test type with changed methods | Its first changed hunk. |
 | `figure` | A figure of section 3.3 | The figure, drawn in the stage. |
 
 Every kind but `figure` names something the viewer already draws, and the row says which
@@ -147,10 +149,46 @@ figure looks like the map rather than like a picture pasted over it, and so that
 legible in both themes. A box whose type names a type of the changeset is a link that
 opens the type.
 
+A figure is laid out in layers, in the direction it reads, and not settled as the map's
+blocks are. Its arrows say what refers to or calls what, so its order is its meaning, and
+a settling layout would give that order up to keep the boxes apart. ELK also routes the
+arrows, at right angles and clear of the boxes, and sets each label on its own arrow in
+room it leaves between the layers. The first figure drawn in a real review, on pull
+request 3, showed why: drawn as the map draws its edges, its arrows crossed and two
+labels sat on the wrong arrows.
+
 The prompt says that a figure is the last resort, that at most two slides of an explainer
 may carry one, and that a slide about a type whose declaration the viewer can show
 points at the type instead. Figures are phase 3 of section 11, so that the first two
 phases find out how often Claude reaches for one when it is not offered.
+
+As built, a slide with a figure has the target kind `figure`, and its answer carries a
+`figure` of `boxes`, each with an `id`, a `label` and an optional `type`, `arrows`, each
+`from` one box `to` another with an optional `label`, and optional `groups`, each with a
+`label` and the ids of its `boxes`. The check moves the figure onto the resolved target,
+as `Figure` in `Vibecheck.Assist`, and rejects it when it is missing, has fewer than two
+boxes or more than twelve, more than sixteen arrows or more than four groups, a label
+longer than forty characters, a box without an id or a label, an id given twice, an arrow
+or a group that names a box the figure does not have, an arrow from a box to itself, or a
+box in two groups. A box's type is kept whether or not the changeset has it, and the
+viewer draws a type it does not have as text rather than as a link. The limit of two is
+the check's as well as the prompt's: the third figure of an answer is rejected with that
+reason, the retry may not add a figure past those that passed the first time, and a
+figure that fails twice is dropped like any slide. A figure covers what its cites name
+and nothing else, since it names nothing in the catalog.
+
+The viewer lays a figure out with ELK's layered algorithm, each group a node that holds
+its boxes, both left to right and top to bottom, and keeps the direction that draws it
+larger in the room above the card, at no more than the map's own scale. Boxes are drawn
+as blocks, with the label in the header band and the type's short name under it, and
+arrows and their labels as the map's edges. The frame is titled with the slide's title
+and says that Claude drew it and that it is not part of the map. While a figure is shown,
+the trail keeps the location the stage returns to, the breadcrumb ends in **Figure**, the
+view switch is hidden, and the details panel describes the figure and lists its types.
+Any mount of a location ends the figure: another slide, closing the card, a crumb, a box
+that opens its type, or any other navigation. A redraw, as when a mark or an option
+changes, leaves it in place. The done event and the server log count the slides that
+carry a figure, so that a real run reports how often Claude reaches for one.
 
 ## 4. Writing an explainer
 
@@ -220,7 +258,7 @@ narrative prompts, versioned together.
 `ExplainerWriter.Check` resolves each slide against the catalog. A slide is rejected when
 its target names nothing in the catalog, when a block it brings out is not under its
 level, or when a cite names a file not changed or a pair not in some changed edge's
-evidence. As with narratives, the rejected slides are requested once more together, with
+evidence. A figure slide is also rejected by the rules of section 3.3. As with narratives, the rejected slides are requested once more together, with
 the slides that passed as context and the reason each was rejected, and a slide that
 fails twice is dropped. The explainer keeps its order with the gaps closed, and the face
 says how many slides were dropped and why. An answer with no slide that passes counts as
@@ -251,8 +289,10 @@ its place.
 The server gains `POST /api/reviews/{id}/explainer`, with `regenerate` in its body,
 which answers Accepted and writes in the background. Progress and the result go to the
 page as `explainer` events carrying the run of the result they belong to, as narrative
-events do, with `state` of `writing`, `done` or `failed`, and on `done` the slides and the
-number dropped. The events are replayed to a page that opens later, so a reload keeps
+events do, with `state` of `waiting`, `writing`, `done` or `failed`, and on `done` the
+slides, the number of them that carry a figure, and the number dropped. The prompt holds the narratives, so a request made while
+they are still being written waits for them: the server sends `waiting`, with the
+narratives written so far and their total, and `writing` once it asks Claude. The events are replayed to a page that opens later, so a reload keeps
 the explainer. A request for a review whose Claude is not available answers as the
 narratives endpoint does. A changeset published as an artifact carries no explainer, as
 it carries no narratives.
@@ -266,10 +306,13 @@ cache under its key.
 
 ### 5.1 The Explainer face
 
-The face appears in the switch whenever the review has Claude, since unlike the other
+The face appears in the title's menu whenever the review has Claude, since unlike the other
 faces it has something to offer before it has data. Before an explainer exists it shows
 its paragraph and **Write it**. While one is being written it shows the spinner and the
-message the server sends, and the reviewer can leave the face. Once one exists it lists
+message the server sends, and the reviewer can leave the face. While it waits for the
+narratives it says so, with how many are written, such as "Waiting for Claude to finish
+the narratives (12 of 30 written); the explainer is written from them.", and the count
+follows the narratives as they arrive. Once one exists it lists
 the slides, numbered, each with its title and a word for its target's kind, with the
 current slide marked as the current step is. Its pinned head holds the arrows and
 "3 of 9", as the path's head does. Clicking a slide opens it. Under the slides, **Not in the explainer** lists the
@@ -287,6 +330,12 @@ and a close. It is marked "written by Claude" as the summary is. Its width is th
 measure, about eighty characters, centered, and its height is at most a third of the
 panel, with the text scrolling inside it past that.
 
+The card can be minimized, with its button or the M key, to one line that holds the
+slide's number, its title, the arrows and the close. The reviewer then sees the whole
+panel under it, and the tour goes on by the arrows and keys. The card stays minimized
+from slide to slide until it is shown in full again, since a reviewer who minimizes it
+is reading the targets and not the text.
+
 The card covers part of the panel, so the viewer fits a slide's target to the room above
 it: a level fits to the stage less the card's height, a selected block or edge is brought
 into that room, and a hunk is scrolled so that its header sits above the card. The map's
@@ -295,8 +344,13 @@ pan and zoom stay live under the card.
 ### 5.3 Moving among the slides
 
 A slide opens its target as `openStep` opens a step's: the same trail, mount, arrival and
-selection, and for a `level` target with blocks to bring out, the outline and dimming
-that hovering a pattern uses, kept while the slide is current. A `type`, `pattern` or
+selection. A slide then brings out only what its target names and dims the rest of the
+drawing: a `level` target's named blocks with the edges at them, a `block` target's
+block, or an `edge` target's edge with the blocks at its ends. The outline is the one
+hovering a pattern uses. Hovering never changes it while the slide is current, since a
+pointer crossing the map on its way to the card would otherwise flicker the emphasis.
+Selecting something other than the target ends it, since that is the reviewer looking
+around on purpose, and **Show again** restores it. A `type`, `pattern` or
 `concept` target opens as the corresponding link does. A target the current changeset no
 longer has, which can only happen after a map switch, is reported on the card and the
 panel stays where it is.
@@ -308,7 +362,10 @@ the card is shown, as the help tip already takes Escape first. The arrows move f
 the current slide, not from where the reviewer has wandered, so that looking around
 never loses the place.
 
-Clicking elsewhere never changes the slide. The card stays with its slide, so that a
+A slide never moves the left panel off the Explainer face, since the face holds the
+reviewer's place in the tour. Only the reviewer's own choice of a face, **Open on the
+path** or a link under **Not in the explainer** moves it. Clicking elsewhere never
+changes the slide. The card stays with its slide, so that a
 reviewer who opens a diff from a slide about a decision still has the slide's words
 beside it. **Show again** opens the target again.
 
@@ -320,7 +377,10 @@ and the explainer is a reader over that state. **Open on the path** is the one b
 it opens the step that shares the slide's target, where the step's files and
 **Mark read** are. A slide whose target has a step of its own shows that step's read
 state as a word on the slide's row in the face, so that a reviewer taking the tour a
-second time sees what is finished.
+second time sees what is finished. The check of section 4.3 names that step on the
+slide's resolved target, as `step`: the first step of the path's first two tiers whose
+target is the same catalog entry, such as the cycle whose closing edge the slide
+targets.
 
 ## 6. Claude's part
 
@@ -378,8 +438,12 @@ in the sub-second unit suite. They state:
   count and what stays uncovered.
 - The request's key holds no path of this machine, a second write with the same key
   reads the cache, and a regeneration replaces what is stored.
+- The check accepts a figure and keeps a box type the changeset does not have, rejects a
+  figure whose arrow names a missing box and the other malformed or oversized figures of
+  section 3.3, and rejects a third figure on the first answer and on the retry.
 - The server accepts the request, sends `writing` and `done` events with the run, and
-  replays them to a later watcher, driven by the canned `IClaude`.
+  replays them to a later watcher, driven by the canned `IClaude`; the `done` event and
+  the log count the slides with a figure.
 
 The viewer has no test suite, as the other designs note; a manual pass on the sample
 and on `mock/changeset.js` with a canned explainer covers the card and the keys.
@@ -390,8 +454,21 @@ The trial of section 6 puts an explainer at under a dollar and under a minute an
 half with Opus on a change of 63 files, which is about half of what the narratives of
 such a range cost with Sonnet in [review-workflow.md](review-workflow.md) section 7.
 The cost grows with the first tier and the decisions on the path, which the path caps,
-rather than with the change. Phase 1 measures it again with the narratives in the prompt,
-which the trial left out because none were cached for the range.
+rather than with the change.
+
+Once built, the explainer was measured on pull request 3 of this repository, which added
+stated intents: 28 changed files, 23 changed edges, and 58 narratives in its prompt. Its
+catalog held 124 entries and 7 first-tier steps.
+
+| Request | Slides | Words | Covered | Dropped | Figures | Time | Cost |
+|---|---|---|---|---|---|---|---|
+| Explainer, `claude-opus-5-5` | 26 | 1456 | all | 0 | 1 | 83 s | $0.65 |
+| Narratives, `claude-sonnet-5-5`, 7 of 10 requests not cached | — | — | — | 0 | — | 20 s longest | $0.41 |
+
+The first answer passed its check and covered everything, so no retry was needed. With
+the narratives in its prompt the explainer still cost under a dollar and took under a
+minute and a half. Claude drew one figure, of the kinds of anchor and the path steps each
+kind covers.
 
 ## 9. Changes to other documents
 

@@ -20,7 +20,7 @@ public sealed record AnalysisTarget(string Root, string Solution, bool Build);
 /// at a range, or at a range that shares a commit with one seen before, costs no compilation. Every cache of every
 /// repository shares one size limit. See <c>docs/review-workflow.md</c> section 5.
 /// </summary>
-public sealed class ReviewCache : INarrativeCache
+public sealed class ReviewCache : INarrativeCache, IExplainerCache
 {
     /// <summary>The size the caches of all repositories may reach together before the least recently used entries are evicted.</summary>
     public const long DefaultLimit = 2L * 1024 * 1024 * 1024;
@@ -152,6 +152,14 @@ public sealed class ReviewCache : INarrativeCache
     public void WriteNarratives(string key, IReadOnlyList<Narrative> narratives) => Write(NarrativePath(key), narratives.ToList());
 
     private string NarrativePath(string key) => Path.Combine(Directory, "narratives", key + ".json.gz");
+
+    /// <summary>Returns the checked explainer stored under a request key, or <see langword="null"/> when there is none.</summary>
+    public Explainer? ReadExplainer(string key) => Read<Explainer>(ExplainerPath(key));
+
+    /// <summary>Stores the checked explainer of a request under its key, replacing any stored before.</summary>
+    public void WriteExplainer(string key, Explainer explainer) => Write(ExplainerPath(key), explainer);
+
+    private string ExplainerPath(string key) => Path.Combine(Directory, "explainers", key + ".json.gz");
 
     private string GeneratedMapDirectory(AnalysisTarget target) => Path.Combine(Directory, "maps", Hash(target.Root, target.Solution));
 

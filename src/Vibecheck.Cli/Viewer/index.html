@@ -176,7 +176,7 @@
   @media (max-width: 1200px) { aside { overflow: visible; } }
   aside h2.panel-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
   /* The stage fills the middle column, so fitting a level to the stage shows all of it on screen. */
-  .canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
   .stage-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; position: relative;
     flex: 1; min-height: 360px; }
   #leafview { flex: 1; min-height: 0; overflow: auto; }
@@ -208,14 +208,15 @@
 
   .node { cursor: pointer; }
   .node:focus { outline: none; }
-  .node .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
-  .node:hover .box, .node:focus .box { stroke: var(--accent); }
+  .node .box, .fig-box .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+  /* While a slide brings out part of the drawing, the pointer changes nothing in it. */
+  svg#stage:not(.bringing-out) .node:hover .box, .node:focus .box { stroke: var(--accent); }
   .node.selected .box { stroke: var(--accent); stroke-width: 2.5; }
   .fam-blue { --fam: var(--cat-blue); } .fam-teal { --fam: var(--cat-teal); } .fam-magenta { --fam: var(--cat-magenta); }
   .fam-orange { --fam: var(--cat-orange); } .fam-slate { --fam: var(--cat-slate); }
-  .node .band { fill: var(--fam, transparent); fill-opacity: .16; }
-  :root[data-theme="dark"] .node .band { fill-opacity: .26; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .node .band { fill-opacity: .26; } }
+  .node .band, .fig-box .band { fill: var(--fam, transparent); fill-opacity: .16; }
+  :root[data-theme="dark"] .node .band, :root[data-theme="dark"] .fig-box .band { fill-opacity: .26; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .node .band, :root:not([data-theme="light"]) .fig-box .band { fill-opacity: .26; } }
   .chip .chip-bg { fill: var(--fam); }
   .chip .chip-icon { fill: none; stroke: #fff; stroke-linecap: round; stroke-linejoin: round; }
   .node .badge-bg { fill: var(--modified); }
@@ -230,9 +231,9 @@
   .node.st-reviewed .badge-text { fill: var(--muted); }
   .node.st-reviewed .box { stroke: var(--muted); stroke-width: 1.5; }
   .node.other .box { stroke-dasharray: 1 3; }
-  .node .title { font-size: 12px; font-weight: 600; letter-spacing: .08em; fill: var(--fg); }
-  .node .title.small { font-size: 10px; }
-  .node .meta { font-size: 10.5px; fill: var(--muted); }
+  .node .title, .fig-box .title { font-size: 12px; font-weight: 600; letter-spacing: .08em; fill: var(--fg); }
+  .node .title.small, .fig-box .title.small { font-size: 10px; }
+  .node .meta, .fig-box .meta { font-size: 10.5px; fill: var(--muted); }
   .node .meta.grouping { font-style: italic; }
   .node .enter-glyph { font-size: 13px; fill: var(--muted); cursor: pointer; }
   .node .enter-glyph:hover { fill: var(--accent); }
@@ -260,8 +261,18 @@
   svg#stage .tests-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--muted); }
   svg#stage .patterns-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
   svg#stage .patterns-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--accent); }
-  svg#stage .node.pattern-touched .box { stroke: var(--accent); stroke-width: 2.5; }
+  svg#stage:not(.bringing-out) .node.pattern-touched .box, svg#stage .node.brought .box { stroke: var(--accent); stroke-width: 2.5; }
   svg#stage .node.pattern-held .box { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; }
+  /* A figure Claude drew for a slide is drawn as the map is: its boxes as blocks with a band in the accent, its arrows
+     and their labels as edges, and its groups as dashed outlines. A box whose type the change has is a link. */
+  .fig-box { --fam: var(--accent); }
+  .fig-box:focus { outline: none; }
+  .fig-box.link { cursor: pointer; }
+  .fig-box.link .meta { fill: var(--accent); text-decoration: underline; }
+  .fig-box.link:hover .box, .fig-box.link:focus .box { stroke: var(--accent); stroke-width: 2.5; }
+  .fig-group { fill: var(--bg); stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 5 4; }
+  .fig-group-label-bg { fill: var(--bg); }
+  .fig-group-label { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; fill: var(--muted); }
   /* A leaf's Tests section, and the test methods under a test type in the Tests switch. */
   .tests-section { margin: 12px 0; }
   .tests-section > summary { font-weight: 600; }
@@ -294,7 +305,20 @@
   .tally { margin: -4px 0 6px; }
   /* The Path panel: a switch in the panel's title, a Next action, and one row per step with its kind and signal. */
   .panel-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .panel-switch .seg button { font-family: var(--sans); font-size: 12px; padding: 2px 8px; }
+  /* The panel's title is a menu of its faces. The title keeps the look of the other panels' titles, with a caret. */
+  .face-switch { position: relative; }
+  .face-title { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; background: none; border: 0; padding: 2px 4px; margin: -2px -4px;
+    border-radius: 3px; cursor: pointer; }
+  .face-title:hover, .face-title[aria-expanded="true"] { background: var(--bg); color: var(--fg); }
+  .face-caret { margin-left: 4px; font-size: 10px; }
+  .face-menu { position: absolute; top: calc(100% + 6px); left: -4px; z-index: 5; min-width: 150px; padding: 4px 0; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: 4px; box-shadow: 0 4px 14px rgb(0 0 0 / .14); }
+  .face-menu[hidden] { display: none; }
+  .face-item { text-align: left; background: none; border: 0; padding: 5px 12px 5px 26px; font: 13px var(--sans); color: var(--fg);
+    letter-spacing: normal; text-transform: none; cursor: pointer; position: relative; }
+  .face-item:hover, .face-item:focus-visible { background: var(--bg); outline: none; }
+  .face-item.on { font-weight: 600; }
+  .face-item.on::before { content: "✓"; position: absolute; left: 10px; color: var(--accent); }
   /* The whole head of the Changes panel, its title with the switch and the path's arrows and count, stays at the top
      of the panel while a long path scrolls under it, so that nothing above the list ever moves. It bleeds into the
      panel's padding so that its background covers the full width. */
@@ -321,6 +345,47 @@
   .step-file { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
   .step-file.done .link { color: var(--muted); text-decoration: line-through; }
   .step-files .btn { align-self: flex-start; margin-top: 4px; font-size: 12px; }
+  /* The Explainer face: what an explainer is with Write it, then the numbered slides with their kinds, what no slide
+     covers, the slides the check dropped, and Regenerate. */
+  .explainer-intro { margin: 0 0 10px; font-size: 13px; }
+  .explainer-action { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 10px 0 4px; }
+  .explainer-progress { display: flex; align-items: center; gap: 6px; }
+  .slides .row.step { align-items: baseline; }
+  .slide-number { flex: none; min-width: 1.6em; color: var(--muted); font-family: var(--mono); font-size: 11px; text-align: right; }
+  .step-kind.slide-kind { width: auto; min-width: 54px; text-align: right; }
+  .explainer-dropped { margin: 10px 0; color: var(--muted); font-size: 12.5px; }
+  .explainer-dropped summary { cursor: pointer; }
+  .explainer-dropped ul { margin: 4px 0 0; padding-left: 18px; }
+  /* The card of the current slide, over the lower part of the main panel: the text's measure wide, centered, at most
+     a third of the panel tall with the text scrolling inside, and marked as Claude's as the summary is. The leaf view
+     keeps room under its end for it. */
+  .slide-card { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 4; width: min(calc(80ch + 28px), calc(100% - 24px)); max-height: 33.3%;
+    display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); border-radius: 6px;
+    box-shadow: 0 6px 22px rgb(0 0 0 / .18); font-size: 13.5px; }
+  .slide-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 8px 4px 14px; }
+  .slide-count { flex: none; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .slide-title { flex: 1; min-width: 0; margin: 0; font-size: 14px; }
+  .slide-head .close { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .slide-head .close:hover { color: var(--fg); }
+  .slide-head .card-size { border: 0; background: none; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; padding: 0 4px; }
+  .slide-head .card-size:hover { color: var(--fg); }
+  /* A minimized card is one line: the number, the title, the arrows and the buttons. */
+  .slide-card.min .slide-head { align-items: center; padding: 5px 8px 5px 14px; }
+  .slide-card.min .slide-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  .slide-card.min .step-arrow { padding: 1px 8px; font-size: 13px; line-height: 1.2; }
+  .slide-body { flex: 1; min-height: 0; overflow: auto; padding: 0 14px; }
+  .slide-text { margin: 2px 0 6px; line-height: 1.5; }
+  .slide-text code { font-family: var(--mono); font-size: .92em; }
+  .slide-body .warn { margin: 4px 0 6px; }
+  .slide-intent { margin: 0 0 6px; }
+  .slide-intent .step-intent { font-size: 12.5px; }
+  .step-meta.slide-read { min-width: 0; }
+  .slide-cites { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-bottom: 6px; font-size: 12.5px; }
+  .slide-cite { font-family: var(--mono); font-size: 11.5px; }
+  .slide-cite .link { font-family: var(--mono); font-size: 11.5px; }
+  .slide-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--line); }
+  .slide-foot .step-arrow { padding: 2px 9px; font-size: 14px; line-height: 1.2; }
+  #leafview { padding-bottom: var(--card-room, 0); }
   /* The Concepts panel and the term entries it shares with the tooltip on a term in a diff. */
   .glossary li { padding: 5px 6px; border-radius: 3px; }
   .glossary li.current { background: var(--bg); box-shadow: inset 2px 0 0 var(--accent); }
@@ -365,7 +430,7 @@
   .edge { cursor: pointer; }
   .edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
   .edge-line { fill: none; stroke: var(--line-strong); }
-  .edge:hover .edge-line { stroke: var(--accent); }
+  svg#stage:not(.bringing-out) .edge:hover .edge-line { stroke: var(--accent); }
   .edge.selected .edge-line { stroke: var(--accent); }
   .edge.st-added .edge-line { stroke: var(--added); }
   .edge.st-removed .edge-line { stroke: var(--removed); stroke-dasharray: 6 4; }
@@ -376,23 +441,28 @@
   .flow-arrow { fill: none; stroke: var(--line-strong); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .edge.st-added .flow-arrow { stroke: var(--added); }
   .edge.st-modified .flow-arrow { stroke: var(--modified); }
-  .edge.selected .flow-arrow, .edge:hover .flow-arrow { stroke: var(--accent); }
-  body.flow .edge.flows .flow-arrows, body.flow .edge.hot .flow-arrows, body.flow .edge.in-focus .flow-arrows, body.flow .edge.selected .flow-arrows { display: inline; }
-  body.flow svg#stage.hovering .edge:not(.hot) .flow-arrows { display: none; }
+  .edge.selected .flow-arrow, svg#stage:not(.bringing-out) .edge:hover .flow-arrow { stroke: var(--accent); }
+  body.flow .edge.flows .flow-arrows, body.flow svg#stage:not(.bringing-out) .edge.hot .flow-arrows, body.flow .edge.in-focus .flow-arrows, body.flow .edge.selected .flow-arrows { display: inline; }
+  body.flow svg#stage.hovering:not(.bringing-out) .edge:not(.hot) .flow-arrows { display: none; }
   @media (prefers-reduced-motion: reduce) { .flow-arrows { display: none !important; } }
 
   /* Focus: hovering a block, pin or edge, or selecting one, keeps its neighborhood and fades the rest. Hover wins over selection. */
   /* The fade is instant. Chrome draws the whole drawing on another layer while any opacity in it animates, so the text of
      the block under the pointer shifts by a fraction of a pixel until the animation ends. */
-  svg#stage.focused:not(.hovering) .edge:not(.in-focus), svg#stage.focused:not(.hovering) .edge-label:not(.in-focus) { opacity: .1; }
-  svg#stage.hovering .edge:not(.hot), svg#stage.hovering .edge-label:not(.hot) { opacity: .06; }
-  svg#stage.hovering .node:not(.hot), svg#stage.hovering .pin:not(.hot) { opacity: .35; }
-  svg#stage.hovering .hot, svg#stage.focused:not(.hovering) .in-focus { opacity: 1; }
+  svg#stage.focused:not(.hovering):not(.bringing-out) .edge:not(.in-focus), svg#stage.focused:not(.hovering):not(.bringing-out) .edge-label:not(.in-focus) { opacity: .1; }
+  svg#stage.hovering:not(.bringing-out) .edge:not(.hot), svg#stage.hovering:not(.bringing-out) .edge-label:not(.hot) { opacity: .06; }
+  svg#stage.hovering:not(.bringing-out) .node:not(.hot), svg#stage.hovering:not(.bringing-out) .pin:not(.hot) { opacity: .35; }
+  svg#stage.hovering:not(.bringing-out) .hot, svg#stage.focused:not(.hovering):not(.bringing-out) .in-focus { opacity: 1; }
+  /* An explainer's slide brings out the blocks and edges its target names, outlined, and fades the rest. Neither a hover
+     nor the selection's own neighborhood changes it; selecting something else ends it, as the code decides. */
+  svg#stage.bringing-out .edge:not(.brought), svg#stage.bringing-out .edge-label:not(.brought) { opacity: .1; }
+  svg#stage.bringing-out .node:not(.brought), svg#stage.bringing-out .pin:not(.brought) { opacity: .35; }
+  svg#stage.bringing-out .edge.brought, svg#stage.bringing-out .edge-label.brought, svg#stage.bringing-out .pin.brought { opacity: 1; }
   /* A block is never drawn at an opacity of exactly 1. Chrome draws a group at a lower opacity on a layer of its own,
      which places its text a fraction of a pixel away from where it falls when drawn directly, so a dimmed block under
      the pointer would shift each time it came out of the dimming. */
-  .node, svg#stage.hovering .node.hot, svg#stage.focused:not(.hovering) .node.in-focus { opacity: .999; }
-  svg#stage .edge.hot .edge-line, svg#stage .edge.in-focus .edge-line { stroke-opacity: 1; }
+  .node, svg#stage.hovering:not(.bringing-out) .node.hot, svg#stage.focused:not(.hovering):not(.bringing-out) .node.in-focus, svg#stage.bringing-out .node.brought { opacity: .999; }
+  svg#stage:not(.bringing-out) .edge.hot .edge-line, svg#stage .edge.in-focus .edge-line, svg#stage .edge.brought .edge-line { stroke-opacity: 1; }
 
   .arrow { fill: var(--line-strong); }
   .arrow-added { fill: var(--added); }
@@ -744,6 +814,7 @@
       <div class="tip" id="tip" role="tooltip" hidden></div>
     </div>
     <div id="leafview" hidden></div>
+    <section class="slide-card" id="slidecard" aria-label="Explainer slide" aria-live="polite" hidden></section>
   </div>
 
   <div class="side">

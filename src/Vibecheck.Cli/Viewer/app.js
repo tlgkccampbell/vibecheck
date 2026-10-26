@@ -390,6 +390,8 @@
     return contentOf(key).status;
   }
   function groupLeaves(key) { const [v, g] = key.slice(2).split("/"); return VIEWS[v].groups[g].leaves; }
+  // Returns a value indicating whether a key of the form "g:<view>/<group>" names a group of a view of this changeset.
+  function isGroup(key) { const [v, g] = key.slice(2).split("/"); return !!(VIEWS[v] && VIEWS[v].groups[g]); }
   function metricsOf(key) {
     if (key.startsWith("g:")) {
       const [v, g] = key.slice(2).split("/");
@@ -796,6 +798,17 @@
     const all = [...rects.values()];
     const x0 = Math.min(...all.map((r) => r.x)), y0 = Math.min(...all.map((r) => r.y));
     for (const r of all) { r.x += SPLINE.pad - x0; r.y += SPLINE.pad - y0; }
+    // A settled control point moved with the layout, so it is shifted the same way.
+    const paths = arcPaths(level.edges, rects, bows && bows.map((q) => ({ x: q.x + SPLINE.pad - x0, y: q.y + SPLINE.pad - y0 })));
+    const labels = placeLabels(level, paths, (e) => Math.max(e.base, e.head), [...rects.values()]);
+    const w = Math.max(...all.map((r) => r.x + r.w)) + SPLINE.pad, h = Math.max(...all.map((r) => r.y + r.h)) + SPLINE.pad;
+    return { rects, labels, paths, w, h };
+  }
+
+  // Returns the path of each edge by edge id, as one arc from the border of its source rect to the border of its target
+  // rect, through the edge's settled control point when bows gives one and through its resting bow otherwise. The
+  // quadratic arc is drawn as the cubic with the same shape, starting and ending where its tangents leave the rects.
+  function arcPaths(edges, rects, bows) {
     const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
     // Returns the point where a ray from a rect's center toward a point leaves the rect.
     const exit = (r, toward) => {
@@ -804,18 +817,94 @@
       return { x: c.x + dx * t, y: c.y + dy * t };
     };
     const paths = new Map();
-    level.edges.forEach((e, i) => {
+    edges.forEach((e, i) => {
       const ra = rects.get(e.from), rb = rects.get(e.to);
-      const ca = center(ra), cb = center(rb);
-      // A settled control point moved with the layout, so it is shifted the same way. The quadratic arc through it is
-      // drawn as the cubic with the same shape, starting and ending where the arc's tangents leave the blocks.
-      const q = bows ? { x: bows[i].x + SPLINE.pad - x0, y: bows[i].y + SPLINE.pad - y0 } : restingBow(ca, cb);
+      const q = bows ? bows[i] : restingBow(center(ra), center(rb));
       const a = exit(ra, q), b = exit(rb, q);
       paths.set("e" + i, [a, { x: a.x + (q.x - a.x) * 2 / 3, y: a.y + (q.y - a.y) * 2 / 3 }, { x: b.x + (q.x - b.x) * 2 / 3, y: b.y + (q.y - b.y) * 2 / 3 }, b]);
     });
-    const labels = placeLabels(level, paths, (e) => Math.max(e.base, e.head), [...rects.values()]);
-    const w = Math.max(...all.map((r) => r.x + r.w)) + SPLINE.pad, h = Math.max(...all.map((r) => r.y + r.h)) + SPLINE.pad;
-    return { rects, labels, paths, w, h };
+    return paths;
+  }
+
+  // The bounds of a figure's boxes, and the room a group's outline leaves around its boxes and above them for its label.
+  const FIGURE = { minW: 110, maxW: 250, band: 28, pad: 18, top: 32 };
+  const figureLayouts = new WeakMap();
+
+  // Returns how a box of a figure is drawn: its width and height, its fitted label, the height of its header band, and
+  // its type's short name or null. The label is set as a block's title is, and the type under it as a block's meta line.
+  function figureBoxShape(b) {
+    const type = b.type ? shortName(b.type) : null;
+    const w = Math.max(FIGURE.minW, Math.min(FIGURE.maxW, Math.max(b.label.length * MONO.title, type ? type.length * MONO.meta : 0) + 24));
+    const title = fitTitle(b.label, w - 20), band = title.lines.length > 1 ? 35 : FIGURE.band;
+    return { w, h: band + (type ? 26 : 12), title, band, type };
+  }
+
+  // Lays out a figure of an explainer's slide with ELK's layered algorithm, in a direction of "RIGHT" or "DOWN", with
+  // each group as a node that holds its boxes. ELK also routes the arrows, as splines that keep clear of the boxes, and
+  // places their labels in room it leaves between the layers, so that no label sits on another arrow or a box. A
+  // figure is read in its direction, as a record and what it refers to or calls in their order, which is why it is
+  // laid out in layers rather than settled as the map's blocks are. The result has the shape of a level's layout, with
+  // the boxes' rects keyed "box:" and their identifier, and with the groups' rects beside them, so that frameOf,
+  // routeOf and the fitting of the view serve a figure as they serve a level. The layout is kept with the figure, one
+  // for each direction.
+  async function figureLayout(fig, direction) {
+    const kept = figureLayouts.get(fig) || {};
+    if (kept[direction]) return kept[direction];
+    const groupOf = new Map();
+    fig.groups.forEach((g, i) => { for (const b of g.boxes) groupOf.set(b, i); });
+    const node = (b) => { const shape = figureBoxShape(b); return { id: "box:" + b.id, width: shape.w, height: shape.h }; };
+    const res = await elk.layout({
+      id: "figure",
+      layoutOptions: { "elk.algorithm": "layered", "elk.direction": direction, "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+        "elk.edgeRouting": "ORTHOGONAL", "elk.edgeLabels.placement": "CENTER", "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+        "elk.spacing.nodeNode": "40", "elk.layered.spacing.nodeNodeBetweenLayers": "56", "elk.spacing.edgeLabel": "6",
+        "elk.spacing.edgeNode": "18", "elk.layered.spacing.edgeNodeBetweenLayers": "18" },
+      children: [
+        ...fig.boxes.filter((b) => !groupOf.has(b.id)).map(node),
+        ...fig.groups.map((g, i) => ({ id: "group:" + i, layoutOptions: { "elk.padding": `[top=${FIGURE.top},left=${FIGURE.pad},bottom=${FIGURE.pad},right=${FIGURE.pad}]` },
+          children: fig.boxes.filter((b) => groupOf.get(b.id) === i).map(node) })),
+      ],
+      edges: fig.arrows.map((a, i) => ({ id: "e" + i, sources: ["box:" + a.from], targets: ["box:" + a.to],
+        labels: a.label ? [{ id: "l" + i, text: a.label, width: labelWidth([{ t: a.label }]), height: 18, layoutOptions: { "elk.edgeLabels.inline": "true" } }] : [] })),
+    });
+    // A group's boxes are placed relative to the group, so the walk adds up the offsets.
+    const rects = new Map(), groups = [];
+    const walk = (n, ox, oy) => {
+      for (const c of n.children || []) {
+        const r = { x: ox + c.x, y: oy + c.y, w: c.width, h: c.height };
+        if (c.id.startsWith("group:")) { groups.push({ ...r, index: +c.id.slice(6) }); walk(c, r.x, r.y); } else rects.set(c.id, r);
+      }
+    };
+    walk(res, 0, 0);
+    // Each arrow's route is its start, the control points ELK gives in threes, and its end, which is the run of cubic
+    // pieces that routeOf draws. A route whose points do not make whole pieces is drawn as straight pieces through them.
+    // ELK gives a route and its label relative to the group that holds the arrow, which it names as the container. A
+    // label's center is kept by its arrow's id.
+    const origin = new Map([["figure", { x: 0, y: 0 }], ...groups.map((g) => ["group:" + g.index, { x: g.x, y: g.y }])]);
+    const straight = (a, b) => [{ x: a.x + (b.x - a.x) / 3, y: a.y + (b.y - a.y) / 3 }, { x: a.x + (b.x - a.x) * 2 / 3, y: a.y + (b.y - a.y) * 2 / 3 }, b];
+    const paths = new Map(), labels = new Map(), marks = [];
+    for (const e of res.edges || []) {
+      const s = (e.sections || [])[0], o = origin.get(e.container) || { x: 0, y: 0 };
+      if (!s) continue;
+      let pts = [s.startPoint, ...(s.bendPoints || []), s.endPoint].map((p) => ({ x: p.x + o.x, y: p.y + o.y }));
+      if ((pts.length - 1) % 3) pts = [pts[0], ...pts.slice(1).flatMap((p, k) => straight(pts[k], p))];
+      paths.set(e.id, pts);
+      marks.push(...pts);
+      for (const l of e.labels || []) if (l.x !== undefined) {
+        labels.set(e.id, { x: o.x + l.x + l.width / 2, y: o.y + l.y + l.height / 2 });
+        marks.push({ x: o.x + l.x, y: o.y + l.y }, { x: o.x + l.x + l.width, y: o.y + l.y + l.height });
+      }
+    }
+    const all = [...rects.values(), ...groups];
+    const x0 = Math.min(...all.map((r) => r.x), ...marks.map((p) => p.x)), y0 = Math.min(...all.map((r) => r.y), ...marks.map((p) => p.y));
+    for (const r of all) { r.x += SPLINE.pad - x0; r.y += SPLINE.pad - y0; }
+    for (const pts of paths.values()) for (const p of pts) { p.x += SPLINE.pad - x0; p.y += SPLINE.pad - y0; }
+    for (const p of labels.values()) { p.x += SPLINE.pad - x0; p.y += SPLINE.pad - y0; }
+    const w = Math.max(...all.map((r) => r.x + r.w), ...marks.map((p) => p.x + SPLINE.pad - x0)) + SPLINE.pad;
+    const h = Math.max(...all.map((r) => r.y + r.h), ...marks.map((p) => p.y + SPLINE.pad - y0)) + SPLINE.pad;
+    kept[direction] = { rects, groups, labels, paths, w, h };
+    figureLayouts.set(fig, kept);
+    return kept[direction];
   }
 
   // Pushes overlapping rects apart along the axis where they overlap least, until each pair keeps the margin.
@@ -993,7 +1082,8 @@
     decision: null,
     // What the last mark action of a decision did: the decision's identifier and the text that says so, or null.
     decisionNote: null,
-    // The Changes panel's content, "path", "changes", "glossary" or "tests", or undefined before the first render chooses.
+    // The Changes panel's content, "path", "changes", "intent", "glossary", "tests", "patterns" or "explainer", or
+    // undefined before the first render chooses.
     panel: undefined,
     // The leaves whose Tests sections the reader has opened.
     testsOpen: new Set(),
@@ -1012,6 +1102,9 @@
     term: null,
     termOthers: new Set(),
     current: null, // { level, layout }
+    // The figure the stage shows in place of the map, with the title of its slide and its layout, or null. While it is
+    // shown, current is null and the trail still names the location the stage returns to.
+    figure: null,
     view: { x: 0, y: 0, w: 1600, h: 1000 },
     aspect: 1.6,
     saved: new Map(), // the last view of each location, by layout key
@@ -1276,6 +1369,55 @@
       pinLayer.append(g);
     }
     root.append(pinLayer);
+    root.append(labelLayer);
+    return root;
+  }
+
+  // Draws a figure of an explainer's slide in the stage's own style: a frame with the slide's title, each group as a
+  // dashed outline with its label, each arrow as an edge with its label, and each box as a block with its label in the
+  // header band and the type it stands for under it. A box whose type the changeset has is a link that opens the type,
+  // and one whose type it does not have shows the name as text. See docs/explainers.md section 3.3.
+  function renderFigure(fig, layout, title) {
+    const root = svg("g", { class: "level figure" });
+    const f = frameOf(layout);
+    root.append(svg("rect", { x: f.x, y: f.y, width: f.w, height: f.h, class: "frame" }));
+    root.append(text(f.x, f.y - 34, fitText(title.toUpperCase(), Math.max(f.w, 360), MONO.frameTitle), { class: "frame-title" }));
+    root.append(text(f.x, f.y - 16, fitText("DRAWN BY CLAUDE FOR THIS SLIDE, NOT PART OF THE MAP", Math.max(f.w, 360), MONO.frameMeta), { class: "frame-meta" }));
+    // A group's label is drawn after the arrows, on a backdrop, so that an arrow entering the group passes under it.
+    const groupLabels = svg("g", { class: "fig-group-labels" });
+    for (const g of layout.groups) {
+      const x = f.x + g.x, y = f.y + g.y, label = fitText(fig.groups[g.index].label.toUpperCase(), g.w - 20, MONO.frameMeta);
+      root.append(svg("rect", { x, y, width: g.w, height: g.h, rx: 4, class: "fig-group" }));
+      groupLabels.append(svg("rect", { x: x + 7, y: y + 9, width: label.length * MONO.frameMeta + 6, height: 14, class: "fig-group-label-bg" }),
+        text(x + 10, y + 19, label, { class: "fig-group-label" }));
+    }
+    const edgeLayer = svg("g", { class: "fig-arrows" }), labelLayer = svg("g", { class: "edge-labels" });
+    fig.arrows.forEach((a, i) => {
+      const route = routeOf(null, layout, i);
+      if (!route) return;
+      edgeLayer.append(svg("path", { d: route.d, class: "edge-line", "stroke-width": 1.5, "marker-end": "url(#arrow-unchanged)" }));
+      const at = a.label && layout.labels.get("e" + i);
+      if (!at) return;
+      const w = labelWidth([{ t: a.label }]), x = f.x + at.x, y = f.y + at.y;
+      labelLayer.append(svg("rect", { x: x - w / 2, y: y - 9, width: w, height: 18, rx: 2, class: "lbl-bg" }), text(x, y + 4, a.label, { class: "lbl-count", "text-anchor": "middle" }));
+    });
+    root.append(edgeLayer, groupLabels);
+    for (const b of fig.boxes) {
+      const r = rectOf(null, layout, "box:" + b.id);
+      if (!r) continue;
+      const { title: t, band, type } = figureBoxShape(b), known = !!b.type && TYPE_BY_NAME.has(b.type);
+      const open = (ev) => { ev.stopPropagation(); if (!dragged) openType(b.type); };
+      const g = svg("g", known
+        ? { class: "fig-box link", tabindex: 0, role: "link", onclick: open, onkeydown: (ev) => { if (ev.key === "Enter") open(ev); } }
+        : { class: "fig-box" });
+      g.append(svg("rect", { x: r.x, y: r.y, width: r.w, height: r.h, rx: 2, class: "box" }));
+      g.append(svg("path", { d: `M${r.x + 2},${r.y} H${r.x + r.w - 2} Q${r.x + r.w},${r.y} ${r.x + r.w},${r.y + 2} V${r.y + band} H${r.x} V${r.y + 2} Q${r.x},${r.y} ${r.x + 2},${r.y} Z`, class: "band" }));
+      const ys = t.lines.length > 1 ? [r.y + 16, r.y + 27] : [r.y + (t.small ? 18 : 19)];
+      t.lines.forEach((line, i) => g.append(text(r.x + 10, ys[i], line, { class: "title" + (t.small ? " small" : "") })));
+      if (type) g.append(text(r.x + 10, r.y + band + 17, fitText(type, r.w - 20, MONO.meta), { class: "meta" }));
+      g.append(svg("title", {}, known ? `Open ${b.type}` : b.type ? `${b.type}, which the change does not have` : b.label));
+      root.append(g);
+    }
     root.append(labelLayer);
     return root;
   }
@@ -2094,19 +2236,23 @@
 
   // ---------- Panels ----------
 
+  // Draws the trail of the location on show as crumbs, each returning to its place, and the switch among the views of
+  // the level. While a figure is on show, a last crumb names it, every crumb of the trail returns to the map, and the
+  // switch is hidden.
   function renderBreadcrumb() {
     const bc = $("#crumbs");
     bc.replaceChildren();
     state.trail.forEach((l, i) => {
-      const last = i === state.trail.length - 1;
+      const last = i === state.trail.length - 1 && !state.figure;
       bc.append(el("button", { class: "crumb" + (last ? " current" : ""), disabled: last, onclick: () => goTo(i) }, locName(l)));
       if (!last) bc.append(el("span", { class: "crumb-sep" }, "›"));
     });
+    if (state.figure) bc.append(el("button", { class: "crumb current", disabled: true, title: "A figure Claude drew for the current slide" }, "Figure"));
     const seg = $("#viewseg");
     const l = loc();
     const views = l.leaf ? [] : viewsAt(l.level);
     const sw = $("#viewswitch");
-    sw.hidden = views.length === 0;
+    sw.hidden = views.length === 0 || !!state.figure;
     if (!sw.querySelector(".help")) sw.append(help(HELP.groupings));
     seg.replaceChildren();
     if (views.length) {
@@ -2187,6 +2333,7 @@
   async function openStep(s) {
     state.step = s.id;
     if (state.tab !== "map") showTab("map");
+    clearFocus();
     if (s.kind === "node") return showInContext(s.target);
     if (s.kind === "pattern") {
       // A pattern step opens its instance's file with the pattern in the details panel.
@@ -2205,7 +2352,21 @@
     }
     if (s.kind === "file" || s.kind === "test" || s.kind === "tests") return s.files.length ? openFile(s.files[0]) : renderChanges();
     if (s.kind === "aside" || s.kind === "more") return s.files.length ? openFile(s.files[0]) : renderChanges();
-    const loc = s.location || ROOT;
+    return openLocation(s.location || ROOT, s.target);
+  }
+  // Clears what an earlier step or slide brought into the details panel: the selected block or edge, the decision and
+  // its tests, the pattern and its comparison, and a concept slide's entry. The next step or slide then selects only what it opens.
+  function clearFocus() {
+    state.selected = null;
+    state.decision = null;
+    state.decisionTests = null;
+    state.pattern = null;
+    state.compare = null;
+    state.slideTerm = null;
+  }
+  // Opens a level, or a view given as "view:<id>", at its arrival view, and selects the edge given as "from→to" when
+  // the level draws it. Returns the mounted level, or null when a later mount overtook this one.
+  async function openLocation(loc, edge) {
     rememberView();
     if (loc.startsWith("view:")) {
       const v = loc.slice(5), level = VIEWS[v] ? VIEWS[v].level : ROOT;
@@ -2213,9 +2374,10 @@
     } else state.trail = [{ level: ROOT }, ...ancestors(loc).map((x) => ({ level: x }))];
     state.selected = null;
     const m = await mount();
-    if (!m) return;
+    if (!m) return null;
     setViewBox(arrive(m));
-    if (m.level.edges.some((e) => e.key === "edge:" + s.target)) select("edge:" + s.target);
+    if (edge && m.level.edges.some((e) => e.key === "edge:" + edge)) select("edge:" + edge);
+    return m;
   }
   // Returns the current step's files with their reviewed checkboxes, each opening its diff, and the action that marks
   // them all, so that what finishes the step is in front of the reader.
@@ -2357,6 +2519,14 @@
         el("span", { class: "chip chip-added" }, "added"), el("span", { class: "row-name" }, shortName(i.type)), el("span", { class: "row-meta" }, nameOf(i.leaf))))))));
     }
   }
+  // Returns the keys of the drawn blocks of the current level that hold a pattern's instances, or a term's types, as
+  // touched, and the keys of those that hold only its others, as held. An instance names its leaf or its type.
+  function patternBlocks(p) {
+    const owner = ownerMap(state.current.level);
+    const touched = new Set((p.instances || []).map((i) => owner.get(i.leaf || leafOfType(i.type))).filter(Boolean));
+    const held = new Set((p.others || []).map((o) => owner.get(o.leaf)).filter((k) => k && !touched.has(k)));
+    return { touched, held };
+  }
   // Outlines the blocks of the drawing that hold a pattern's instances, or a term's types, while it is under the
   // pointer, solid for those with new or changed ones and dashed for those with only others, and fades everything else.
   // A null pattern ends it. A leaf view has no drawing, so it does nothing there.
@@ -2365,9 +2535,7 @@
     const s = stage();
     for (const n of s.querySelectorAll(".hot, .pattern-touched, .pattern-held")) n.classList.remove("hot", "pattern-touched", "pattern-held");
     if (!p) { s.classList.remove("hovering"); return; }
-    const owner = ownerMap(state.current.level);
-    const touched = new Set((p.instances || []).map((i) => owner.get(i.leaf || leafOfType(i.type))).filter(Boolean));
-    const held = new Set((p.others || []).map((o) => owner.get(o.leaf)).filter((k) => k && !touched.has(k)));
+    const { touched, held } = patternBlocks(p);
     const mark = (keys, cls) => { for (const k of keys) for (const n of s.querySelectorAll(`.node[data-key="${CSS.escape(k)}"]`)) n.classList.add("hot", cls); };
     mark(touched, "pattern-touched");
     mark(held, "pattern-held");
@@ -2737,7 +2905,7 @@
     }, { capture: true });
   }
 
-  const PANEL_TITLE = { path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns" };
+  const PANEL_TITLE = { path: "Path", changes: "Changes", intent: "Intent", glossary: "Concepts", tests: "Tests", patterns: "Patterns", explainer: "Explainer" };
   // The panels that put badges on the blocks, so that switching to or from one draws the map again.
   const BADGE_PANELS = new Set(["tests", "patterns"]);
   // The explanations that the question marks beside the page's major sections show on hover, by section.
@@ -2764,6 +2932,8 @@
     patterns: "Patterns lists the roles that the change's new and changed types play, such as consumers or controllers, the most departures first. " +
       "Hover a pattern to outline the blocks that hold its instances, solid for new and changed ones and dashed for the rest. " +
       "While this list is open, a block's badge counts the new and changed instances it holds. Patterns new in this change come last.",
+    explainer: "An explainer is a story of the change that Claude writes on request, as a run of slides. Each slide says a little and moves the map to the part it describes. " +
+      "Use the arrow keys, or the arrows on the card, to move among the slides. The explainer is a second account beside the path, and opening a slide marks nothing read.",
     terms: "These are the concepts that this block's new and changed types hold in their names. Concepts lists those of the whole change.",
     tests: "Tests lists the changed test types by the block that holds the type each one tests, with the test methods the change added, removed or changed. " +
       "Tests are never drawn on the map. While this list is open, a block's badge counts the changed test files of the types it holds. Test infrastructure, such as fixtures and builders, comes last.",
@@ -2791,32 +2961,68 @@
   // Returns a question mark that shows an explanation of a section of the page on hover or focus, in the tooltip that
   // installHelpTips draws.
   function help(text) { return el("span", { class: "help", tabindex: 0, "data-help": text, "aria-label": text }, "?"); }
+  // Returns the panel's title as a menu of the faces the changeset offers, in the order given, with the current face
+  // checked. The menu opens below the title and closes on a choice, a click elsewhere or Escape. The arrow keys,
+  // Home and End move among the faces while it is open.
+  function faceMenu(faces, choose) {
+    const items = faces.map((name) => el("button", { class: "face-item" + (name === state.panel ? " on" : ""), role: "menuitemradio",
+      "aria-checked": String(name === state.panel), tabindex: -1, onclick: () => { close(); choose(name); $(".face-title")?.focus(); } }, PANEL_TITLE[name]));
+    const list = el("div", { class: "face-menu", role: "menu", hidden: true }, ...items);
+    const button = el("button", { class: "face-title", "aria-haspopup": "menu", "aria-expanded": "false", title: "Choose what the panel shows",
+      onclick: () => list.hidden ? open() : close() }, PANEL_TITLE[state.panel], el("span", { class: "face-caret", "aria-hidden": "true" }, "▾"));
+    const wrap = el("span", { class: "face-switch" }, button, list);
+    const outside = (ev) => { if (!wrap.contains(ev.target)) close(); };
+    function open() {
+      list.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", outside, true);
+      (items.find((i) => i.classList.contains("on")) || items[0]).focus();
+    }
+    function close() {
+      list.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      document.removeEventListener("mousedown", outside, true);
+    }
+    list.addEventListener("keydown", (ev) => {
+      const at = items.indexOf(document.activeElement);
+      const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 }[ev.key];
+      if (to !== undefined) items[(to + items.length) % items.length].focus();
+      else if (ev.key === "Escape") { close(); button.focus(); }
+      else if (ev.key === "Tab") close();
+      else return;
+      if (ev.key !== "Tab") ev.preventDefault();
+      // The menu takes these keys before the slide card and the stage, which also use the arrows and Escape.
+      ev.stopPropagation();
+    });
+    return wrap;
+  }
   function renderChanges() {
     const box = $("#changes");
     box.replaceChildren();
     // The panel's head holds the title and, on the path, the arrows; everything after the title is drawn afresh.
     const head = $("#changes-head"), title = $("#changes-title");
     for (const n of [...head.children]) if (n !== title) n.remove();
-    // With a path, a glossary or changed tests, the panel switches among the path, the changes, the glossary and the
-    // tests and the patterns. It opens on the tests when every changed file is a test file or a file that no type binds,
+    // With a path, intents, a glossary, changed tests, patterns or an explainer to offer, the panel switches among
+    // them and the changes. It opens on the tests when every changed file is a test file or a file that no type binds,
     // and otherwise on the path when the changeset has one. Switching to or from the tests or the patterns draws the map
     // again, for their badges.
     const patterns = PATTERNS.size + NEW_PATTERNS.length;
-    if (PATH.length || INTENTS.length || GLOSSARY.length || TEST_FILES.length || patterns) {
+    if (PATH.length || INTENTS.length || GLOSSARY.length || TEST_FILES.length || patterns || EXPL.state !== "off") {
       if (state.panel === undefined) state.panel = TESTS_ONLY ? "tests" : PATH.length ? "path" : "changes";
-      const tab = (name, label) => el("button", { class: state.panel === name ? "on" : "", onclick: () => {
+      const faces = [PATH.length && "path", EXPL.state !== "off" && "explainer", "changes", INTENTS.length && "intent",
+        GLOSSARY.length && "glossary", patterns && "patterns", TEST_FILES.length && "tests"].filter(Boolean);
+      const choose = (name) => {
         const badges = state.panel !== name && (BADGE_PANELS.has(state.panel) || BADGE_PANELS.has(name));
         state.panel = name;
         if (badges) redraw(); else renderChanges();
-      } }, label);
-      title.replaceChildren(el("span", { class: "panel-switch" }, el("span", {}, PANEL_TITLE[state.panel], help(HELP[state.panel])), el("span", { class: "seg", role: "tablist" },
-        PATH.length ? tab("path", "Path") : null, tab("changes", "Changes"), INTENTS.length ? tab("intent", "Intent") : null, GLOSSARY.length ? tab("glossary", "Concepts") : null,
-        patterns ? tab("patterns", "Patterns") : null, TEST_FILES.length ? tab("tests", "Tests") : null)));
+      };
+      title.replaceChildren(el("span", { class: "panel-switch" }, faceMenu(faces, choose), help(HELP[state.panel])));
       if (state.panel === "path") { renderPath(box, head); return; }
       if (state.panel === "intent") { renderIntents(box); return; }
       if (state.panel === "glossary") { renderGlossary(box, head); return; }
       if (state.panel === "tests") { renderTests(box); return; }
       if (state.panel === "patterns") { renderPatterns(box); return; }
+      if (state.panel === "explainer") { renderExplainer(box, head); return; }
     } else title.replaceChildren(PANEL_TITLE.changes, help(HELP.changes));
     const talk = openThreadsUnder(ROOT).length;
     if (talk || state.opts.talk) box.append(el("label", { class: "toggle talk-filter", title: "Keep only the blocks whose changed files have unresolved review threads" },
@@ -2884,6 +3090,8 @@
     box.replaceChildren();
     if (state.decision && DECISIONS.has(state.decision)) box.append(decisionPanel(DECISIONS.get(state.decision)));
     if (state.pattern && PATTERNS.has(state.pattern.id)) box.append(patternPanel(PATTERNS.get(state.pattern.id), state.pattern.type));
+    if (state.slideTerm && TERMS.has(state.slideTerm)) box.append(el("section", { class: "glossary-section" }, el("h3", {}, "Concept"), termEntry(TERMS.get(state.slideTerm), false)));
+    if (state.figure) { box.append(figurePanel()); return; }
     const l = loc();
     const cur = state.current;
     if (l.leaf) {
@@ -3055,8 +3263,12 @@
     return fitView(layout);
   }
 
+  // Draws the location the trail names: the leaf view for a leaf, and otherwise the level, laid out. Every mount ends
+  // a figure on show, so that any navigation returns the stage to the map.
   let mountToken = 0;
   async function mount() {
+    if (state.figure) for (const old of stage().querySelectorAll(".figure")) old.remove();
+    state.figure = null;
     state.back = [];
     const token = ++mountToken;
     const l = loc();
@@ -3077,6 +3289,7 @@
     s.append(renderLevel(level, layout));
     s.classList.remove("hovering");
     s.classList.toggle("focused", markFocus(state.selected, "in-focus"));
+    bringOut();
     document.body.classList.toggle("dim", state.opts.dim);
     $("#statusline").textContent = `${locKey(l)} · ${level.children.length} blocks · ${level.edges.length} edges`;
     refreshChrome();
@@ -3091,8 +3304,10 @@
     return { level, layout };
   }
 
-  // Zooms the view out, or in, to show the whole of the current level. A leaf has no diagram, so it does nothing there.
+  // Zooms the view out, or in, to show the whole of the current level, or the whole of the figure on show in the room
+  // above the card. A leaf has no diagram, so it does nothing there.
   function zoomToFit() {
+    if (state.figure) { animateViewBox(state.view, figureView(state.figure.layout), 280); return; }
     if (!state.current) return;
     animateViewBox(state.view, fitAll(state.current.layout), 280);
   }
@@ -3119,7 +3334,7 @@
 
 
   function refreshChrome() {
-    $("#fit").disabled = !state.current;
+    $("#fit").disabled = !state.current && !state.figure;
     renderBreadcrumb();
     renderDetails();
     renderChanges();
@@ -3336,6 +3551,7 @@
     }
     // Bring the neighborhood of the selection out of the dimming.
     s.classList.toggle("focused", markFocus(key, "in-focus"));
+    bringOut();
     renderDetails();
   }
 
@@ -3392,7 +3608,7 @@
       return { x: state.view.x + (ev.clientX - b.left) / b.width * state.view.w, y: state.view.y + (ev.clientY - b.top) / b.height * state.view.h };
     };
     s.addEventListener("wheel", (ev) => {
-      if (!state.current || !(ev.ctrlKey || ev.metaKey)) return;
+      if (!(state.current || state.figure) || !(ev.ctrlKey || ev.metaKey)) return;
       ev.preventDefault();
       const p = toUser(ev);
       const k = Math.exp(ev.deltaY * 0.0012);
@@ -3552,7 +3768,7 @@
       narrativeFrame = 0;
       renderSummary();
       if (state.current || loc().leaf) renderDetails();
-      if (state.panel === "path" || state.panel === "glossary" || state.panel === "patterns") renderChanges();
+      if (state.panel === "path" || state.panel === "glossary" || state.panel === "patterns" || state.panel === "explainer" && EXPL.state === "waiting") renderChanges();
       refreshPatternChips();
       if (tipKey) showTip(tipKey);
       if (termTip) showTermTip();
@@ -3584,6 +3800,531 @@
     if (NARR.errors.has("summary")) box.append(el("p", { class: "warn" }, NARR.errors.get("summary")));
     box.classList.toggle("clamped", !NARR.expanded);
     box.hidden = false;
+  }
+
+  // ---------- Explainer ----------
+
+  // An explainer is a story of the change that Claude writes when the reviewer asks for it, as a run of slides. Each
+  // slide has a title, a few sentences, the cites they rest on and a target, the one thing the viewer shows while the
+  // slide is current. EXPL holds the explainer of this page's result as the server's explainer events deliver it, with
+  // the number of slides the check dropped and why, and the first-tier steps and changed blocks no slide covers.
+  // The state is "off" when the page can have no explainer, "none" before one is asked for, "asking" between the
+  // request and the first event, "waiting" while the server waits for the narratives the explainer is written from, and
+  // otherwise "writing", "done" or "failed". The current slide is an index into the
+  // slides, or -1, and the card shows it while the card is open. A page opened from a file can carry a canned
+  // explainer as window.CHANGESET_EXPLAINER, in the form of a done event. The earlier flag is set when the review
+  // finished an explainer for an earlier result, which this page drops. See docs/explainers.md section 5.
+  const CANNED_EXPLAINER = window.CHANGESET_EXPLAINER || null;
+  const EXPL = { state: API && META.narratives ? "none" : "off", slides: [], dropped: 0, reasons: [], uncovered: [], message: "",
+    current: -1, open: false, minimized: false, asked: false, note: null, earlier: false };
+  // The word each kind of target shows by on a slide's row in the face and on the card.
+  const SLIDE_KIND = { level: "level", edge: "edge", block: "block", decision: "decision", hunk: "hunk", type: "type", pattern: "pattern", concept: "concept", tests: "tests", figure: "figure" };
+  if (CANNED_EXPLAINER) takeExplainer(CANNED_EXPLAINER);
+
+  // Takes an explainer event's state and message, and from a finished explainer its slides, the slides dropped with
+  // the reasons, and what no slide covers.
+  function takeExplainer(e) {
+    EXPL.state = e.state;
+    EXPL.message = e.message || "";
+    if (e.state !== "done") return;
+    EXPL.slides = e.slides || [];
+    EXPL.dropped = e.dropped || 0;
+    EXPL.reasons = e.reasons || [];
+    EXPL.uncovered = e.uncovered || [];
+    EXPL.current = -1;
+  }
+
+  // Records an explainer event of this page's run. A finished explainer that this page asked for opens at its first
+  // slide; one replayed to a page that opens later only lists its slides, and closes the card of the one it replaces.
+  // An explainer of an earlier result names that result's blocks and edges, so the page drops it, and the face offers
+  // to write one for this result.
+  function explainerEvent(e) {
+    if (e.run !== META.run) {
+      if (e.run < META.run && e.state === "done" && !EXPL.earlier) { EXPL.earlier = true; refreshExplainer(); }
+      return;
+    }
+    const asked = EXPL.asked && e.state === "done";
+    if (e.state === "done" || e.state === "failed") EXPL.asked = false;
+    takeExplainer(e);
+    if (e.state === "done") {
+      if (asked && EXPL.slides.length) { openSlide(0); return; }
+      EXPL.open = false;
+    }
+    refreshExplainer();
+  }
+
+  // Asks the server to write the explainer, or to write it again past the cache when regenerate is true, and shows
+  // the request's progress in the face. A refused request shows the server's reason.
+  async function writeExplainer(regenerate) {
+    EXPL.asked = true;
+    EXPL.state = "asking";
+    EXPL.message = "";
+    refreshExplainer();
+    const r = await send(`${API}/explainer`, { regenerate });
+    if (r.ok) return;
+    EXPL.asked = false;
+    EXPL.state = "failed";
+    EXPL.message = r.body.message || `The explainer could not be requested; the server answered with status ${r.status}.`;
+    refreshExplainer();
+  }
+
+  // Draws the face again when it is the panel on show, and the card.
+  function refreshExplainer() {
+    if (state.panel === "explainer") renderChanges();
+    renderCard();
+  }
+
+  // Returns what the face says while the explainer is on its way. While the server waits for the narratives, the count
+  // of those written follows the narratives events as they arrive, and otherwise the server's message is shown.
+  function explainerProgress() {
+    if (EXPL.state === "waiting" && NARR.state === "writing" && NARR.total)
+      return `Waiting for Claude to finish the narratives (${NARR.items.size} of ${NARR.total} written); the explainer is written from them.`;
+    return EXPL.message || "Asking Claude for the explainer…";
+  }
+
+  // Returns the word a slide's target shows by: its kind, or "view" for a level target that names a view.
+  function slideKindText(t) {
+    if (t.kind === "level" && String(t.id).startsWith("view:")) return "view";
+    return SLIDE_KIND[t.kind] || t.kind;
+  }
+
+  // Renders the Explainer face into the panel. Before an explainer exists it says what one is and offers Write it with
+  // its cost; while one is written it shows the server's message. Once one exists it lists the slides with the current
+  // one marked, the arrows and the count in the pinned head, the steps and blocks no slide covers, how many slides the
+  // check dropped, and Regenerate.
+  function renderExplainer(box, head) {
+    const busy = EXPL.state === "asking" || EXPL.state === "waiting" || EXPL.state === "writing";
+    const have = EXPL.slides.length > 0;
+    const offline = !API ? "Writing an explainer needs the vibecheck server with Claude." : null;
+    if (have) {
+      const at = EXPL.current, n = EXPL.slides.length;
+      head.append(el("div", { class: "path-head" },
+        el("button", { class: "btn step-arrow", disabled: at <= 0, onclick: () => openSlide(at - 1), "aria-label": "Previous slide", title: "Previous slide" }, "←"),
+        el("button", { class: "btn step-arrow", disabled: at >= n - 1, onclick: () => openSlide(at + 1), "aria-label": "Next slide", title: "Next slide" }, "→"),
+        el("span", {}, at < 0 ? plural(n, "slide", "slides") : `${at + 1} of ${n}`)));
+    }
+    if (busy) box.append(el("p", { class: "hint explainer-progress" }, el("span", { class: "spin", "aria-hidden": "true" }), " ",
+      explainerProgress()));
+    if (EXPL.state === "failed") box.append(el("p", { class: "warn" }, EXPL.message || "Claude could not write the explainer."));
+    if (!have) {
+      if (EXPL.earlier && !busy) box.append(el("p", { class: "hint" }, "The explainer written for this review's earlier result named the blocks and edges of that map, " +
+        "so it was dropped. Write one for the map shown now."));
+      box.append(el("p", { class: "explainer-intro" }, "An explainer walks you through the change the way its author would walk a peer through it: " +
+        "what it is for, where it lives on the map, its main new structures and decisions, how it is tested, and what to look at closely. " +
+        "It is a run of short slides, and each slide moves the map to the part it describes. Claude writes it, and the path stays the account the review rests on."));
+      if (!busy) box.append(el("div", { class: "explainer-action" },
+        el("button", { class: "btn", disabled: !!offline, title: offline || "", onclick: () => writeExplainer(false) }, EXPL.state === "failed" ? "Try again" : "Write it"),
+        el("span", { class: "hint" }, "One request to Claude, about a minute.")));
+      return;
+    }
+    box.append(el("p", { class: "hint" }, "Written by Claude; check it against the code. A slide opens where its target lives, and opening one marks nothing read."));
+    const ol = el("ol", { class: "list slides" });
+    EXPL.slides.forEach((s, i) => {
+      // A slide whose target has a step of its own shows whether that step is read, so that a second tour shows what is finished.
+      const step = slideStep(s);
+      const read = step && step.files.length ? el("span", { class: "step-meta slide-read", title: "The step on the path that opens this slide's target" }, stepRead(step) ? "read" : "unread") : null;
+      ol.append(el("li", {}, el("button", { class: "row step" + (i === EXPL.current ? " current" : ""), onclick: () => openSlide(i), title: s.title },
+        el("span", { class: "slide-number" }, String(i + 1)), el("span", { class: "step-text" }, s.title), read,
+        el("span", { class: "step-kind slide-kind" }, slideKindText(s.target || {})))));
+    });
+    box.append(ol);
+    if (EXPL.dropped) {
+      const why = el("details", { class: "explainer-dropped" }, el("summary", {}, `${plural(EXPL.dropped, "slide", "slides")} failed the check against the changeset and ${EXPL.dropped === 1 ? "was" : "were"} dropped.`));
+      if (EXPL.reasons.length) why.append(el("ul", {}, ...EXPL.reasons.map((r) => el("li", {}, r))));
+      box.append(why);
+    }
+    if (EXPL.uncovered.length) {
+      box.append(el("h3", {}, `Not in the explainer: ${EXPL.uncovered.length}`));
+      box.append(el("ul", { class: "list" }, ...EXPL.uncovered.map((u) => el("li", {}, uncoveredRow(u)))));
+    }
+    box.append(el("div", { class: "explainer-action" },
+      el("button", { class: "btn", disabled: busy || !!offline, title: offline || "Write the explainer again, past the cache", onclick: () => writeExplainer(true) }, "Regenerate")));
+    const cur = box.querySelector(".row.step.current");
+    if (cur) cur.scrollIntoView({ block: "nearest" });
+  }
+
+  // Returns the row of a first-tier step or changed block that no slide covers, which opens it, or its identifier as
+  // text when the changeset no longer has it.
+  function uncoveredRow(u) {
+    const s = u.kind === "step" ? PATH.find((x) => x.id === u.id) : null;
+    if (s) return el("button", { class: "row step", onclick: () => openOnPath(s), title: "Open the step on the path" },
+      el("span", { class: "step-kind " + s.kind }, s.kind === "node" ? "block" : s.kind), el("span", { class: "step-text" }, stepSignal(s)));
+    if (u.kind === "block" && (NODES[u.id] || isOther(u.id))) return el("button", { class: "row step", onclick: () => showInContext(u.id), title: u.id },
+      el("span", { class: "step-kind node" }, "block"), el("span", { class: "step-text" }, nameOf(u.id)));
+    return el("span", { class: "row step", title: "The changeset no longer has it" }, el("span", { class: "step-kind" }, u.kind), el("span", { class: "step-text" }, u.id));
+  }
+
+  // Returns the step of the path that opens the same target as a slide, as the server names it, or null when none does.
+  function slideStep(s) {
+    const id = s.target && s.target.step;
+    return id ? PATH.find((x) => x.id === id) || null : null;
+  }
+
+  // Opens the step of the path that shares a slide's target, with the path in the panel, where the step's files and
+  // Mark read are. It is the one bridge from the explainer to the reviewed marks. See docs/explainers.md section 5.4.
+  function openOnPath(step) {
+    state.panel = "path";
+    return openStep(step);
+  }
+
+  // Returns the line that shows the stated intents covering a slide's target, as the path shows them for a step: those
+  // of the step that opens the same target, or else those of its decision, block or drawn edge, as the details panel
+  // finds them. Returns null when the changeset has no intents or none covers the target.
+  function slideIntent(s) {
+    if (!INTENTS.length) return null;
+    const t = s.target || {}, step = slideStep(s);
+    if (step && (step.intents || step.uncovered)) return stepIntent(step);
+    let list = [];
+    if (t.kind === "decision") list = ((DECISIONS.get(t.id) || {}).intents || []).map((i) => INTENTS[i]).filter(Boolean);
+    else if (t.kind === "block" && String(t.id).startsWith("g:")) list = isGroup(t.id) ? intentsOfBlock(null, groupLeaves(t.id)) : [];
+    else if (t.kind === "block") list = NODES[t.id] || isOther(t.id) ? intentsOfBlock(t.id, leavesUnder(t.id)) : [];
+    else if (t.kind === "edge") {
+      const e = state.current && state.current.level.edges.find((x) => x.key === "edge:" + t.id);
+      list = e ? intentsOfEdge(e) : [];
+    }
+    else if (t.kind === "type") list = intentsAnchoredAt("type", t.id);
+    else if (t.kind === "hunk") {
+      // A hunk is covered by an anchor on its file and by the intents of the decision it holds, when it holds one.
+      const ofDecision = ((DECISIONS.get(`${t.file}#${t.index}`) || {}).intents || []).map((i) => INTENTS[i]).filter(Boolean);
+      list = [...new Set([...intentsAnchoredAt("file", t.file), ...ofDecision])];
+    }
+    return intentLine(list, false);
+  }
+
+  // Makes a slide current, shows the card with it, and opens its target. The card is drawn again once the target is
+  // open, since the intents of an edge are found from the edge as drawn.
+  async function openSlide(i) {
+    if (i < 0 || i >= EXPL.slides.length) return;
+    EXPL.current = i;
+    EXPL.open = true;
+    EXPL.note = null;
+    if (state.panel === "explainer") renderChanges();
+    renderCard();
+    bringOut();
+    await showSlideTarget(EXPL.slides[i].target || {});
+    if (EXPL.current === i && EXPL.open) renderCard();
+  }
+
+  // Closes the card, which ends the tour and keeps the explainer and its current slide.
+  function closeCard() {
+    EXPL.open = false;
+    renderCard();
+    bringOut();
+  }
+
+  // Returns the keys of the drawing on screen that a slide's target brings out, or null when it brings out nothing
+  // there. A level slide brings out its named blocks with the edges at them, a block slide the block alone, an edge
+  // slide the edge, its label and the blocks at its ends, and a concept slide the blocks that hold its types. A block or edge is brought out only while it is the
+  // selection, and a level's blocks only while nothing is selected, so that a reviewer's own click takes over.
+  function slideEmphasis(t) {
+    const l = loc();
+    if (!t || !state.current || l.leaf || l.group) return null;
+    const level = state.current.level;
+    if (t.kind === "concept") {
+      // A concept brings out the blocks that hold its types, while nothing is selected.
+      const term = TERMS.get(t.id);
+      const keys = term && !state.selected ? patternBlocks(term).touched : null;
+      return keys && keys.size ? keys : null;
+    }
+    if (t.kind === "level" && (t.blocks || []).length) {
+      const id = String(t.id);
+      if (state.selected || (id.startsWith("view:") ? l.view !== id.slice(5) : l.view || l.level !== id)) return null;
+      const leaves = t.blocks.flatMap((b) => b.startsWith("g:") ? (isGroup(b) ? groupLeaves(b) : []) : NODES[b] || isOther(b) ? leavesUnder(b) : []);
+      const keys = patternBlocks({ instances: leaves.map((leaf) => ({ leaf })) }).touched;
+      // The edges at a brought-out block stay, with their labels, so that what the blocks use and are used by still shows.
+      for (const e of level.edges) if (keys.has(e.from) || keys.has(e.to)) keys.add(e.key).add(e.key + ":label");
+      return keys.size ? keys : null;
+    }
+    const key = t.kind === "edge" ? "edge:" + t.id : t.kind === "block" || t.kind === "level" ? String(t.id) : null;
+    if (!key || state.selected !== key) return null;
+    if (t.kind === "edge") {
+      const e = level.edges.find((x) => x.key === key);
+      return e ? new Set([e.key, e.key + ":label", e.from, e.to]) : null;
+    }
+    return level.children.some((c) => c.key === key) ? new Set([key]) : null;
+  }
+
+  // Brings out what the current slide's target names in the drawing and dims the rest, while the slide is current and
+  // the card is open. Hovering never changes it, and a selection of something else ends it until Show again. See
+  // docs/explainers.md section 5.3.
+  function bringOut() {
+    const s = stage();
+    for (const n of s.querySelectorAll(".brought")) n.classList.remove("brought");
+    const slide = EXPL.open && EXPL.slides[EXPL.current];
+    const keys = slide ? slideEmphasis(slide.target) : null;
+    if (keys) for (const k of keys) for (const n of s.querySelectorAll(`[data-key="${CSS.escape(k)}"]`)) n.classList.add("brought");
+    s.classList.toggle("bringing-out", !!keys);
+  }
+
+  // Opens a slide's target as the path opens its steps, and fits it into the room above the card. A target the
+  // changeset does not have, or of a kind this viewer does not open, leaves the panel where it is and says so on the
+  // card.
+  async function showSlideTarget(t) {
+    if (state.tab !== "map") showTab("map");
+    const missing = () => { EXPL.note = "This slide's target is not in the changeset, so the panel stays where it is."; renderCard(); };
+    // A figure gives way to any other target, and the stage returns to the map before the target opens.
+    if (t.kind !== "figure") await leaveFigure();
+    clearFocus();
+    switch (t.kind) {
+      case "level": {
+        const id = String(t.id);
+        const view = id.startsWith("view:") ? id.slice(5) : null;
+        if (view ? !VIEWS[view] : id !== ROOT && !NODES[id]) return missing();
+        if (!view && isLeaf(id)) { await showInContext(id); return bringIntoRoom(id); }
+        const m = await openLocation(id);
+        if (m) setViewBox(fitInRoom(levelRect(m.layout), 10));
+        return;
+      }
+      case "edge": {
+        const loc = t.location || ROOT, view = loc.startsWith("view:") ? loc.slice(5) : null;
+        if (view ? !VIEWS[view] : loc !== ROOT && !NODES[loc]) return missing();
+        const m = await openLocation(loc, t.id);
+        if (m && !m.level.edges.some((e) => e.key === "edge:" + t.id)) { EXPL.note = "This slide's edge is not drawn at its level."; renderCard(); return; }
+        return bringIntoRoom("edge:" + t.id);
+      }
+      case "block": {
+        const id = String(t.id);
+        if (id.startsWith("g:")) {
+          // A view's group is drawn at its view's level.
+          if (!isGroup(id)) return missing();
+          const m = await openLocation("view:" + id.slice(2).split("/")[0]);
+          if (m) { select(id); bringIntoRoom(id); }
+          return;
+        }
+        if (!NODES[id] && !isOther(id) && id !== UNSORTED) return missing();
+        await showInContext(id);
+        return bringIntoRoom(id);
+      }
+      case "decision": {
+        const d = DECISIONS.get(t.id);
+        return d ? openDecision(d) : missing();
+      }
+      case "hunk":
+        return (HUNKS.get(t.file) || [])[t.index] ? openHunk(t.file, t.index) : missing();
+      case "type":
+        return TYPE_BY_NAME.has(t.id) ? openType(t.id) : missing();
+      case "pattern": {
+        // The instance opens with its pattern in the details panel, as a pattern step opens it, and beside its nearest
+        // example in the compare view when it has one.
+        const p = PATTERNS.get(t.pattern), instance = p && p.instances.find((i) => i.type === t.id);
+        if (!instance) return missing();
+        state.pattern = { id: p.id, type: t.id };
+        const near = instance.examples && instance.examples.nearest;
+        return near && instance.compare[near] && p.sources[t.id] ? startCompare(p.id, t.id, near) : openType(t.id);
+      }
+      case "concept": {
+        // The concept opens on the map, at the level that draws the blocks holding its types apart, with those blocks
+        // brought out and its entry in the details panel. The panel stays on the explainer.
+        const term = TERMS.get(t.id);
+        if (!term) return missing();
+        state.slideTerm = term.key;
+        const m = await openLocation(levelShowing(term.instances.map((i) => i.leaf).filter(Boolean)));
+        if (m) setViewBox(fitInRoom(levelRect(m.layout), 10));
+        return;
+      }
+      case "figure": {
+        const slide = EXPL.slides[EXPL.current];
+        return t.figure && (t.figure.boxes || []).length ? showFigure(t.figure, slide ? slide.title : "Figure") : missing();
+      }
+      case "tests": {
+        // The test type opens at its first changed hunk. The panel stays on the explainer.
+        const tt = TEST_TYPES.find((x) => x.name === t.id);
+        if (!tt) return missing();
+        return openTestType(tt);
+      }
+      default:
+        EXPL.note = `This slide's target is of a kind this viewer does not know, ${t.kind}.`;
+        renderCard();
+    }
+  }
+
+  // Shows the figure of a slide in the stage in place of the map, fitted to the room above the card. The trail keeps
+  // the location the stage returns to, and the breadcrumb names the figure after it. A mount that starts while the
+  // figure is laid out cancels it, and any later mount ends it. See docs/explainers.md section 3.3.
+  async function showFigure(fig, title) {
+    const token = ++mountToken;
+    const layouts = await Promise.all(["RIGHT", "DOWN"].map((d) => figureLayout(fig, d)));
+    if (token !== mountToken) return;
+    rememberView();
+    $(".stage-wrap").hidden = false; $("#leafview").hidden = true; $("#legend-panel").hidden = true;
+    // The figure runs in the direction that draws it larger in the room above the card.
+    const layout = figureScale(layouts[1]) > figureScale(layouts[0]) ? layouts[1] : layouts[0];
+    state.figure = { figure: fig, title, layout };
+    state.current = null;
+    const s = stage();
+    for (const old of s.querySelectorAll(".level")) old.remove();
+    $("#dots").removeAttribute("patternTransform");
+    s.classList.remove("hovering", "focused", "bringing-out");
+    s.append(renderFigure(fig, layout, title));
+    $("#statusline").textContent = `figure · ${plural(fig.boxes.length, "box", "boxes")} · ${plural(fig.arrows.length, "arrow", "arrows")}`;
+    refreshChrome();
+    setViewBox(figureView(layout));
+  }
+
+  // Returns the scale at which a figure's whole drawing fits the room above the card, in pixels per unit.
+  function figureScale(layout) {
+    const total = frameOf(layout).total;
+    return Math.min(stage().getBoundingClientRect().width / total.w, roomAbove() / total.h);
+  }
+
+  // Returns the view that fits a figure into the room above the card. A small figure is drawn no larger than the map's
+  // own scale, so that its text is the size of a block's, and is centered in the room.
+  function figureView(layout) {
+    const r = levelRect(layout), grow = Math.max(1, figureScale(layout));
+    return fitInRoom({ x: r.x - r.w * (grow - 1) / 2, y: r.y - r.h * (grow - 1) / 2, w: r.w * grow, h: r.h * grow }, 10);
+  }
+
+  // Ends the figure on show, when there is one, and draws the location the trail names again, at the view it was left at.
+  async function leaveFigure() {
+    if (!state.figure) return;
+    const m = await mount();
+    if (m) setViewBox(arrive(m));
+  }
+
+  // Returns the details panel's section for the figure on show: what it is, and the types its boxes stand for, each a
+  // link that opens the type when the changeset has it.
+  function figurePanel() {
+    const { figure, title } = state.figure;
+    const box = el("section", { class: "figure-panel" }, el("h2", {}, "Figure"),
+      el("p", { class: "purpose" }, `Claude drew this figure for the slide "${title}". It is not part of the map; check it against the code.`));
+    const typed = figure.boxes.filter((b) => b.type);
+    if (typed.length) box.append(el("h3", {}, "Types"), el("ul", { class: "list" }, ...typed.map((b) => el("li", {},
+      TYPE_BY_NAME.has(b.type) ? el("button", { class: "link", onclick: () => openType(b.type), title: b.type }, shortName(b.type))
+        : el("code", { title: "The change does not have this type" }, shortName(b.type)),
+      " ", el("span", { class: "hint" }, b.label)))));
+    box.append(el("p", { class: "hint" }, "Close the card, move to another slide or click a crumb to return to the map."));
+    return box;
+  }
+
+  // Returns the rectangle of a level's whole drawing, in stage coordinates.
+  function levelRect(layout) {
+    const f = frameOf(layout);
+    return { x: 0, y: 0, w: f.total.w, h: f.total.h };
+  }
+
+  // Returns the height in pixels of the part of the stage that the card leaves in view, which is the whole stage when
+  // the card is closed.
+  function roomAbove() {
+    const s = stage().getBoundingClientRect(), card = $("#slidecard");
+    if (!EXPL.open || card.hidden) return s.height;
+    return Math.max(s.height / 3, Math.min(s.height, card.getBoundingClientRect().top - s.top - 8));
+  }
+
+  // Returns the view that fits a rectangle of the drawing into the room above the card, with padding around it. The
+  // view keeps the stage's aspect and reaches down behind the card.
+  function fitInRoom(r, pad) {
+    const s = stage().getBoundingClientRect(), room = roomAbove();
+    state.aspect = stageAspect();
+    if (!s.width || !room) return fitRect(r, pad, state.aspect);
+    const v = fitRect(r, pad, s.width / room);
+    return { x: v.x, y: v.y, w: v.w, h: v.h * s.height / room };
+  }
+
+  // Moves the view so that the drawn element with a key sits in the room above the card. An element already in the
+  // room stays where it is, one that fits at the present zoom is centered in the room, and a larger one is fitted to it.
+  function bringIntoRoom(key) {
+    const node = state.current && stage().querySelector(`[data-key="${CSS.escape(key)}"]`);
+    if (!node) return;
+    const s = stage().getBoundingClientRect(), b = node.getBoundingClientRect(), room = roomAbove();
+    if (!s.width) return;
+    if (b.left >= s.left && b.right <= s.right && b.top >= s.top && b.bottom <= s.top + room) return;
+    const k = state.view.w / s.width, pad = 30;
+    const r = { x: state.view.x + (b.left - s.left) * k, y: state.view.y + (b.top - s.top) * k, w: b.width * k, h: b.height * k };
+    const to = r.w + 2 * pad <= state.view.w && r.h + 2 * pad <= room * k
+      ? { x: r.x + r.w / 2 - state.view.w / 2, y: r.y + r.h / 2 - room * k / 2, w: state.view.w, h: state.view.h }
+      : fitInRoom(r, pad);
+    animateViewBox(state.view, to, 280);
+  }
+
+  // Returns a slide's cite as a link where the changeset has what it names: a file opens its diff, a type of a type
+  // pair opens its declaration's leaf, and a part of the map opens in context. Anything else shows as text.
+  function citeLink(c) {
+    const pair = c.split(/\s*→\s*/);
+    if (pair.length === 2) return el("span", {}, ...pair.flatMap((x, i) => [i ? " → " : "",
+      TYPE_BY_NAME.has(x) ? el("button", { class: "link", onclick: () => openType(x), title: x }, shortName(x)) : el("span", { title: x }, shortName(x))]));
+    if (fileOf(c)) return el("button", { class: "link", onclick: () => openFile(c), title: c }, c.split("/").pop());
+    if (NODES[c]) return el("button", { class: "link", onclick: () => showInContext(c), title: c }, nameOf(c));
+    return el("span", {}, c);
+  }
+
+  // Draws the card of the current slide over the lower part of the main panel, or hides it when the card is closed.
+  // The card holds the slide's number, title, text and cites, the stated intents that cover its target, its arrows,
+  // Show again, Open on the path when a step of the path opens the same target, and a close, and it is marked as
+  // written by Claude. The main panel keeps room under the leaf view for the card, so that the end of a file can scroll
+  // above it.
+  function renderCard() {
+    const card = $("#slidecard"), canvas = $(".canvas");
+    const s = EXPL.open && EXPL.slides[EXPL.current];
+    // A figure belongs to its slide's card, so the stage returns to the map when the card goes.
+    if (!s) { card.hidden = true; canvas.style.removeProperty("--card-room"); leaveFigure(); return; }
+    const n = EXPL.slides.length, at = EXPL.current, step = slideStep(s);
+    const previous = () => el("button", { class: "btn step-arrow", disabled: at <= 0, onclick: () => openSlide(at - 1), "aria-label": "Previous slide", title: "Previous slide (Left arrow)" }, "←");
+    const next = () => el("button", { class: "btn step-arrow", disabled: at >= n - 1, onclick: () => openSlide(at + 1), "aria-label": "Next slide", title: "Next slide (Right arrow)" }, "→");
+    const size = el("button", { class: "card-size", onclick: toggleCard, "aria-expanded": String(!EXPL.minimized),
+      title: EXPL.minimized ? "Show the slide's text (M)" : "Minimize the card to one line, to see what is behind it (M)",
+      "aria-label": EXPL.minimized ? "Show the slide's text" : "Minimize the card" }, EXPL.minimized ? "▴" : "▾");
+    const close = el("button", { class: "close", onclick: closeCard, title: "Close the card (Escape)", "aria-label": "Close the card" }, "×");
+    card.classList.toggle("min", EXPL.minimized);
+    if (EXPL.minimized) {
+      // A minimized card keeps the slide's number and title and the arrows on one line, so the tour goes on beside
+      // what the text covered.
+      card.replaceChildren(el("div", { class: "slide-head" },
+        el("span", { class: "slide-count" }, `${at + 1} of ${n}`),
+        el("h2", { class: "slide-title" }, s.title),
+        previous(), next(), size, close));
+      card.hidden = false;
+      canvas.style.setProperty("--card-room", `${card.offsetHeight + 24}px`);
+      return;
+    }
+    const body = el("div", { class: "slide-body" }, el("p", { class: "slide-text" }, ...richText(s.text || "")));
+    const intent = slideIntent(s);
+    if (intent) body.append(el("p", { class: "slide-intent", title: "Stated in the pull request description; a claim, not evidence." }, intent));
+    if (EXPL.note) body.append(el("p", { class: "warn" }, EXPL.note));
+    if ((s.cites || []).length) body.append(el("div", { class: "slide-cites" }, el("span", { class: "by" }, "Rests on"),
+      ...s.cites.map((c) => el("span", { class: "slide-cite" }, citeLink(c)))));
+    card.replaceChildren(
+      el("div", { class: "slide-head" },
+        el("span", { class: "slide-count" }, `${at + 1} of ${n}`),
+        el("h2", { class: "slide-title" }, s.title),
+        el("span", { class: "step-kind slide-kind" }, slideKindText(s.target || {})),
+        size, close),
+      body,
+      el("div", { class: "slide-foot" },
+        previous(), next(),
+        el("button", { class: "link", onclick: () => showSlideTarget(s.target || {}), title: "Show this slide's target again" }, "Show again"),
+        step ? el("button", { class: "link", onclick: () => openOnPath(step), title: "Open the step of the path that opens this target, where its files can be marked reviewed" }, "Open on the path") : null,
+        el("span", { class: "spacer" }),
+        el("span", { class: "by" }, "written by Claude")));
+    card.hidden = false;
+    canvas.style.setProperty("--card-room", `${card.offsetHeight + 24}px`);
+  }
+
+  // Minimizes the card to one line, or shows the slide's text again. The choice holds as the reviewer moves among the
+  // slides, until it is toggled back. The room the map and the leaf view leave for the card follows its new height.
+  function toggleCard() {
+    EXPL.minimized = !EXPL.minimized;
+    renderCard();
+  }
+
+  // Moves among the slides with the keyboard while the card is open: the right and left arrows to the next and
+  // previous slide, Home and End to the first and last, M minimizes the card or shows its text again, and Escape
+  // closes the card. These keys go to the card before the stage, whose arrows select siblings and whose Escape goes
+  // up a level. The help tip still takes Escape first. The room the card takes follows the card's height as the
+  // window resizes.
+  function installSlideCard() {
+    new ResizeObserver(() => { if (!$("#slidecard").hidden) $(".canvas").style.setProperty("--card-room", `${$("#slidecard").offsetHeight + 24}px`); }).observe($("#slidecard"));
+    document.addEventListener("keydown", (ev) => {
+      if (!EXPL.open || state.tab !== "map" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      if (ev.target.matches("input:not([type=checkbox]):not([type=radio]), select, textarea")) return;
+      const last = EXPL.slides.length - 1;
+      const to = { ArrowRight: EXPL.current + 1, ArrowLeft: EXPL.current - 1, Home: 0, End: last }[ev.key];
+      if (ev.key === "Escape") closeCard();
+      else if (ev.key === "m" || ev.key === "M") toggleCard();
+      else if (to === undefined) return;
+      else if (to >= 0 && to <= last && to !== EXPL.current) openSlide(to);
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    });
   }
 
   // ---------- Stated intent ----------
@@ -3625,6 +4366,11 @@
   }
 
   // Returns the intents with an edge anchor that names one of the leaf edges a drawn edge is made of.
+  // Returns the intents with an anchor of one kind on one target: a file by its path, or a type by its full name.
+  function intentsAnchoredAt(kind, target) {
+    return INTENTS.filter((i) => i.anchors.some((a) => a.kind === kind && a.state !== "unknown" && a.target === target));
+  }
+
   function intentsOfEdge(edge) {
     return INTENTS.filter((i) => i.anchors.some((a) => a.kind === "edge" && a.state !== "unknown" && anchoredEdges(a, edge.members).length));
   }
@@ -3681,10 +4427,16 @@
   // it, with a count when more do, or a flag for a surprise that none covers. A changeset with no intents shows neither.
   function stepIntent(s) {
     if (!INTENTS.length) return null;
-    const covering = (s.intents || []).map((i) => INTENTS[i]).filter(Boolean);
+    return intentLine((s.intents || []).map((i) => INTENTS[i]).filter(Boolean), s.uncovered);
+  }
+
+  // Returns the line that shows the claim of the first of some covering intents, labeled as the author's, with a count
+  // when there are more. With none, it returns the flag for a surprise that no intent covers when uncovered is true,
+  // and otherwise null.
+  function intentLine(covering, uncovered) {
     if (covering.length) return el("span", { class: "step-intent" }, el("span", { class: "intent-label" }, "Author: "), ...richText(covering[0].claim),
       covering.length > 1 ? el("span", { class: "intent-label" }, ` +${covering.length - 1} more`) : null);
-    return s.uncovered ? el("span", { class: "step-intent intent-flag" }, "no stated intent") : null;
+    return uncovered ? el("span", { class: "step-intent intent-flag" }, "no stated intent") : null;
   }
 
   // Renders the Intent panel: how many intents the description states and the discrepancies among them, every intent in
@@ -4464,6 +5216,7 @@
     source.onmessage = (m) => {
       const e = JSON.parse(m.data);
       if (e.type === "narrative" || e.type === "narratives") { narrativeEvent(e); return; }
+      if (e.type === "explainer") { explainerEvent(e); return; }
       const fresh = e.seq >= META.events;
       // The intents resolved before the page loaded are already in the changeset.
       if (e.type === "intents") { if (fresh) intentsEvent(e); return; }
@@ -4546,6 +5299,8 @@
   // Draws the current location again once per frame, keeping the view, the selection and the leaf view's scroll.
   let redrawFrame = 0;
   function redraw() {
+    // A figure shows nothing that a mark or an option changes, and a mount would end it.
+    if (state.figure) { renderDetails(); return; }
     if (redrawFrame) return;
     redrawFrame = requestAnimationFrame(async () => {
       redrawFrame = 0;
@@ -4575,6 +5330,7 @@
     installTip();
     installTermTips();
     installHelpTips();
+    installSlideCard();
     installTypeLinks();
     if (META.review) followReview();
     $("#dim").addEventListener("change", (ev) => { state.opts.dim = ev.target.checked; document.body.classList.toggle("dim", state.opts.dim); });
@@ -4615,7 +5371,7 @@
     // Keeps the view's aspect equal to the stage's when the window resizes, holding the center and the horizontal scale.
     new ResizeObserver(() => {
       const a = stageAspect();
-      if (!state.current || Math.abs(a - state.aspect) < 1e-3) return;
+      if (!(state.current || state.figure) || Math.abs(a - state.aspect) < 1e-3) return;
       const v = state.view, h = v.w / a;
       state.aspect = a;
       setViewBox({ x: v.x, y: v.y + v.h / 2 - h / 2, w: v.w, h });

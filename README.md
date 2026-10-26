@@ -36,8 +36,9 @@ of its phases are built: the format, the guide's section on it, `vibecheck inten
 intents in a review, shown beside Claude's narratives with flags for those that name nothing the change touches,
 and the surprises on the reading path that no intent covers.
 Explainers, a linear narrative that walks a reviewer through a change as its author would, slide by slide over
-the viewer's own drawing of each part, are designed in [docs/explainers.md](docs/explainers.md); none of its
-three phases is built.
+the viewer's own drawing of each part, are designed in [docs/explainers.md](docs/explainers.md); all three of
+its phases are built: the request, the face and the card over every kind of target, the bridge to the reading
+path, and figures for what the map has no place for.
 
 ## Layout
 
@@ -368,6 +369,48 @@ test file's header shows its signals as chips. A test type whose signals touch c
 the change also changed, such as an assertion removed from a test of a rewritten
 method, has a step of its own in the path's first tier after the decisions, and the
 other signals share one closing step.
+
+The left panel's title is a menu of its faces: Path, Explainer, Changes, Intent, Concepts,
+Patterns and Tests, each when the changeset has something for it. When the review has
+Claude, the menu gains the **Explainer** face, second after Path. An explainer
+is a story of the change, written by Claude on request as a run of short slides, each
+pointing at one level, view, edge, block, decision, hunk, type, pattern instance, concept
+or test type, or, as a last resort and on two slides at most, at a figure. **Write it** costs one
+request to Claude, which takes about a minute and costs under a dollar with Opus; the
+explainer is cached, so asking again costs nothing, and **Regenerate** writes it anew.
+While it is written, the face shows progress, first how many of the narratives it is
+written from are done, and the map stays usable. The face then
+lists the slides by number, title and target kind, with the current one marked and
+arrows with "3 of 9" in its head. Under them, **Not in the explainer** links the
+first-tier steps and changed blocks no slide covers, and a line says how many slides
+failed their check and were dropped. The current slide shows in a card over the lower
+part of the map or the leaf view, marked as written by Claude. The card shows the
+slide's title, its text and the files and type pairs it rests on, and the panel moves
+to the slide's target, fitted into the room above the card. A slide brings out only what
+its target names, outlined, and dims the rest of the map for as long as it is current: a
+level or view slide its named blocks with their edges, a block slide the block, and an
+edge slide the edge and the blocks at its ends. Hovering does not change it; selecting
+something else does, until **Show again**. A pattern slide opens the compare view beside the
+instance's nearest example, a concept slide the blocks that hold the concept's types
+with its entry in the details panel, and a tests slide the test type's first changed
+hunk. No slide moves the left panel off the Explainer face; only the reviewer does. A figure slide draws
+a small drawing of boxes, labeled arrows and groups in the stage in place of the map, in
+the map's own style, marked as drawn by Claude; the breadcrumb ends in **Figure**, a box
+whose type the change has opens the type, and moving to another slide, closing the card
+or any navigation returns the stage to the map. When the pull
+request states intents, the card shows the ones that cover the slide's target, marked
+as the author's, as a path step does. A slide whose target is also a step of the path
+offers **Open on the path**, which opens that step where its files can be marked, and
+its row in the face says whether that step is read. While the card is open,
+the right and left arrow keys move among the slides, Home and End go to the first and
+last, M minimizes the card to one line of number, title and arrows so that what it
+covered shows, and Escape closes the card; the map's own use of those keys waits until it
+is closed. Looking around never changes the slide, and **Show again** returns to its
+target. Opening a slide marks nothing reviewed. When the review gets a new result, as
+when it switches to the generated concept map, the page drops the explainer, which
+named the old map's blocks, and the face offers to write one for the new map. `mock/changeset.js` carries a canned
+explainer, as `window.CHANGESET_EXPLAINER`, so that the face and the card open without
+the server.
 
 The theme switch in the top bar follows the system, or always uses light or dark. The
 `vibecheck` command keeps the choice in `settings.json` under its cache folder, so a
