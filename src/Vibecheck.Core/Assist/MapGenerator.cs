@@ -12,14 +12,18 @@ namespace Vibecheck.Assist;
 /// <summary>Holds a map that Claude proposed and the checker verified: the map, its canonical text, the round it came from, and what the checker still reports about it.</summary>
 public sealed record GeneratedMap(ArchitectureMap Map, string Text, int Round, IReadOnlyList<string> Findings);
 
-/// <summary>Holds one thing the checker reports about a map, and the full names of the types it concerns.</summary>
-internal sealed record Finding(string Text, IReadOnlyList<string> Types);
+/// <summary>
+/// Holds one thing the checker reports about a map, the full names of the types it concerns, and whether it is a cycle
+/// in the code, which comes from a <see cref="Knot"/> too large for one leaf and which no map removes.
+/// </summary>
+internal sealed record Finding(string Text, IReadOnlyList<string> Types, bool InCode = false);
 
 /// <summary>
 /// Runs the bootstrapping loop of <c>docs/vibecheck-spec.md</c> section 5.3 without a person in it. Claude proposes a
 /// concept map from a listing of the solution, the checker reports cycles, unsorted types, ambiguous bindings and
-/// oversized leaves, and Claude edits the map until the checker finds nothing or the rounds run out. See
-/// <c>docs/review-workflow.md</c> section 4.4.
+/// oversized leaves, and Claude edits the map until the checker finds nothing or the rounds run out. Before each check,
+/// the stray types of each small <see cref="Knot"/> are moved into one leaf, without asking Claude. See
+/// <c>docs/review-workflow.md</c> section 4.4 and <c>docs/map-cycles.md</c>.
 /// </summary>
 public static class MapGenerator
 {
@@ -43,10 +47,12 @@ public static class MapGenerator
     /// <summary>
     /// Proposes a concept map for an analysis and revises it against the checker's findings. The skeleton supplies the
     /// solution, the exclusions, the test types and the externals, which the generated map keeps. Returns the usable proposal with the
-    /// fewest findings, preferring the later of two that tie. Each revision edits that proposal. A revision that fails, or takes longer than
+    /// fewest findings that a map can fix, then the fewest findings, preferring the later of two that tie. Each revision edits that
+    /// proposal, and is told only the findings that a map can fix. A revision that fails, or takes longer than
     /// <see cref="RequestTimeout"/>, ends the rounds and keeps the best proposal so far. While Claude works, the progress
     /// says every few seconds how long the request has run and how much Claude has thought and written. The log
-    /// receives each finding of every round, and each reason a proposal could not be used as a map.
+    /// receives each finding of every round, each type moved to keep a knot in one leaf, and each reason a proposal
+    /// could not be used as a map.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null, Action<string>? log = null) =>
@@ -63,12 +69,14 @@ public static class MapGenerator
         var (included, _) = Exclusion.Parse(skeleton, errors).Apply(analysis);
         var units = Units.Build(included);
         var (byNamespace, format, listing) = Listing(included, units, maxListing);
+        var knots = Knots.Find(included);
+        var knotSection = KnotSection(knots, included, byNamespace);
         var rules = Prompts.Fill(Prompts.Read("map-rules.md"),
             ("externals", skeleton.Externals.Count == 0 ? "none" : string.Join(", ", skeleton.Externals.Keys.Select(k => $"`{k}`"))),
             ("exclude", string.Join(", ", skeleton.Exclude.Concat(skeleton.Tests).Select(e => $"`{e}`"))));
         var (mapSchema, editSchema) = (Prompts.Read("map.schema.json"), Prompts.Read("map-edits.schema.json"));
         string Propose(IReadOnlyList<string> rejected) => Prompts.Fill(Prompts.Read("propose-map.md"),
-            ("rules", rules), ("format", format), ("rejected", Rejected(rejected)), ("listing", listing));
+            ("rules", rules), ("format", format), ("knots", knotSection), ("rejected", Rejected(rejected)), ("listing", listing));
 
         progress?.Report($"proposing a concept map from {included.Types.Count} types{(byNamespace ? ", listed by namespace" : "")}");
         ClaudeRequest Request(string prompt, string schema, string step) => new(prompt, schema)
@@ -84,8 +92,14 @@ public static class MapGenerator
         var previous = int.MaxValue;
         for (var round = 1; ; round++)
         {
-            var (map, text, found) = Check(candidate, problems, analysis, largeLeaves: !byNamespace);
+            var (map, text, found, gathered) = Check(candidate, problems, analysis, !byNamespace, knots);
             findings = found.Select(f => f.Text).ToList();
+            var fixable = found.Count(f => !f.InCode);
+            if (gathered.Count > 0)
+            {
+                progress?.Report($"round {round}: moved {gathered.Count} type(s) to keep types that reference each other in a loop in one leaf");
+                foreach (var (type, leaf) in gathered) log?.Invoke($"round {round} moved {type} to {leaf}, to keep a knot in one leaf");
+            }
             if (map is null)
             {
                 progress?.Report($"round {round}: the map cannot be used, for {found.Count} reason(s)");
@@ -93,16 +107,19 @@ public static class MapGenerator
             }
             else
             {
-                progress?.Report(found.Count == 0 ? $"round {round}: the checker found nothing to fix" : $"round {round}: the checker reports {found.Count} finding(s)");
-                foreach (var f in findings) log?.Invoke($"round {round} finding: {f}");
+                progress?.Report(found.Count == 0 ? $"round {round}: the checker found nothing to fix"
+                    : fixable == 0 ? $"round {round}: the checker reports only {found.Count} cycle(s) in the code, which no map removes"
+                    : $"round {round}: the checker reports {found.Count} finding(s)");
+                foreach (var f in found) log?.Invoke($"round {round} finding{(f.InCode ? " in the code" : "")}: {f.Text}");
             }
-            if (map is not null && (best is null || found.Count <= best.Findings.Count))
+            var bestFixable = bestFindings.Count(f => !f.InCode);
+            if (map is not null && (best is null || fixable < bestFixable || (fixable == bestFixable && found.Count <= best.Findings.Count)))
                 (best, bestFindings) = (new GeneratedMap(map, text, round, findings), found);
-            // A usable revision that fixes nothing usually meets a cycle in the code itself, which no grouping removes,
-            // so another round would only spend the reviewer's usage. An unusable revision gets another round.
-            var stalled = map is not null && found.Count >= previous;
-            if (found.Count == 0 || round == MaxRounds || stalled) break;
-            previous = map is null ? previous : found.Count;
+            // A usable revision that fixes nothing gets no further round, since another would only spend the reviewer's
+            // usage. Cycles in the code do not count, since no revision removes them. An unusable revision gets another round.
+            var stalled = map is not null && fixable >= previous;
+            if (fixable == 0 || round == MaxRounds || stalled) break;
+            previous = map is null ? previous : fixable;
             var rejected = map is null ? findings : [];
 
             // Until some proposal is usable there is no map to edit, so Claude proposes a whole map again.
@@ -111,10 +128,11 @@ public static class MapGenerator
             if (best is null) prompt = Propose(rejected);
             else
             {
-                var named = bestFindings.SelectMany(f => f.Types).ToHashSet(StringComparer.Ordinal);
+                var sent = bestFindings.Where(f => !f.InCode).ToList();
+                var named = sent.SelectMany(f => f.Types).ToHashSet(StringComparer.Ordinal);
                 var (_, context, types) = named.Count == 0 ? (false, "", "The findings name no types.") : Listing(included, units, maxListing, named);
                 prompt = Prompts.Fill(Prompts.Read("revise-map.md"), ("rules", rules), ("map", Describe(best.Map)),
-                    ("findings", string.Join("\n\n", bestFindings.Select(f => "- " + f.Text.Replace("\n", "\n  ")))),
+                    ("findings", string.Join("\n\n", sent.Select(f => "- " + f.Text.Replace("\n", "\n  ")))),
                     ("rejected", Rejected(rejected)), ("format", context), ("listing", types));
             }
             var editing = best;
@@ -178,7 +196,7 @@ public static class MapGenerator
     internal static (ArchitectureMap? Map, string Text, IReadOnlyList<string> Findings) Evaluate(ArchitectureMap skeleton, JsonElement answer, AnalysisResult analysis)
     {
         var problems = new List<string>();
-        var (map, text, findings) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true);
+        var (map, text, findings, _) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true, knots: []);
         return (map, text, findings.Select(f => f.Text).ToList());
     }
 
@@ -221,31 +239,76 @@ public static class MapGenerator
     }
 
     /// <summary>
-    /// Checks a map. Returns a null map when it cannot be used at all, with the problems and the reasons as findings,
-    /// and otherwise the map as the reader reads it back, its canonical text, and the problems and what the checker
-    /// reports about it.
+    /// Checks a map, after moving the stray types of each small knot into one leaf. Returns a null map when it cannot be
+    /// used at all, with the problems and the reasons as findings. Otherwise returns the map as the reader reads it back,
+    /// its canonical text, the problems and what the checker reports about it, and the moves that kept knots whole.
     /// </summary>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
-    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings) Check(ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves)
+    /// <param name="knots">The solution's knots.</param>
+    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings, IReadOnlyList<(string Type, string Leaf)> Gathered) Check(
+        ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves, IReadOnlyList<Knot> knots)
     {
-        var text = MapWriter.Write(map);
-        var errors = new List<string>();
-        var parsed = MapReader.Read(text, errors);
         IEnumerable<Finding> Plain(IEnumerable<string> texts) => texts.Select(t => new Finding(t, []));
-        if (parsed is null || errors.Count > 0) return (null, text, [.. Plain(problems), .. Plain(errors)]);
-        var facts = Checker.Run(parsed, analysis, new CheckOptions { MapText = text });
-        if (!facts.Passed) return (null, text, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))]);
-        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves)]);
+        (ArchitectureMap? Parsed, string Text, Facts? Facts, List<Finding> Failures) Run(ArchitectureMap map)
+        {
+            var text = MapWriter.Write(map);
+            var errors = new List<string>();
+            var parsed = MapReader.Read(text, errors);
+            if (parsed is null || errors.Count > 0) return (null, text, null, [.. Plain(problems), .. Plain(errors)]);
+            var facts = Checker.Run(parsed, analysis, new CheckOptions { MapText = text });
+            if (!facts.Passed) return (null, text, null, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))]);
+            return (parsed, text, facts, []);
+        }
+
+        var (parsed, text, facts, failures) = Run(map);
+        if (facts is null) return (null, text, failures, []);
+        var gathered = Knots.Gathering(facts, knots);
+        if (gathered.Count > 0)
+        {
+            var moved = parsed!.Clone();
+            foreach (var (type, leaf) in gathered) MapEdits.Move(moved, type, leaf);
+            var again = Run(moved);
+            if (again.Facts is not null) (parsed, text, facts) = (again.Parsed, again.Text, again.Facts);
+            else gathered = [];
+        }
+        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves, Knots.InCode(facts, knots))], gathered);
+    }
+
+    /// <summary>
+    /// Returns the section of the proposal prompt that lists the solution's knots, or an empty string when there is
+    /// none to list. A knot within one namespace is not listed, since a namespace pattern keeps it whole. A solution listed by namespace
+    /// lists only its large knots, by namespace, and leaves its small knots to the knot pass, which keeps the prompt
+    /// from growing with the number of types.
+    /// </summary>
+    private static string KnotSection(IReadOnlyList<Knot> knots, AnalysisResult included, bool byNamespace)
+    {
+        var namespaceOf = included.Types.ToDictionary(t => t.Name, t => t.Namespace, StringComparer.Ordinal);
+        string Spread(Knot k)
+        {
+            var counts = k.Types.GroupBy(t => namespaceOf[t], StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => $"`{g.Key}` ({g.Count()})").ToList();
+            return $"{k.Types.Count} types in {string.Join(", ", counts.Take(12))}{(counts.Count > 12 ? ", …" : "")}";
+        }
+        var listed = knots.Where(k => k.Types.Select(t => namespaceOf[t]).Distinct(StringComparer.Ordinal).Count() > 1).ToList();
+        var small = byNamespace ? [] : listed.Where(k => k.Small).Select(k => "- " + string.Join(", ", k.Types.Select(t => $"`{t}`"))).ToList();
+        var large = listed.Where(k => !k.Small).Select(k => "- " + Spread(k)).ToList();
+        if (small.Count == 0 && large.Count == 0) return "";
+        return Prompts.Fill(Prompts.Read("knots.md"),
+            ("small", small.Count == 0 ? "" : $"Bind the types of each of these sets to one leaf.\n\n{string.Join("\n", small)}\n\n"),
+            ("large", large.Count == 0 ? "" : "Each of these sets holds more types than one leaf should, so the cycle it makes cannot be avoided. "
+                + $"Place its types under one container, so that the cycle stays among that container's children.\n\n{string.Join("\n", large)}\n\n"));
     }
 
     /// <summary>
     /// Returns what the checker's facts say is wrong with a usable map: unsorted types, types two leaves claim equally,
     /// cycles among a level's children with the type pairs behind each edge, cycles among a view's groups, and, when
-    /// asked for, leaves too large for a view to regroup. Each finding names the types it concerns.
+    /// asked for, leaves too large for a view to regroup. Each finding names the types it concerns, and a cycle that is in
+    /// the code says so.
     /// </summary>
     /// <param name="facts">The checker's facts about the map.</param>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
-    internal static List<Finding> Findings(Facts facts, bool largeLeaves = true)
+    /// <param name="inCode">A function that tells whether a level's cycle is in the code, as <see cref="Knots.InCode"/> returns it, or <see langword="null"/> when none is.</param>
+    internal static List<Finding> Findings(Facts facts, bool largeLeaves = true, Func<string, IReadOnlyList<string>, bool>? inCode = null)
     {
         var findings = new List<Finding>();
         var unsorted = facts.Types.Where(t => t.Leaf == ArchitectureMap.Unsorted).Select(t => t.Name).ToList();
@@ -267,7 +330,9 @@ public static class MapGenerator
                     sb.Append($"\n{from} → {to}: {pairs.Sum(p => p.Count)} reference(s), from {string.Join(", ", pairs.Take(4).Select(p => $"{p.FromType} → {p.ToType} ({p.Count})"))}");
                     types.AddRange(pairs.Take(4).SelectMany(p => new[] { p.FromType, p.ToType }));
                 }
-                findings.Add(new(sb.ToString(), types));
+                var code = inCode?.Invoke(level, cycle) == true;
+                if (code) sb.Append("\nThis cycle is in the code: it comes from types that reference each other in a loop and are too many for one leaf.");
+                findings.Add(new(sb.ToString(), types, code));
             }
         }
         foreach (var (view, metrics) in facts.Views)

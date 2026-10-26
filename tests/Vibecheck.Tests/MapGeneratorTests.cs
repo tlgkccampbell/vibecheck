@@ -259,6 +259,101 @@ public class MapGeneratorTests
         Assert.Equal((2, 1), (generated.Round, generated.Findings.Count));
     }
 
+    /// <summary>The synthetic analysis, with Other referencing Thing back, so that the two form a small knot across units.</summary>
+    private static AnalysisResult SmallKnot(Func<TypeInfo, TypeInfo>? adjust = null) =>
+        TestData.Analysis([new(TestData.Other, TestData.Thing, "references", TestData.Thing, TestData.Y1, 3)], adjust: adjust);
+
+    /// <summary>
+    /// The synthetic analysis, with a loop of 61 types, too many for one leaf, of which K.P holds 31 and K.Q holds 30.
+    /// </summary>
+    private static AnalysisResult LargeKnot()
+    {
+        var names = Enumerable.Range(0, 61).Select(i => i < 31 ? $"K.P.T{i:00}" : $"K.Q.T{i:00}").ToList();
+        return TestData.Analysis(
+            names.Select((n, i) => new RawDependency(n, names[(i + 1) % names.Count], "references", names[(i + 1) % names.Count], TestData.X1, i + 1)),
+            names.Select(n => new TypeInfo(n, "Example.A", [TestData.X1])));
+    }
+
+    /// <summary>A proposal for <see cref="LargeKnot"/> that leaves the shared types unbound and splits the knot between two leaves of one container.</summary>
+    private const string SplitKnot = """
+        { "nodes": [
+            { "id": "app", "name": "App", "purpose": "The application.", "category": "domain" },
+            { "id": "app.x", "name": "Things", "purpose": "Does the thing.", "bind": ["A.X.**"] },
+            { "id": "app.y", "name": "Others", "purpose": "Other work.", "bind": ["A.Y.**"] },
+            { "id": "service", "name": "Service", "purpose": "The service.", "bind": ["B.**"] },
+            { "id": "k", "name": "K", "purpose": "The loop.", "category": "domain" },
+            { "id": "k.p", "name": "P", "purpose": "One side.", "bind": ["K.P.**"] },
+            { "id": "k.q", "name": "Q", "purpose": "The other side.", "bind": ["K.Q.**"] } ],
+          "views": [] }
+        """;
+
+    [Fact]
+    public void FindsKnotsAndTellsSmallFromLarge()
+    {
+        var small = Assert.Single(Knots.Find(SmallKnot()));
+        Assert.Equal([TestData.Thing, TestData.Other], small.Types);
+        Assert.True(small.Small);
+
+        var large = Assert.Single(Knots.Find(LargeKnot()));
+        Assert.Equal(61, large.Types.Count);
+        Assert.False(large.Small);
+        Assert.Empty(Knots.Find(TestData.Analysis()));
+    }
+
+    [Fact]
+    public async Task KeepsASmallKnotInOneLeafWithoutAskingClaudeAgain()
+    {
+        var claude = new FakeClaude(Complete);
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), SmallKnot(), claude, log: log.Add);
+
+        Assert.Single(claude.Requests);
+        Assert.Contains("Bind the types of each of these sets to one leaf.\n\n- `A.X.Thing`, `A.Y.Other`\n", claude.Requests[0].Prompt, StringComparison.Ordinal);
+        Assert.Equal((1, 0), (generated.Round, generated.Findings.Count));
+        Assert.Equal(["A.X.**", TestData.Other], generated.Map.Nodes["app.x"].Bind);
+        Assert.Equal(["round 1 moved A.Y.Other to app.x, to keep a knot in one leaf"], log);
+    }
+
+    [Fact]
+    public async Task GathersAKnotInTheLeafOfItsAttributedType()
+    {
+        var analysis = SmallKnot(t => t.Name == TestData.Other ? t with { Attribute = "app.y" } : t);
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), analysis, new FakeClaude(Complete));
+
+        Assert.Equal(["A.Y.**", TestData.Thing], generated.Map.Nodes["app.y"].Bind);
+        Assert.Empty(generated.Findings);
+    }
+
+    [Fact]
+    public async Task ReportsACycleFromALargeKnotAsInTheCodeAndNeverSendsItBack()
+    {
+        var claude = new FakeClaude(SplitKnot, AddShared);
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), LargeKnot(), claude, log: log.Add);
+
+        Assert.Contains("- 61 types in `K.P` (31), `K.Q` (30)\n", claude.Requests[0].Prompt, StringComparison.Ordinal);
+        Assert.Contains("unsorted", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("cycle among", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Equal(2, claude.Requests.Count);
+        var finding = Assert.Single(generated.Findings);
+        Assert.StartsWith("cycle among the children of k: ", finding, StringComparison.Ordinal);
+        Assert.Contains(log, l => l.StartsWith("round 2 finding in the code: cycle among the children of k", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FindsKnotsInALongChainWithoutRunningOutOfStack()
+    {
+        var names = Enumerable.Range(0, 100_000).Select(i => $"C.T{i}").ToList();
+        var analysis = TestData.Analysis(
+            names.Select((n, i) => new RawDependency(n, names[(i + 1) % names.Count], "references", "x", TestData.X1, 1)),
+            names.Select(n => new TypeInfo(n, "Example.A", [TestData.X1])));
+
+        Assert.Equal(100_000, Assert.Single(Knots.Find(analysis)).Types.Count);
+    }
+
     [Fact]
     public async Task KeepsTheBestProposalWhenARevisionFails()
     {

@@ -7,7 +7,8 @@ loop of [review-workflow.md](review-workflow.md) section 4.4 and the checking of
 [vibecheck-spec.md](vibecheck-spec.md) sections 4 and 5.3, and it lists, in section
 8, the changes it makes to those documents.
 
-None of it is built.
+Phase 1 of section 10, knots, is built. Phases 2 and 3, local repair and the
+reviewer's part, are not.
 
 Most revision rounds in practice are spent on cycles among a level's children. Each
 round is an Opus request that takes minutes; the trial of review-workflow.md section
@@ -49,8 +50,10 @@ meet, whatever the rest of the map says.
 
 Knots are found once per generation, before the first proposal, by running
 `Checker.Cycles`, the Tarjan search the checker already uses for levels and views,
-over types instead of nodes. The references are the ones `facts.Dependencies`
-lists, which do not depend on the map.
+over types instead of nodes. The references are the analysis's references among the
+included types, which do not depend on the map. That search keeps its own stack
+rather than recursing, since a chain of types can be far deeper than the call stack
+allows.
 
 A knot of at most `MapGenerator.LargeLeaf` types is **small**, and a larger one is
 **large**. A small knot fits in one leaf; a large one does not, so its cycle is in
@@ -61,8 +64,15 @@ the code itself.
 The proposal prompt lists each small knot by its types' full names and says that the
 types of a knot belong in one leaf. It lists each large knot by its types' namespaces
 and type count, and says that its types belong under one container, so that the cycle
-they cause stays at one level. A solution listed by namespace lists knots by namespace
-in both cases, since its listing names few types.
+they cause stays at one level. A knot whose types share one namespace is not listed,
+since a namespace pattern keeps it whole. A solution listed by namespace lists only
+its large knots, since its listing names few types and a small knot listed by name
+would make the prompt grow with the number of types; the knot pass gathers its small
+knots instead.
+
+A knot within one unit is still listed. A helper that only one type uses folds into
+that type's unit, so a knot often forms a single unit, and a proposal still splits a
+unit when it binds by namespace.
 
 ### 2.2 The knot pass
 
@@ -78,8 +88,10 @@ to that type's leaf instead.
 A cycle among a level's children is **in the code** when it disappears once the
 references inside large knots are left out of the leaf edges. Such a cycle is still a
 finding, and the generated map still draws it, but it is not sent to Claude and does
-not count when the loop compares a revision with the one before. Each finding in the
-log says whether it is in the code.
+not count when the loop compares a revision with the one before. The loop
+stops once only cycles in the code remain, and among usable proposals it keeps the
+one with the fewest other findings, then the fewest findings. A finding in the code
+says so in its text, and its line in the log starts "finding in the code".
 
 ## 3. Local repair
 

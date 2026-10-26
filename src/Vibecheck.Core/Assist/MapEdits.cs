@@ -60,10 +60,7 @@ public static class MapEdits
         foreach (var m in Items(answer, "moves"))
         {
             var (type, leafId) = (m.GetProperty("type").GetString()!, m.GetProperty("leaf").GetString()!);
-            if (!copy.Nodes.TryGetValue(leafId, out var leaf) || !leaf.IsLeaf) { problems.Add($"the edit moves {type} to \"{leafId}\", which is not a leaf"); continue; }
-            foreach (var (id, other) in copy.Nodes.Where(kv => kv.Value.IsLeaf && kv.Value.Bind!.Contains(type)).ToList())
-                copy.Nodes[id] = other with { Bind = other.Bind!.Where(p => p != type).ToList() };
-            copy.Nodes[leafId] = copy.Nodes[leafId] with { Bind = [.. copy.Nodes[leafId].Bind!, type] };
+            if (!Move(copy, type, leafId)) problems.Add($"the edit moves {type} to \"{leafId}\", which is not a leaf");
         }
 
         DropStaleLeaves(copy);
@@ -98,6 +95,22 @@ public static class MapEdits
             groups[group] = groups[group] with { Leaves = [.. groups[group].Leaves, leaf] };
             map.Views[viewId] = view with { Groups = groups };
         }
+    }
+
+    /// <summary>
+    /// Binds a type to a leaf by its exact full name, and takes that exact name out of any other leaf. Returns
+    /// <see langword="false"/>, and changes nothing, when the identifier does not name a leaf.
+    /// </summary>
+    /// <param name="map">The map to change in place.</param>
+    /// <param name="type">The type's full name.</param>
+    /// <param name="leafId">The identifier of the leaf that receives the type.</param>
+    internal static bool Move(ArchitectureMap map, string type, string leafId)
+    {
+        if (!map.Nodes.TryGetValue(leafId, out var leaf) || !leaf.IsLeaf) return false;
+        foreach (var (id, other) in map.Nodes.Where(kv => kv.Value.IsLeaf && kv.Value.Bind!.Contains(type)).ToList())
+            map.Nodes[id] = other with { Bind = other.Bind!.Where(p => p != type).ToList() };
+        map.Nodes[leafId] = map.Nodes[leafId] with { Bind = [.. map.Nodes[leafId].Bind!, type] };
+        return true;
     }
 
     /// <summary>Removes from each view's groups the identifiers that no longer name a leaf.</summary>

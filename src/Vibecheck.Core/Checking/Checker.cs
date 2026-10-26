@@ -318,7 +318,7 @@ public static class Checker
         new("^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$", RegexOptions.CultureInvariant);
 
     /// <summary>Aggregates dependencies per pair of leaves, and bound external references per leaf and external. A pair whose ends are one leaf is kept, since it is the leaf's internal count.</summary>
-    private static List<EdgeCount> LeafEdges(List<DependencyFact> dependencies, List<ExternalRefFact> externalRefs, Dictionary<string, string> leafOf)
+    internal static List<EdgeCount> LeafEdges(List<DependencyFact> dependencies, List<ExternalRefFact> externalRefs, Dictionary<string, string> leafOf)
     {
         var counts = new Dictionary<(string, string), int>();
         foreach (var d in dependencies)
@@ -364,7 +364,7 @@ public static class Checker
     }
 
     /// <summary>Lifts the leaf-pair edges to every level and finds the cycles among each level's children.</summary>
-    private static SortedDictionary<string, LevelMetrics> LevelMetrics(ArchitectureMap map, List<EdgeCount> leafEdges, IEnumerable<string> nodeIds)
+    internal static SortedDictionary<string, LevelMetrics> LevelMetrics(ArchitectureMap map, List<EdgeCount> leafEdges, IEnumerable<string> nodeIds)
     {
         var levels = new SortedDictionary<string, LevelMetrics>(StringComparer.Ordinal);
         var lifted = new Dictionary<string, Dictionary<(string, string), int>>(StringComparer.Ordinal);
@@ -431,26 +431,47 @@ public static class Checker
         var onStack = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<List<string>>();
 
-        void StrongConnect(string v)
+        // The search keeps its own stack of nodes being visited, each with the position of the next successor to
+        // visit, since a type graph can hold chains far deeper than the call stack allows.
+        var visiting = new Stack<(string Node, int Next)>();
+        void Enter(string v)
         {
             indices[v] = lowlink[v] = index++;
             stack.Push(v);
             onStack.Add(v);
-            foreach (var w in adjacency[v])
-            {
-                if (!indices.ContainsKey(w)) { StrongConnect(w); lowlink[v] = Math.Min(lowlink[v], lowlink[w]); }
-                else if (onStack.Contains(w)) lowlink[v] = Math.Min(lowlink[v], indices[w]);
-            }
-            if (lowlink[v] == indices[v])
-            {
-                var component = new List<string>();
-                string w;
-                do { w = stack.Pop(); onStack.Remove(w); component.Add(w); } while (w != v);
-                if (component.Count > 1) { component.Reverse(); result.Add(component); }
-            }
+            visiting.Push((v, 0));
         }
 
-        foreach (var v in nodes) if (!indices.ContainsKey(v)) StrongConnect(v);
+        foreach (var root in nodes)
+        {
+            if (indices.ContainsKey(root)) continue;
+            Enter(root);
+            while (visiting.Count > 0)
+            {
+                var (v, next) = visiting.Pop();
+                var successors = adjacency[v];
+                if (next < successors.Count)
+                {
+                    visiting.Push((v, next + 1));
+                    var w = successors[next];
+                    if (!indices.ContainsKey(w)) Enter(w);
+                    else if (onStack.Contains(w)) lowlink[v] = Math.Min(lowlink[v], indices[w]);
+                    continue;
+                }
+                if (visiting.Count > 0)
+                {
+                    var parent = visiting.Peek().Node;
+                    lowlink[parent] = Math.Min(lowlink[parent], lowlink[v]);
+                }
+                if (lowlink[v] == indices[v])
+                {
+                    var component = new List<string>();
+                    string w;
+                    do { w = stack.Pop(); onStack.Remove(w); component.Add(w); } while (w != v);
+                    if (component.Count > 1) { component.Reverse(); result.Add(component); }
+                }
+            }
+        }
         return result;
     }
 }

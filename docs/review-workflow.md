@@ -165,20 +165,23 @@ it:
    `vibecheck why` reports them, the cycles among a view's groups, and leaves of more
    than sixty types. A map listed by namespace is not held to the sixty-type limit,
    since splitting a namespace needs the type-level detail that its listing leaves
-   out. Each finding of every round, and each reason a proposal cannot be used, is
-   written to the log.
-4. If anything was found, send the findings back with the best map so far and ask
-   for edits to it: nodes to remove, nodes to add or change, view groups to add, and
-   types to move to a leaf by exact name. The request lists only the units, or for a
+   out. Before the check, the knot pass of [map-cycles.md](map-cycles.md) section 2
+   moves the stray types of each set of types that reference each other in a loop
+   into one leaf, and the proposal prompt lists those sets. A cycle that comes from
+   such a set too large for one leaf is marked as in the code. Each finding of every
+   round, each type the knot pass moves, and each reason a proposal cannot be used,
+   is written to the log.
+4. If anything was found, send the findings other than cycles in the code back with
+   the best map so far and ask for edits to it: nodes to remove, nodes to add or
+   change, view groups to add, and types to move to a leaf by exact name. The request lists only the units, or for a
    large solution the namespaces, of the types the findings name, and the answer is
    as long as its edits rather than as long as the map. Until some proposal is usable
    there is no map to edit, so Claude proposes a whole map again, told why the last
-   one was rejected. Stop when nothing is found, after three rounds, or when a usable
-   revision does not reduce the number of findings. The last case usually means a
-   cycle in the code itself, which no grouping removes. A revision that fails, or
-   takes longer than fifteen minutes, also ends the rounds.
-5. Keep the usable proposal with the fewest findings, preferring the later of two
-   that tie.
+   one was rejected. Stop when nothing but cycles in the code is found, after three
+   rounds, or when a usable revision does not reduce the number of other findings. A
+   revision that fails, or takes longer than fifteen minutes, also ends the rounds.
+5. Keep the usable proposal with the fewest findings other than cycles in the code,
+   then the fewest findings, preferring the later of two that tie.
 
 The prompts are in `src/Vibecheck.Core/Assist/Prompts`. The result is stored as the
 solution's generated map, version 1, and reused by every later review of that

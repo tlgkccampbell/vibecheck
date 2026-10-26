@@ -41,7 +41,8 @@ its phases are built: the request, the face and the card over every kind of targ
 path, and figures for what the map has no place for.
 Fewer rounds of map generation spent on cycles, by keeping types that reference each other in a loop in one leaf,
 trying moves against the checker before asking Claude, and letting the reviewer settle what remains, are designed in
-[docs/map-cycles.md](docs/map-cycles.md); none of its three phases is built.
+[docs/map-cycles.md](docs/map-cycles.md); its first phase, knots kept in one leaf and cycles in the code left out
+of revisions, is built.
 
 ## Layout
 

@@ -4,6 +4,6 @@
 
 {{format}}
 
-{{rejected}}Write the map for this listing.
+{{knots}}{{rejected}}Write the map for this listing.
 
 {{listing}}
