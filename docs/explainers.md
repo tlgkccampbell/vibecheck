@@ -123,8 +123,8 @@ as it opens the path's steps. The kinds are:
 | Kind | Names | The viewer shows |
 |---|---|---|
 | `level` | A level, or a view, and optionally the blocks to bring out | The level or view, with the named blocks outlined and the rest dimmed, as hovering a pattern outlines its blocks. |
-| `edge` | A changed edge at a level or a view, as `from→to` | The level or view with the edge selected, so that its narrative is in the details panel. |
-| `block` | A changed block, or a view's group | The block in context, selected, with its details. |
+| `edge` | A changed edge at a level or a view, as `from→to` | The level or view with the edge selected and brought out with the blocks at its ends, the rest dimmed, so that its narrative is in the details panel. |
+| `block` | A changed block, or a view's group | The block in context, selected and brought out, the rest dimmed, with its details. |
 | `decision` | A decision | Its hunk in the leaf view, with its reach in the details panel and its arrows on the map, as selecting a decision does. |
 | `hunk` | A changed file and the index of one of its hunks | The file in the leaf view, scrolled to the hunk. |
 | `type` | A type added or moved in the change | The leaf view at the type's first changed file, as a pattern step opens its instance. |
@@ -336,8 +336,13 @@ pan and zoom stay live under the card.
 ### 5.3 Moving among the slides
 
 A slide opens its target as `openStep` opens a step's: the same trail, mount, arrival and
-selection, and for a `level` target with blocks to bring out, the outline and dimming
-that hovering a pattern uses, kept while the slide is current. A `type`, `pattern` or
+selection. A slide then brings out only what its target names and dims the rest of the
+drawing: a `level` target's named blocks with the edges at them, a `block` target's
+block, or an `edge` target's edge with the blocks at its ends. The outline is the one
+hovering a pattern uses. Hovering never changes it while the slide is current, since a
+pointer crossing the map on its way to the card would otherwise flicker the emphasis.
+Selecting something other than the target ends it, since that is the reviewer looking
+around on purpose, and **Show again** restores it. A `type`, `pattern` or
 `concept` target opens as the corresponding link does. A target the current changeset no
 longer has, which can only happen after a map switch, is reported on the card and the
 panel stays where it is.

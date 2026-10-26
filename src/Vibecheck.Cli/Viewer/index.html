@@ -209,7 +209,8 @@
   .node { cursor: pointer; }
   .node:focus { outline: none; }
   .node .box, .fig-box .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
-  .node:hover .box, .node:focus .box { stroke: var(--accent); }
+  /* While a slide brings out part of the drawing, the pointer changes nothing in it. */
+  svg#stage:not(.bringing-out) .node:hover .box, .node:focus .box { stroke: var(--accent); }
   .node.selected .box { stroke: var(--accent); stroke-width: 2.5; }
   .fam-blue { --fam: var(--cat-blue); } .fam-teal { --fam: var(--cat-teal); } .fam-magenta { --fam: var(--cat-magenta); }
   .fam-orange { --fam: var(--cat-orange); } .fam-slate { --fam: var(--cat-slate); }
@@ -260,7 +261,7 @@
   svg#stage .tests-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--muted); }
   svg#stage .patterns-bg { fill: var(--surface); stroke: var(--accent); stroke-width: 1; }
   svg#stage .patterns-text { font-size: 9px; font-weight: 600; letter-spacing: .08em; fill: var(--accent); }
-  svg#stage .node.pattern-touched .box, svg#stage .node.brought .box { stroke: var(--accent); stroke-width: 2.5; }
+  svg#stage:not(.bringing-out) .node.pattern-touched .box, svg#stage .node.brought .box { stroke: var(--accent); stroke-width: 2.5; }
   svg#stage .node.pattern-held .box { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; }
   /* A figure Claude drew for a slide is drawn as the map is: its boxes as blocks with a band in the accent, its arrows
      and their labels as edges, and its groups as dashed outlines. A box whose type the change has is a link. */
@@ -429,7 +430,7 @@
   .edge { cursor: pointer; }
   .edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
   .edge-line { fill: none; stroke: var(--line-strong); }
-  .edge:hover .edge-line { stroke: var(--accent); }
+  svg#stage:not(.bringing-out) .edge:hover .edge-line { stroke: var(--accent); }
   .edge.selected .edge-line { stroke: var(--accent); }
   .edge.st-added .edge-line { stroke: var(--added); }
   .edge.st-removed .edge-line { stroke: var(--removed); stroke-dasharray: 6 4; }
@@ -440,26 +441,28 @@
   .flow-arrow { fill: none; stroke: var(--line-strong); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .edge.st-added .flow-arrow { stroke: var(--added); }
   .edge.st-modified .flow-arrow { stroke: var(--modified); }
-  .edge.selected .flow-arrow, .edge:hover .flow-arrow { stroke: var(--accent); }
-  body.flow .edge.flows .flow-arrows, body.flow .edge.hot .flow-arrows, body.flow .edge.in-focus .flow-arrows, body.flow .edge.selected .flow-arrows { display: inline; }
-  body.flow svg#stage.hovering .edge:not(.hot) .flow-arrows { display: none; }
+  .edge.selected .flow-arrow, svg#stage:not(.bringing-out) .edge:hover .flow-arrow { stroke: var(--accent); }
+  body.flow .edge.flows .flow-arrows, body.flow svg#stage:not(.bringing-out) .edge.hot .flow-arrows, body.flow .edge.in-focus .flow-arrows, body.flow .edge.selected .flow-arrows { display: inline; }
+  body.flow svg#stage.hovering:not(.bringing-out) .edge:not(.hot) .flow-arrows { display: none; }
   @media (prefers-reduced-motion: reduce) { .flow-arrows { display: none !important; } }
 
   /* Focus: hovering a block, pin or edge, or selecting one, keeps its neighborhood and fades the rest. Hover wins over selection. */
   /* The fade is instant. Chrome draws the whole drawing on another layer while any opacity in it animates, so the text of
      the block under the pointer shifts by a fraction of a pixel until the animation ends. */
-  svg#stage.focused:not(.hovering) .edge:not(.in-focus), svg#stage.focused:not(.hovering) .edge-label:not(.in-focus) { opacity: .1; }
-  svg#stage.hovering .edge:not(.hot), svg#stage.hovering .edge-label:not(.hot) { opacity: .06; }
-  svg#stage.hovering .node:not(.hot), svg#stage.hovering .pin:not(.hot) { opacity: .35; }
-  svg#stage.hovering .hot, svg#stage.focused:not(.hovering) .in-focus { opacity: 1; }
-  /* A level slide of an explainer brings out its blocks with the outline of a pattern's, and fades the rest, until a hover or a selection takes over. */
-  svg#stage.bringing-out:not(.hovering):not(.focused) .edge:not(.brought), svg#stage.bringing-out:not(.hovering):not(.focused) .edge-label:not(.brought) { opacity: .1; }
-  svg#stage.bringing-out:not(.hovering):not(.focused) .node:not(.brought), svg#stage.bringing-out:not(.hovering):not(.focused) .pin { opacity: .35; }
+  svg#stage.focused:not(.hovering):not(.bringing-out) .edge:not(.in-focus), svg#stage.focused:not(.hovering):not(.bringing-out) .edge-label:not(.in-focus) { opacity: .1; }
+  svg#stage.hovering:not(.bringing-out) .edge:not(.hot), svg#stage.hovering:not(.bringing-out) .edge-label:not(.hot) { opacity: .06; }
+  svg#stage.hovering:not(.bringing-out) .node:not(.hot), svg#stage.hovering:not(.bringing-out) .pin:not(.hot) { opacity: .35; }
+  svg#stage.hovering:not(.bringing-out) .hot, svg#stage.focused:not(.hovering):not(.bringing-out) .in-focus { opacity: 1; }
+  /* An explainer's slide brings out the blocks and edges its target names, outlined, and fades the rest. Neither a hover
+     nor the selection's own neighborhood changes it; selecting something else ends it, as the code decides. */
+  svg#stage.bringing-out .edge:not(.brought), svg#stage.bringing-out .edge-label:not(.brought) { opacity: .1; }
+  svg#stage.bringing-out .node:not(.brought), svg#stage.bringing-out .pin:not(.brought) { opacity: .35; }
+  svg#stage.bringing-out .edge.brought, svg#stage.bringing-out .edge-label.brought, svg#stage.bringing-out .pin.brought { opacity: 1; }
   /* A block is never drawn at an opacity of exactly 1. Chrome draws a group at a lower opacity on a layer of its own,
      which places its text a fraction of a pixel away from where it falls when drawn directly, so a dimmed block under
      the pointer would shift each time it came out of the dimming. */
-  .node, svg#stage.hovering .node.hot, svg#stage.focused:not(.hovering) .node.in-focus { opacity: .999; }
-  svg#stage .edge.hot .edge-line, svg#stage .edge.in-focus .edge-line { stroke-opacity: 1; }
+  .node, svg#stage.hovering:not(.bringing-out) .node.hot, svg#stage.focused:not(.hovering):not(.bringing-out) .node.in-focus, svg#stage.bringing-out .node.brought { opacity: .999; }
+  svg#stage:not(.bringing-out) .edge.hot .edge-line, svg#stage .edge.in-focus .edge-line, svg#stage .edge.brought .edge-line { stroke-opacity: 1; }
 
   .arrow { fill: var(--line-strong); }
   .arrow-added { fill: var(--added); }

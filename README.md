@@ -386,9 +386,11 @@ first-tier steps and changed blocks no slide covers, and a line says how many sl
 failed their check and were dropped. The current slide shows in a card over the lower
 part of the map or the leaf view, marked as written by Claude. The card shows the
 slide's title, its text and the files and type pairs it rests on, and the panel moves
-to the slide's target, fitted into the room above the card. A level or view slide
-outlines the blocks it brings out and dims the rest, as hovering a pattern does, for as
-long as the slide is current. A pattern slide opens the compare view beside the
+to the slide's target, fitted into the room above the card. A slide brings out only what
+its target names, outlined, and dims the rest of the map for as long as it is current: a
+level or view slide its named blocks with their edges, a block slide the block, and an
+edge slide the edge and the blocks at its ends. Hovering does not change it; selecting
+something else does, until **Show again**. A pattern slide opens the compare view beside the
 instance's nearest example, a concept slide the Concepts face at the concept, and a
 tests slide the test type's first changed hunk with the Tests face. A figure slide draws
 a small drawing of boxes, labeled arrows and groups in the stage in place of the map, in

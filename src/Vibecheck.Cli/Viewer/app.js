@@ -3533,6 +3533,7 @@
     }
     // Bring the neighborhood of the selection out of the dimming.
     s.classList.toggle("focused", markFocus(key, "in-focus"));
+    bringOut();
     renderDetails();
   }
 
@@ -3993,23 +3994,42 @@
     bringOut();
   }
 
-  // Outlines the blocks a level slide brings out and dims the rest of the drawing, as hovering a pattern does, while the
-  // slide is current, the card is open and the stage draws the slide's level or view. Hovering and selecting take
-  // over while they last. Otherwise it clears the outline. See docs/explainers.md section 5.3.
+  // Returns the keys of the drawing on screen that a slide's target brings out, or null when it brings out nothing
+  // there. A level slide brings out its named blocks with the edges at them, a block slide the block alone, and an
+  // edge slide the edge, its label and the blocks at its ends. A block or edge is brought out only while it is the
+  // selection, and a level's blocks only while nothing is selected, so that a reviewer's own click takes over.
+  function slideEmphasis(t) {
+    const l = loc();
+    if (!t || !state.current || l.leaf || l.group) return null;
+    const level = state.current.level;
+    if (t.kind === "level" && (t.blocks || []).length) {
+      const id = String(t.id);
+      if (state.selected || (id.startsWith("view:") ? l.view !== id.slice(5) : l.view || l.level !== id)) return null;
+      const leaves = t.blocks.flatMap((b) => b.startsWith("g:") ? (isGroup(b) ? groupLeaves(b) : []) : NODES[b] || isOther(b) ? leavesUnder(b) : []);
+      const keys = patternBlocks({ instances: leaves.map((leaf) => ({ leaf })) }).touched;
+      // The edges at a brought-out block stay, with their labels, so that what the blocks use and are used by still shows.
+      for (const e of level.edges) if (keys.has(e.from) || keys.has(e.to)) keys.add(e.key).add(e.key + ":label");
+      return keys.size ? keys : null;
+    }
+    const key = t.kind === "edge" ? "edge:" + t.id : t.kind === "block" || t.kind === "level" ? String(t.id) : null;
+    if (!key || state.selected !== key) return null;
+    if (t.kind === "edge") {
+      const e = level.edges.find((x) => x.key === key);
+      return e ? new Set([e.key, e.key + ":label", e.from, e.to]) : null;
+    }
+    return level.children.some((c) => c.key === key) ? new Set([key]) : null;
+  }
+
+  // Brings out what the current slide's target names in the drawing and dims the rest, while the slide is current and
+  // the card is open. Hovering never changes it, and a selection of something else ends it until Show again. See
+  // docs/explainers.md section 5.3.
   function bringOut() {
     const s = stage();
     for (const n of s.querySelectorAll(".brought")) n.classList.remove("brought");
-    const slide = EXPL.open && EXPL.slides[EXPL.current], t = slide && slide.target, l = loc();
-    const id = t && t.kind === "level" && (t.blocks || []).length ? String(t.id) : null;
-    const here = id && state.current && !l.leaf && !l.group && (id.startsWith("view:") ? l.view === id.slice(5) : !l.view && l.level === id);
-    if (!here) { s.classList.remove("bringing-out"); return; }
-    const leaves = t.blocks.flatMap((b) => b.startsWith("g:") ? (isGroup(b) ? groupLeaves(b) : []) : NODES[b] || isOther(b) ? leavesUnder(b) : []);
-    const keys = patternBlocks({ instances: leaves.map((leaf) => ({ leaf })) }).touched;
-    for (const k of keys) for (const n of s.querySelectorAll(`.node[data-key="${CSS.escape(k)}"]`)) n.classList.add("brought");
-    // The edges at a brought-out block stay, with their labels, so that what the blocks use and are used by still shows.
-    for (const e of state.current.level.edges) if (keys.has(e.from) || keys.has(e.to))
-      for (const k of [e.key, e.key + ":label"]) for (const n of s.querySelectorAll(`[data-key="${CSS.escape(k)}"]`)) n.classList.add("brought");
-    s.classList.toggle("bringing-out", keys.size > 0);
+    const slide = EXPL.open && EXPL.slides[EXPL.current];
+    const keys = slide ? slideEmphasis(slide.target) : null;
+    if (keys) for (const k of keys) for (const n of s.querySelectorAll(`[data-key="${CSS.escape(k)}"]`)) n.classList.add("brought");
+    s.classList.toggle("bringing-out", !!keys);
   }
 
   // Opens a slide's target as the path opens its steps, and fits it into the room above the card. A target the
