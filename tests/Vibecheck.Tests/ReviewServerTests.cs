@@ -544,7 +544,32 @@ public class ReviewServerTests
         Assert.Contains("\"shared\"", File.ReadAllText(Path.Combine(repo.Path, "app", "vibecheck.json")), StringComparison.Ordinal);
         var preview = (await saved.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("note");
         Assert.Equal(("CLAUDE.md", false, true), (preview.GetProperty("file").GetString(), preview.GetProperty("present").GetBoolean(), preview.GetProperty("create").GetBoolean()));
-        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(api + "/map", new { action = "save" })).StatusCode);
+        var mapPath = Path.Combine(repo.Path, "app", "vibecheck.json");
+        var generated = File.ReadAllText(mapPath);
+
+        // Saving the same map again finds it already there.
+        var same = await client.PostAsJsonAsync(api + "/map", new { action = "save" });
+        Assert.Equal(HttpStatusCode.OK, same.StatusCode);
+        Assert.Contains("already holds", await same.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        // A different map is refused with the version that a replacement must name, and a replacement that names any
+        // other version, as when the file changed after the refusal, is refused too.
+        File.WriteAllText(mapPath, "{ }");
+        var refused = await client.PostAsJsonAsync(api + "/map", new { action = "save" });
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        var conflict = await refused.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("app/vibecheck.json", conflict.GetProperty("exists").GetString());
+        var version = conflict.GetProperty("version").GetString();
+        File.WriteAllText(mapPath, "{ \"changed\": true }");
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(api + "/map", new { action = "save", replace = version })).StatusCode);
+        Assert.Equal("{ \"changed\": true }", File.ReadAllText(mapPath));
+
+        // Naming the current version replaces the file with the generated map.
+        version = (await (await client.PostAsJsonAsync(api + "/map", new { action = "save" })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("version").GetString();
+        var replaced = await client.PostAsJsonAsync(api + "/map", new { action = "save", replace = version });
+        Assert.Equal(HttpStatusCode.OK, replaced.StatusCode);
+        Assert.Contains("Replaced", await replaced.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Equal(generated, File.ReadAllText(mapPath));
 
         // A note for a file other than the one previewed is refused, and nothing is written.
         Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(api + "/map", new { action = "note", file = "AGENTS.md" })).StatusCode);

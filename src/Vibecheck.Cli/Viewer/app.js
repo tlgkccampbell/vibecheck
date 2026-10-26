@@ -5193,11 +5193,17 @@
     const api = `/api/reviews/${encodeURIComponent(META.review)}`;
     let switching = false, shown = null, dismissed = null;
     const spinner = () => el("span", { class: "spin", "aria-hidden": "true" });
+    // The notices that answer the save actions. Dismissing one goes back to the generated map's notice, so that its save
+    // action stays in reach.
+    const replies = new Set(["save", "replace", "preview", "note"]);
     function show(kind, key, ...kids) {
       shown = key;
       if (key === dismissed) return;
       box.className = "notice " + kind;
-      box.replaceChildren(...kids, el("button", { class: "close", title: "Dismiss", "aria-label": "Dismiss", onclick: () => { dismissed = shown; box.hidden = true; } }, "×"));
+      box.replaceChildren(...kids, el("button", { class: "close", title: "Dismiss", "aria-label": "Dismiss", onclick: () => {
+        if (replies.has(shown)) { settle(); return; }
+        dismissed = shown; box.hidden = true;
+      } }, "×"));
       box.hidden = false;
     }
     async function post(action, extra = {}) {
@@ -5210,12 +5216,20 @@
       post("switch");
     }
     // A saved map is offered a note in the repository's agent instructions, which sends coding agents to the vibecheck
-    // guide. The note is previewed, with the file it goes in, before anything is written.
-    async function save() {
-      const r = await post("save");
+    // guide. The note is previewed, with the file it goes in, before anything is written. A file that already holds a
+    // different map is replaced only after the reviewer confirms it, and only if it has not changed since.
+    async function save(replace) {
+      const r = await post("save", replace ? { replace } : {});
       const note = r.ok && r.body.note && !r.body.note.present ? r.body.note : null;
+      const conflict = !r.ok && r.body.exists ? r.body : null;
       show(r.ok ? "info" : "error", "save", el("span", {}, r.body.message || "The map could not be saved."),
-        ...(note ? [el("button", { class: "btn", onclick: () => previewNote(note) }, `Add a note to ${note.file}…`)] : []));
+        ...(note ? [el("button", { class: "btn", onclick: () => previewNote(note) }, `Add a note to ${note.file}…`)] : []),
+        ...(conflict ? [el("button", { class: "btn", onclick: () => confirmReplace(conflict) }, "Replace it…")] : []));
+    }
+    function confirmReplace(conflict) {
+      show("error", "replace", el("span", {}, `Replace ${conflict.exists} with the generated map? Its contents are lost unless they are committed.`),
+        el("button", { class: "btn danger", onclick: () => save(conflict.version) }, `Replace ${conflict.exists}`),
+        el("button", { class: "btn", onclick: settle }, "Cancel"));
     }
     function previewNote(note) {
       const where = note.create ? `Creates ${note.file} with this note` : `Adds this note to the end of ${note.file}`;

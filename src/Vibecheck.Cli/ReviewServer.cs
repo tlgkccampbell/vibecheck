@@ -718,21 +718,45 @@ public sealed class ReviewServer : IAsyncDisposable
     /// <summary>
     /// Writes a review's generated map into the repository as <c>vibecheck.json</c> beside the solution, where reviews of
     /// the uncommitted work find it at once and reviews of later commits find it once it is committed. An existing file
-    /// is never overwritten.
+    /// that holds a different map is replaced only when the request names it by the version that the refusal reported,
+    /// so that a file that changed since the page was told about it is not overwritten unseen.
     /// </summary>
-    private IResult SaveMap(Review review)
+    /// <param name="review">The review whose generated map is saved.</param>
+    /// <param name="replace">The version of the existing file that the page offered to replace, or null to refuse to replace one.</param>
+    private IResult SaveMap(Review review, string? replace)
     {
         var result = review.Result;
         if (result is null || result.Info.MapKind != "generated") return Results.BadRequest(new { message = "Only a generated map can be saved." });
         var (top, relative) = MapFile(result);
         var path = Path.Combine(top, relative);
-        if (File.Exists(path)) return Results.Conflict(new { message = $"{relative} already exists. Delete it, or compare it with the generated map, before saving." });
-        File.WriteAllText(path, Format.MapWriter.Write(result.Changeset.Map));
-        options.Log?.Invoke($"  {review.Id} saved the generated map to {relative}");
+        var text = Format.MapWriter.Write(result.Changeset.Map);
+        var replaced = false;
+        if (File.Exists(path))
+        {
+            var existing = File.ReadAllText(path);
+            if (existing == text) return SavedMap(top, relative, $"{relative} already holds this map. Commit it to make it the repository's map.");
+            var current = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(existing)))[..16];
+            if (replace != current)
+                return Results.Json(new
+                {
+                    message = replace is null ? $"{relative} already exists and holds a different map." : $"{relative} changed since it was shown. Check it again before replacing it.",
+                    exists = relative,
+                    version = current,
+                }, FactsJson.Options, statusCode: StatusCodes.Status409Conflict);
+            replaced = true;
+        }
+        File.WriteAllText(path, text);
+        options.Log?.Invoke($"  {review.Id} {(replaced ? "replaced" : "saved")} the generated map {(replaced ? "in" : "to")} {relative}");
+        return SavedMap(top, relative, $"{(replaced ? "Replaced" : "Saved")} {relative}. Commit it to make it the repository's map.");
+    }
+
+    /// <summary>Returns the response to a saved map, which carries the agent note that the page offers to add.</summary>
+    private static IResult SavedMap(string top, string relative, string message)
+    {
         // The page previews the note, and the file it goes in, before anything is written.
         var file = AgentNote.Target(top);
         var note = new { file, present = AgentNote.IsPresent(top), create = !File.Exists(Path.Combine(top, file)), text = AgentNote.Text(relative) };
-        return Results.Json(new { message = $"Saved {relative}. Commit it to make it the repository's map.", note }, FactsJson.Options);
+        return Results.Json(new { message, note }, FactsJson.Options);
     }
 
     /// <summary>
@@ -891,7 +915,7 @@ public sealed class ReviewServer : IAsyncDisposable
                     review.Task = Task.Run(() => RunAsync(review, rerun: true));
                     return Results.Accepted();
                 case "save":
-                    return SaveMap(review);
+                    return SaveMap(review, body?.Replace);
                 case "note":
                     return AddNote(review, body?.File);
                 default:
@@ -1255,7 +1279,7 @@ public sealed class ReviewServer : IAsyncDisposable
 
     private sealed record BeginBody(string? Range, string? Label, int? Pull, string? From);
 
-    private sealed record MapBody(string? Action, string? File);
+    private sealed record MapBody(string? Action, string? File, string? Replace);
 
     private sealed record NarrativesBody(string? Key);
 
