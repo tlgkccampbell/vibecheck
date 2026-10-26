@@ -68,22 +68,29 @@ public class MapGeneratorTests
           "views": [] }
         """;
 
+    /// <summary>A revision of <see cref="MissingShared"/> that adds a leaf for the shared types.</summary>
+    private const string AddShared = """
+        { "remove": [], "nodes": [ { "id": "shared", "name": "Shared", "purpose": "Results and errors.", "category": "foundation", "bind": ["Shared.**"] } ],
+          "groups": [], "moves": [] }
+        """;
+
     /// <summary>A proposal whose identifier breaks the format.</summary>
     private const string BadIdentifier = """{ "nodes": [ { "id": "App.X", "name": "X", "purpose": "X.", "bind": ["**"] } ], "views": [] }""";
 
     private static ArchitectureMap Skeleton() => Bootstrap.Skeleton.Build(TestData.Analysis(), "Example.sln");
 
     [Fact]
-    public async Task RevisesAProposalUntilTheCheckerFindsNothing()
+    public async Task RevisesAProposalByEditingItUntilTheCheckerFindsNothing()
     {
-        var claude = new FakeClaude(MissingShared, Complete);
+        var claude = new FakeClaude(MissingShared, AddShared);
 
         var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude);
 
         Assert.Equal(2, claude.Requests.Count);
         Assert.Contains("Shared.Result", claude.Requests[1].Prompt, StringComparison.Ordinal);
         Assert.Contains("unsorted", claude.Requests[1].Prompt, StringComparison.Ordinal);
-        Assert.Contains("\"id\": \"service\"", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("""{"id":"service","name":"Service","purpose":"The service.","bind":["B.**"]}""", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("\"moves\"", claude.Requests[1].Schema, StringComparison.Ordinal);
         Assert.Equal((2, 0), (generated.Round, generated.Findings.Count));
         Assert.Equal(["Shared.**"], generated.Map.Nodes["shared"].Bind);
         Assert.Equal(Skeleton().Exclude, generated.Map.Exclude);
@@ -95,7 +102,7 @@ public class MapGeneratorTests
     [Fact]
     public async Task AsksEveryRoundAndEveryPlacementOfTheModelGiven()
     {
-        var claude = new FakeClaude(MissingShared, Complete, """{ "newLeaves": [], "placements": [] }""");
+        var claude = new FakeClaude(MissingShared, AddShared, """{ "newLeaves": [], "placements": [] }""");
 
         await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, model: "opus");
         var missing = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(MissingShared).RootElement, TestData.Analysis()).Map!;
@@ -115,6 +122,105 @@ public class MapGeneratorTests
 
         Assert.Contains("App.X", claude.Requests[1].Prompt, StringComparison.Ordinal);
         Assert.Equal(2, generated.Round);
+    }
+
+    [Fact]
+    public async Task LogsEachReasonAProposalWasRejected()
+    {
+        var claude = new FakeClaude(BadIdentifier, Complete);
+        var log = new List<string>();
+        var progress = new List<string>();
+
+        await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress), log: log.Add);
+
+        Assert.NotEmpty(log);
+        Assert.All(log, l => Assert.StartsWith("round 1 was rejected: ", l, StringComparison.Ordinal));
+        Assert.Contains(log, l => l.Contains("App.X", StringComparison.Ordinal));
+        Assert.Contains($"round 1: the map cannot be used, for {log.Count} reason(s)", progress);
+        Assert.Contains("rejected", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"moves\"", claude.Requests[1].Schema, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListsASolutionByNamespaceWhenItsUnitListingIsTooLong()
+    {
+        var claude = new FakeClaude(MissingShared, AddShared);
+        var progress = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress), CancellationToken.None, null, null, maxListing: 100);
+
+        Assert.Equal((2, 0), (generated.Round, generated.Findings.Count));
+        Assert.Contains("proposing a concept map from 6 types, listed by namespace", progress);
+        Assert.Contains("too large to list type by type", claude.Requests[0].Prompt, StringComparison.Ordinal);
+        Assert.Contains("=== Shared ===  [2]", claude.Requests[0].Prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("=== A.X ===", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("=== Shared ===", claude.Requests[1].Prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ListsByUnitOnlyTheUnitsOfTheTypesAsked()
+    {
+        var analysis = TestData.Analysis();
+        var units = Units.Build(analysis);
+
+        var (byNamespace, format, listing) = MapGenerator.Listing(analysis, units, MapGenerator.MaxListing, new HashSet<string> { TestData.Service });
+
+        Assert.False(byNamespace);
+        Assert.Contains("groups the solution's types into units", format, StringComparison.Ordinal);
+        Assert.Contains("Service  [2]", listing, StringComparison.Ordinal);
+        Assert.DoesNotContain("Thing", listing, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ListsNamespacesWithTheirLargestUnitsAndHeaviestReferences()
+    {
+        var analysis = TestData.Analysis();
+
+        var listing = Units.NamespaceListing(analysis, Units.Build(analysis), names: 12, summaries: 2);
+
+        Assert.StartsWith("6 types in 4 namespaces\n", listing, StringComparison.Ordinal);
+        Assert.Contains("=== A.X ===  [2]\n  Thing\n  Thing: \"Does the thing.\"\n  -> A.Y:1, Shared:1\n", listing, StringComparison.Ordinal);
+        Assert.Contains("=== Shared ===  [2]\n  <- A.X:1, B:1\n", listing, StringComparison.Ordinal);
+        Assert.DoesNotContain("Thing:", Units.NamespaceListing(analysis, Units.Build(analysis), names: 0, summaries: 0), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EditsAMapByRemovingAddingChangingAndMovingAndKeepsItsViewWhole()
+    {
+        var map = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(Complete).RootElement, TestData.Analysis()).Map!;
+        var problems = new List<string>();
+
+        var edited = MapEdits.Apply(map, JsonDocument.Parse("""
+            { "remove": ["service"],
+              "nodes": [ { "id": "edge", "name": "Edge", "purpose": "The outside.", "category": "integration", "bind": ["B.**"], "group": "outer" },
+                         { "id": "app.x", "purpose": "Does the thing well." } ],
+              "groups": [ { "view": "by-concern", "id": "outer", "name": "Outer" } ],
+              "moves": [ { "type": "Shared.Error", "leaf": "edge" }, { "type": "A.X.Thing", "leaf": "app" } ] }
+            """).RootElement, problems);
+
+        Assert.False(edited.Nodes.ContainsKey("service"));
+        Assert.Equal(["B.**", "Shared.Error"], edited.Nodes["edge"].Bind);
+        Assert.Equal(("Things", "Does the thing well."), (edited.Nodes["app.x"].Name, edited.Nodes["app.x"].Purpose));
+        Assert.Equal(["A.X.**"], edited.Nodes["app.x"].Bind);
+        Assert.Equal(["app.x", "app.y"], edited.Views["by-concern"].Groups["work"].Leaves);
+        Assert.Equal(["edge"], edited.Views["by-concern"].Groups["outer"].Leaves);
+        Assert.Equal(["the edit moves A.X.Thing to \"app\", which is not a leaf"], problems);
+        Assert.True(map.Nodes.ContainsKey("service"));
+
+        var moved = MapEdits.Apply(edited, JsonDocument.Parse("""{ "moves": [ { "type": "Shared.Error", "leaf": "shared" } ] }""").RootElement, problems);
+        Assert.Equal(["B.**"], moved.Nodes["edge"].Bind);
+        Assert.Equal(["Shared.**", "Shared.Error"], moved.Nodes["shared"].Bind);
+    }
+
+    [Fact]
+    public void DropsAGroupThatEditsLeaveEmpty()
+    {
+        var map = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(Complete).RootElement, TestData.Analysis()).Map!;
+
+        var edited = MapEdits.Apply(map, JsonDocument.Parse("""{ "nodes": [ { "id": "shared", "group": "work" } ] }""").RootElement, []);
+
+        Assert.Equal(["work"], edited.Views["by-concern"].Groups.Keys);
+        Assert.Equal(["app.x", "app.y", "service", "shared"], edited.Views["by-concern"].Groups["work"].Leaves);
     }
 
     [Fact]
@@ -161,7 +267,7 @@ public class MapGeneratorTests
         {
             var revising = r.Prompt.Contains("Shared.Result", StringComparison.Ordinal);
             r.Activity!(new ClaudeActivity(TimeSpan.FromSeconds(192), 9400, revising ? 2100 : 0));
-            return revising ? Complete : MissingShared;
+            return revising ? AddShared : MissingShared;
         });
         var progress = new List<string>();
 

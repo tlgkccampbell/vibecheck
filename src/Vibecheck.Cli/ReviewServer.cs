@@ -521,7 +521,8 @@ public sealed class ReviewServer : IAsyncDisposable
             string text, message;
             if (job.State == "generating")
             {
-                var generated = await MapGenerator.GenerateAsync(result.Changeset.Map, analysis, options.Claude!, progress, stopping.Token, options.Models.Map);
+                var generated = await MapGenerator.GenerateAsync(result.Changeset.Map, analysis, options.Claude!, progress, stopping.Token, options.Models.Map,
+                    m => options.Log?.Invoke($"  map: {m}"));
                 text = generated.Text;
                 message = generated.Findings.Count == 0 ? "A concept map is ready."
                     : $"A concept map is ready. The checker still reports {generated.Findings.Count} finding(s) about it.";

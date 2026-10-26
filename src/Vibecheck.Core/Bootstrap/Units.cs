@@ -156,6 +156,56 @@ public static class Units
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Writes a listing by namespace, for a solution too large to list by unit. Each namespace shows how many types it
+    /// declares, the assemblies that declare them when there are several, its largest units' head types by name, the
+    /// summaries of a few of them, and the namespaces it references most and is referenced by most, with counts.
+    /// </summary>
+    /// <param name="analysis">The analysis whose types are listed, with its exclusions already applied.</param>
+    /// <param name="units">The units of the analysis, as <see cref="Build"/> returns them.</param>
+    /// <param name="names">The most head types to name for each namespace.</param>
+    /// <param name="summaries">The most summaries to quote for each namespace.</param>
+    /// <param name="only">The types whose namespaces are listed, or <see langword="null"/> to list every namespace.</param>
+    public static string NamespaceListing(AnalysisResult analysis, List<Unit> units, int names, int summaries, IReadOnlySet<string>? only = null)
+    {
+        var nsOf = analysis.Types.ToDictionary(t => t.Name, t => t.Namespace, StringComparer.Ordinal);
+        var refs = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
+        var refsIn = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
+        foreach (var d in analysis.Dependencies)
+        {
+            if (!nsOf.TryGetValue(d.FromType, out var from) || !nsOf.TryGetValue(d.ToType, out var to) || from == to) continue;
+            if (!refs.TryGetValue(from, out var outs)) refs[from] = outs = new Dictionary<string, int>(StringComparer.Ordinal);
+            outs[to] = outs.GetValueOrDefault(to) + 1;
+            if (!refsIn.TryGetValue(to, out var ins)) refsIn[to] = ins = new Dictionary<string, int>(StringComparer.Ordinal);
+            ins[from] = ins.GetValueOrDefault(from) + 1;
+        }
+        static string Name(string ns) => ns.Length == 0 ? "(global)" : ns;
+        static string Top(Dictionary<string, int>? counts) => string.Join(", ", (counts ?? [])
+            .OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal).Take(6).Select(kv => $"{Name(kv.Key)}:{kv.Value}"));
+
+        // A unit is listed under its head's namespace, largest first, as the unit listing orders them.
+        var heads = units.Where(u => nsOf.ContainsKey(u.Head)).GroupBy(u => nsOf[u.Head], StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(u => u.Members.Count).ThenBy(u => u.Head, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+        var namespaces = analysis.Types.GroupBy(t => t.Namespace, StringComparer.Ordinal)
+            .Where(g => only is null || g.Any(t => only.Contains(t.Name))).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
+
+        var sb = new StringBuilder();
+        sb.Append($"{namespaces.Sum(g => g.Count())} types in {namespaces.Count} namespaces\n");
+        foreach (var ns in namespaces)
+        {
+            sb.Append($"\n=== {Name(ns.Key)} ===  [{ns.Count()}]\n");
+            var assemblies = ns.Select(t => t.Assembly).Distinct().Order(StringComparer.Ordinal).ToList();
+            if (assemblies.Count > 1) sb.Append("  in ").Append(string.Join(", ", assemblies)).Append('\n');
+            var listed = heads.GetValueOrDefault(ns.Key) ?? [];
+            if (names > 0 && listed.Count > 0)
+                sb.Append("  ").Append(string.Join(", ", listed.Take(names).Select(u => Short(u.Head)))).Append(listed.Count > names ? " …" : "").Append('\n');
+            foreach (var u in listed.Where(u => u.Summary is not null).Take(summaries)) sb.Append($"  {Short(u.Head)}: \"{u.Summary}\"\n");
+            if (refs.ContainsKey(ns.Key)) sb.Append("  -> ").Append(Top(refs[ns.Key])).Append('\n');
+            if (refsIn.ContainsKey(ns.Key)) sb.Append("  <- ").Append(Top(refsIn[ns.Key])).Append('\n');
+        }
+        return sb.ToString();
+    }
+
     private static string Short(string name)
     {
         var plain = TypeNames.Plain(name);

@@ -149,7 +149,13 @@ Map generation runs the bootstrapping loop of spec section 5.3 without a person 
 it:
 
 1. Build the unit listing from both ends' analyses together, with the skeleton's
-   exclusions, so that types that exist only at base are bound as well.
+   exclusions, so that types that exist only at base are bound as well. A listing
+   longer than 120,000 characters, about 550 types, is replaced by a listing by
+   namespace: each namespace with its type count, its largest units' head types, a
+   few summaries, and its heaviest references to and from other namespaces. Claude
+   then binds by namespace pattern. Without this, both the prompt and the map that
+   Claude writes grow with the number of types, and a large solution's proposal
+   ran past fifteen minutes.
 2. Ask Claude to propose a map from the listing (section 7). The answer lists nodes
    and views in a fixed shape; the tool adds the skeleton's solution, exclusions and
    externals, and the map reader validates the result.
@@ -157,9 +163,16 @@ it:
    that cannot be used, and otherwise the unsorted types, the types two leaves claim
    equally, the cycles at each level with the type pairs behind each edge as
    `vibecheck why` reports them, the cycles among a view's groups, and leaves of more
-   than sixty types.
-4. If anything was found, send the findings back with the proposal and ask for a
-   revision. Stop when nothing is found, after three rounds, or when a usable
+   than sixty types. A map listed by namespace is not held to the sixty-type limit,
+   since splitting a namespace needs the type-level detail that its listing leaves
+   out. Each reason a proposal cannot be used is written to the log.
+4. If anything was found, send the findings back with the best map so far and ask
+   for edits to it: nodes to remove, nodes to add or change, view groups to add, and
+   types to move to a leaf by exact name. The request lists only the units, or for a
+   large solution the namespaces, of the types the findings name, and the answer is
+   as long as its edits rather than as long as the map. Until some proposal is usable
+   there is no map to edit, so Claude proposes a whole map again, told why the last
+   one was rejected. Stop when nothing is found, after three rounds, or when a usable
    revision does not reduce the number of findings. The last case usually means a
    cycle in the code itself, which no grouping removes. A revision that fails, or
    takes longer than fifteen minutes, also ends the rounds.

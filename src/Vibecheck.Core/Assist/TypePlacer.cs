@@ -116,18 +116,7 @@ public static class TypePlacer
                 .Select(g => (Leaf: l.GetProperty("id").GetString()!, View: g.GetProperty("view").GetString()!, Group: g.GetProperty("group").GetString()!)))
             .ToList();
         foreach (var id in added.Where(copy.Nodes.ContainsKey))
-        {
-            foreach (var (viewId, view) in copy.Views.Where(v => Identifiers.IsUnder(id, v.Value.Level)).ToList())
-            {
-                var group = named.Where(n => n.Leaf == id && n.View == viewId && view.Groups.ContainsKey(n.Group)).Select(n => n.Group).FirstOrDefault()
-                    ?? view.Groups.OrderByDescending(g => g.Value.Leaves.Count(l => Identifiers.ParentOrRoot(l) == Identifiers.ParentOrRoot(id)))
-                        .Select(g => g.Key).FirstOrDefault();
-                if (group is null) continue;
-                var groups = new SortedDictionary<string, GroupSpec>(view.Groups, StringComparer.Ordinal);
-                groups[group] = groups[group] with { Leaves = [.. groups[group].Leaves, id] };
-                copy.Views[viewId] = view with { Groups = groups };
-            }
-        }
+            MapEdits.JoinViews(copy, id, (viewId, view) => named.Where(n => n.Leaf == id && n.View == viewId && view.Groups.ContainsKey(n.Group)).Select(n => n.Group).FirstOrDefault());
         return copy;
     }
 

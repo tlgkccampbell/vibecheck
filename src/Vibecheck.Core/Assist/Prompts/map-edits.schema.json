@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["remove", "nodes", "groups", "moves"],
+  "properties": {
+    "remove": { "type": "array", "items": { "type": "string" } },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "purpose": { "type": "string" },
+          "category": { "type": "string", "enum": ["entry", "feature", "domain", "analysis", "transform", "integration", "foundation", "tooling"] },
+          "bind": { "type": "array", "items": { "type": "string" } },
+          "group": { "type": "string" }
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["view", "id", "name"],
+        "properties": {
+          "view": { "type": "string" },
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "purpose": { "type": "string" }
+        }
+      }
+    },
+    "moves": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "leaf"],
+        "properties": {
+          "type": { "type": "string" },
+          "leaf": { "type": "string" }
+        }
+      }
+    }
+  }
+}

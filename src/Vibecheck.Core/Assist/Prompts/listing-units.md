@@ -1,0 +1,3 @@
+The listing below groups the solution's types into units. A unit is a type together with the helpers that only it uses. Under each `=== Namespace ===` header, a unit starts with its head type's name, and the type's full name is the header's namespace, a dot, and that name. The number in brackets is how many types the unit holds, and the line starting with `+` names the others, which are in the same namespace unless the unit says it spans several. The quoted line is the head type's documentation summary. The lines starting with `->` and `<-` name the units it references most and is referenced by most, with counts.
+
+Bind every type: a unit's types belong together, so a namespace pattern or the exact names of all its members places the whole unit.
