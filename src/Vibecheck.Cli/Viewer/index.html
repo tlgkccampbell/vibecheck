@@ -146,11 +146,16 @@
   .tip-head { display: flex; gap: 10px; font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
   .tip-head .n { margin-left: auto; color: var(--muted); font-weight: 400; white-space: nowrap; }
   .nav-buttons { display: inline-flex; gap: 8px; flex: none; }
-  .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-  .crumb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
+  /* The trail fills the room the other items leave, and shortens its crumbs rather than growing, so that where the
+     top bar wraps never depends on the names in the trail, which differ between the views of a level. The current
+     crumb shortens last. */
+  .crumbs { display: flex; align-items: center; gap: 4px; flex: 1 1 16ch; min-width: 16ch; overflow: hidden; }
+  .crumb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-family: var(--mono); font-size: 13px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crumb.current { flex-shrink: 0; max-width: 100%; }
   .crumb:hover:not(:disabled) { border-color: var(--line); background: var(--surface); }
   .crumb.current { font-weight: 600; cursor: default; }
-  .crumb-sep { color: var(--muted); }
+  .crumb-sep { color: var(--muted); flex: none; }
   .spacer { flex: 1; }
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
   .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }

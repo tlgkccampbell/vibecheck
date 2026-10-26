@@ -2244,7 +2244,7 @@
     bc.replaceChildren();
     state.trail.forEach((l, i) => {
       const last = i === state.trail.length - 1 && !state.figure;
-      bc.append(el("button", { class: "crumb" + (last ? " current" : ""), disabled: last, onclick: () => goTo(i) }, locName(l)));
+      bc.append(el("button", { class: "crumb" + (last ? " current" : ""), disabled: last, title: locName(l), onclick: () => goTo(i) }, locName(l)));
       if (!last) bc.append(el("span", { class: "crumb-sep" }, "›"));
     });
     if (state.figure) bc.append(el("button", { class: "crumb current", disabled: true, title: "A figure Claude drew for the current slide" }, "Figure"));
