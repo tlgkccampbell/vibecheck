@@ -2729,7 +2729,9 @@
       ev.preventDefault();
       ev.stopPropagation();
       const path = hit.location.file.split("/").map(encodeURIComponent).join("/");
-      window.open(`${META.blob}${path}#L${hit.location.line}`, "_blank", "noopener");
+      // A browser opens a window in a background tab when Ctrl or Cmd is held during the event that opens it, so the
+      // window opens after the click, while the click still lets the page open one.
+      setTimeout(() => window.open(`${META.blob}${path}#L${hit.location.line}`, "_blank", "noopener"));
     }, { capture: true });
   }
 
