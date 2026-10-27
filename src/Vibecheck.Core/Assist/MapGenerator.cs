@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -26,6 +27,9 @@ public static class MapGenerator
     /// <summary>The most rounds of proposing and revising that one generation runs.</summary>
     public const int MaxRounds = 3;
 
+    /// <summary>The most edges of a cycle's cut set that a finding lists.</summary>
+    public const int MaxCutEdges = 12;
+
     /// <summary>A leaf with more types than this is reported as too large for a view to regroup.</summary>
     public const int LargeLeaf = 60;
 
@@ -46,7 +50,8 @@ public static class MapGenerator
     /// fewest findings, preferring the later of two that tie. Each revision edits that proposal. A revision that fails, or takes longer than
     /// <see cref="RequestTimeout"/>, ends the rounds and keeps the best proposal so far. While Claude works, the progress
     /// says every few seconds how long the request has run and how much Claude has thought and written. The log
-    /// receives each finding of every round, and each reason a proposal could not be used as a map.
+    /// receives each finding of every round, how long each round's run of the checker took, and each reason a proposal
+    /// could not be used as a map.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null, Action<string>? log = null) =>
@@ -63,6 +68,7 @@ public static class MapGenerator
         var (included, _) = Exclusion.Parse(skeleton, errors).Apply(analysis);
         var units = Units.Build(included);
         var (byNamespace, format, listing) = Listing(included, units, maxListing);
+        var typeNames = included.Types.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
         var rules = Prompts.Fill(Prompts.Read("map-rules.md"),
             ("externals", skeleton.Externals.Count == 0 ? "none" : string.Join(", ", skeleton.Externals.Keys.Select(k => $"`{k}`"))),
             ("exclude", string.Join(", ", skeleton.Exclude.Concat(skeleton.Tests).Select(e => $"`{e}`"))));
@@ -84,7 +90,8 @@ public static class MapGenerator
         var previous = int.MaxValue;
         for (var round = 1; ; round++)
         {
-            var (map, text, found) = Check(candidate, problems, analysis, largeLeaves: !byNamespace);
+            var (map, text, found, checking) = Check(candidate, problems, analysis, largeLeaves: !byNamespace);
+            if (checking is { } took) log?.Invoke($"round {round} ran the checker in {took.TotalMilliseconds:F0} ms");
             findings = found.Select(f => f.Text).ToList();
             if (map is null)
             {
@@ -128,7 +135,7 @@ public static class MapGenerator
                 break;
             }
             problems = [];
-            candidate = editing is null ? Build(skeleton, answer, problems) : MapEdits.Apply(editing.Map, answer, problems);
+            candidate = editing is null ? Build(skeleton, answer, problems) : MapEdits.Apply(editing.Map, answer, problems, typeNames);
         }
         return best ?? throw new ClaudeException("Claude proposed no usable map: " + string.Join("; ", findings.Take(5)));
     }
@@ -178,7 +185,7 @@ public static class MapGenerator
     internal static (ArchitectureMap? Map, string Text, IReadOnlyList<string> Findings) Evaluate(ArchitectureMap skeleton, JsonElement answer, AnalysisResult analysis)
     {
         var problems = new List<string>();
-        var (map, text, findings) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true);
+        var (map, text, findings, _) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true);
         return (map, text, findings.Select(f => f.Text).ToList());
     }
 
@@ -223,25 +230,29 @@ public static class MapGenerator
     /// <summary>
     /// Checks a map. Returns a null map when it cannot be used at all, with the problems and the reasons as findings,
     /// and otherwise the map as the reader reads it back, its canonical text, and the problems and what the checker
-    /// reports about it.
+    /// reports about it. Also returns how long <see cref="Checker.Run"/> took, or <see langword="null"/> when the map
+    /// could not be read back and the checker did not run.
     /// </summary>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
-    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings) Check(ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves)
+    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings, TimeSpan? Checking) Check(ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves)
     {
         var text = MapWriter.Write(map);
         var errors = new List<string>();
         var parsed = MapReader.Read(text, errors);
         IEnumerable<Finding> Plain(IEnumerable<string> texts) => texts.Select(t => new Finding(t, []));
-        if (parsed is null || errors.Count > 0) return (null, text, [.. Plain(problems), .. Plain(errors)]);
+        if (parsed is null || errors.Count > 0) return (null, text, [.. Plain(problems), .. Plain(errors)], null);
+        var watch = Stopwatch.StartNew();
         var facts = Checker.Run(parsed, analysis, new CheckOptions { MapText = text });
-        if (!facts.Passed) return (null, text, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))]);
-        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves)]);
+        var checking = watch.Elapsed;
+        if (!facts.Passed) return (null, text, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))], checking);
+        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves)], checking);
     }
 
     /// <summary>
     /// Returns what the checker's facts say is wrong with a usable map: unsorted types, types two leaves claim equally,
-    /// cycles among a level's children with the type pairs behind each edge, cycles among a view's groups, and, when
-    /// asked for, leaves too large for a view to regroup. Each finding names the types it concerns.
+    /// cycles among a level's children with the edges whose removal breaks each and the type pairs behind those edges,
+    /// cycles among a view's groups with the edges whose removal breaks each, and, when asked for, leaves too large for a
+    /// view to regroup. Each finding names the types it concerns.
     /// </summary>
     /// <param name="facts">The checker's facts about the map.</param>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
@@ -258,21 +269,29 @@ public static class MapGenerator
         {
             foreach (var cycle in metrics.Cycles)
             {
-                var sb = new StringBuilder($"cycle among the children of {level}: {string.Join(" → ", cycle)} → {cycle[0]}");
+                var cut = Checker.CutSet(cycle, metrics.Edges);
+                var sb = new StringBuilder($"cycle among the children of {level}: {string.Join(", ", cycle)}");
+                sb.Append($"\nRemoving these {cut.Count} edge(s) breaks it, lightest first:");
                 var types = new List<string>();
-                for (var i = 0; i < cycle.Count; i++)
+                foreach (var e in cut.Take(MaxCutEdges))
                 {
-                    var (from, to) = (cycle[i], cycle[(i + 1) % cycle.Count]);
-                    var pairs = Explain.Pairs(facts, from, to);
-                    sb.Append($"\n{from} → {to}: {pairs.Sum(p => p.Count)} reference(s), from {string.Join(", ", pairs.Take(4).Select(p => $"{p.FromType} → {p.ToType} ({p.Count})"))}");
+                    var pairs = Explain.Pairs(facts, e.From, e.To);
+                    sb.Append($"\n{e.From} → {e.To}: {e.Count} reference(s), from {string.Join(", ", pairs.Take(4).Select(p => $"{p.FromType} → {p.ToType} ({p.Count})"))}");
                     types.AddRange(pairs.Take(4).SelectMany(p => new[] { p.FromType, p.ToType }));
                 }
+                if (cut.Count > MaxCutEdges)
+                    sb.Append($"\n…and {cut.Count - MaxCutEdges} more edge(s); so many usually means the code does not separate these children, and merging some of them breaks the cycle.");
                 findings.Add(new(sb.ToString(), types));
             }
         }
         foreach (var (view, metrics) in facts.Views)
         {
-            foreach (var cycle in metrics.Cycles) findings.Add(new($"cycle among the groups of view {view}: {string.Join(" → ", cycle)} → {cycle[0]}", []));
+            foreach (var cycle in metrics.Cycles)
+            {
+                var cut = Checker.CutSet(cycle, metrics.Edges);
+                findings.Add(new($"cycle among the groups of view {view}: {string.Join(", ", cycle)}; removing "
+                    + $"{string.Join(", ", cut.Take(MaxCutEdges).Select(e => $"{e.From} → {e.To} ({e.Count})"))}{(cut.Count > MaxCutEdges ? $" and {cut.Count - MaxCutEdges} more" : "")} breaks it", []));
+            }
         }
         if (!largeLeaves) return findings;
         foreach (var (id, node) in facts.Map.Nodes)

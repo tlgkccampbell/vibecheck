@@ -4563,8 +4563,7 @@
       p.state === "OPEN" && MERGE_TEXT[p.mergeState] ? el("span", { class: "by" }, MERGE_TEXT[p.mergeState]) : null,
       el("span", { class: "spacer" }),
       PULL.stale ? el("span", { class: "stale", title: PULL.stale }, "Stale: " + PULL.stale) : null,
-      canWrite() ? el("button", { class: "btn primary", onclick: toggleReviewBox, title: "Submit your review: a comment, an approval or a request for changes" }, "Review")
-        : API && p.state !== "OPEN" ? el("span", { class: "by" }, "read-only") : null,
+      canWrite() ? el("button", { class: "btn primary", onclick: toggleReviewBox, title: "Submit your review: a comment, an approval or a request for changes" }, "Review") : null,
       API ? el("button", { class: "link", onclick: refreshPull, title: "Read the pull request from GitHub now" }, "Refresh") : null].filter(Boolean));
     bar.hidden = false;
     renderPush();
@@ -4973,9 +4972,9 @@
   // that follows. Unsent text survives a reload through sessionStorage, and nothing else keeps it. See
   // docs/pull-requests.md section 8.
 
-  // Returns a value indicating whether the page can write to the pull request: it is served, attached to a pull
-  // request, and the pull request is open. A closed or merged pull request is shown read-only.
-  const canWrite = () => !!(API && PULL.snapshot && PULL.snapshot.state === "OPEN");
+  // Returns a value indicating whether the page can write to the pull request: it is served and attached to a pull
+  // request. A closed or merged pull request still takes comments and reviews that only comment, as on GitHub.
+  const canWrite = () => !!(API && PULL.snapshot);
   const pendingReview = () => { const d = discussion(); return d ? d.pending : null; };
 
   // Sends JSON to a path of the server and returns whether it succeeded, with the answer's status and body. The status
@@ -5141,8 +5140,9 @@
   const EVENT_TEXT = { COMMENT: "Comment", APPROVE: "Approve", REQUEST_CHANGES: "Request changes" };
 
   // Shows or hides the review box under the bar: a summary, the choice of comment, approval or request for changes,
-  // and the pending review's discard. GitHub refuses an approval or a request for changes from the author, and a
-  // comment or request for changes with no summary and no comments, so the box says so before it sends.
+  // and the pending review's discard. GitHub refuses an approval or a request for changes from the author or on a pull
+  // request that is not open, and a comment or request for changes with no summary and no comments, so the box says so
+  // before it sends.
   function toggleReviewBox() {
     const box = $("#reviewbox");
     if (!box.hidden) { box.hidden = true; return; }
@@ -5153,9 +5153,12 @@
     const box = $("#reviewbox"), p = PULL.snapshot, pending = pendingReview();
     if (!p || !canWrite()) { box.hidden = true; return; }
     let choice = "COMMENT";
+    const shut = p.state !== "OPEN";
+    const why = shut ? `GitHub does not let a ${p.state.toLowerCase()} pull request be approved or have changes requested.`
+      : p.viewerDidAuthor ? "GitHub does not let the author approve their own pull request or request changes to it." : "";
     const choices = el("div", { class: "review-choices" }, ...Object.keys(EVENT_TEXT).map((e) => {
-      const blocked = e !== "COMMENT" && p.viewerDidAuthor;
-      return el("label", { class: blocked ? "blocked" : "", title: blocked ? "GitHub does not let the author approve their own pull request or request changes to it." : "" },
+      const blocked = e !== "COMMENT" && !!why;
+      return el("label", { class: blocked ? "blocked" : "", title: blocked ? why : "" },
         el("input", { type: "radio", name: "review-event", value: e, checked: e === "COMMENT", disabled: blocked, onchange: () => { choice = e; } }), " " + EVENT_TEXT[e]);
     }));
     const discard = pending ? el("button", { class: "link danger", onclick: () => {
@@ -5168,7 +5171,8 @@
     } }, "Discard review") : null;
     box.replaceChildren(
       el("div", { class: "review-head" }, el("b", {}, "Finish your review"), el("span", { class: "hint" }, pending ? `${plural(pending.comments, "pending comment", "pending comments")} will be submitted with it` : "No pending comments"),
-        p.viewerDidAuthor ? el("span", { class: "hint" }, "· you opened this pull request, so you can only comment") : null),
+        shut ? el("span", { class: "hint" }, `· this pull request is ${p.state.toLowerCase()}, so you can only comment`)
+          : p.viewerDidAuthor ? el("span", { class: "hint" }, "· you opened this pull request, so you can only comment") : null),
       composer({ key: "review", placeholder: "Leave a summary", focus: true, extra: [choices, discard],
         check: (text) => choice !== "APPROVE" && !text.trim() && !(pending && pending.comments) ? `${EVENT_TEXT[choice]} needs a summary or comments.` : null,
         done: () => { box.hidden = true; },

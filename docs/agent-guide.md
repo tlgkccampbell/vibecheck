@@ -199,7 +199,7 @@ solution and longer on a large one. Run it once per unit of work, after the code
 shape, not after every edit. A typical clean result looks like this:
 
 ```
-cycle at notifications: notifications.dispatch → notifications.templates → notifications.dispatch
+cycle at notifications: notifications.dispatch, notifications.templates; removing notifications.templates → notifications.dispatch (2) breaks it
 ok: 36 types in 13 leaves, 2 excluded; 231 dependencies, 40 leaf edges, 0 warning(s)
 tests: 3 test types: 1 by name, 1 by references, 1 infrastructure
 ```
@@ -233,14 +233,16 @@ the map. Compare against a check of the base revision if you are not sure which 
 new.
 
 **Cycles** are printed for every level and view. A cycle is not an error, and many
-systems have some. A cycle that your change introduced, though, deserves a look:
+systems have some. Each cycle lists its members, in no particular order, and then the
+edges whose removal breaks it, with their reference counts. A cycle that your change
+introduced deserves a look at those edges:
 
 ```
 vibecheck why <from-node> <to-node>
 ```
 
-`why` lists the type pairs behind one edge, with reference counts. If a single
-misplaced type causes the cycle, move it to the right leaf. If the code genuinely
+`why` lists the type pairs behind one edge, with reference counts. If a misplaced
+type on one of those edges causes the cycle, move it to the right leaf. If the code genuinely
 depends both ways, leave the map alone and mention the new cycle in your report.
 
 ### 3.4 Format and review the map diff

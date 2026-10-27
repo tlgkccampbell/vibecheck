@@ -11,13 +11,15 @@ namespace Vibecheck.Assist;
 public static class MapEdits
 {
     /// <summary>
-    /// Returns a copy of a map with an answer's edits applied, in this order: removals, nodes, groups, then moves. An edit
+    /// Returns a copy of a map with an answer's edits applied, in this order: removals, nodes, groups, then moves. A move
+    /// whose type names a leaf and whose leaf names one of the solution's types is applied with the two swapped. An edit
     /// that cannot be applied is skipped, and the reason is added to the problems.
     /// </summary>
     /// <param name="map">The map to edit, which is not changed.</param>
     /// <param name="answer">The answer, in the shape of <c>map-edits.schema.json</c>.</param>
     /// <param name="problems">The list that receives a reason for each edit that is skipped.</param>
-    public static ArchitectureMap Apply(ArchitectureMap map, JsonElement answer, List<string> problems)
+    /// <param name="types">The full names of the solution's types, or <see langword="null"/> to swap no move.</param>
+    public static ArchitectureMap Apply(ArchitectureMap map, JsonElement answer, List<string> problems, IReadOnlySet<string>? types = null)
     {
         var copy = map.Clone();
         foreach (var id in Strings(answer, "remove"))
@@ -60,10 +62,10 @@ public static class MapEdits
         foreach (var m in Items(answer, "moves"))
         {
             var (type, leafId) = (m.GetProperty("type").GetString()!, m.GetProperty("leaf").GetString()!);
-            if (!copy.Nodes.TryGetValue(leafId, out var leaf) || !leaf.IsLeaf) { problems.Add($"the edit moves {type} to \"{leafId}\", which is not a leaf"); continue; }
-            foreach (var (id, other) in copy.Nodes.Where(kv => kv.Value.IsLeaf && kv.Value.Bind!.Contains(type)).ToList())
-                copy.Nodes[id] = other with { Bind = other.Bind!.Where(p => p != type).ToList() };
-            copy.Nodes[leafId] = copy.Nodes[leafId] with { Bind = [.. copy.Nodes[leafId].Bind!, type] };
+            // A move whose type names a leaf and whose leaf names a type has its two fields swapped, so it is applied the
+            // other way round rather than lost. See issue #11. A leaf field that names no type is reported, not bound.
+            if (copy.Nodes.TryGetValue(type, out var named) && named.IsLeaf && types?.Contains(leafId) == true) (type, leafId) = (leafId, type);
+            if (!Move(copy, type, leafId)) problems.Add($"the edit moves {type} to \"{leafId}\", which is not a leaf");
         }
 
         DropStaleLeaves(copy);
@@ -98,6 +100,22 @@ public static class MapEdits
             groups[group] = groups[group] with { Leaves = [.. groups[group].Leaves, leaf] };
             map.Views[viewId] = view with { Groups = groups };
         }
+    }
+
+    /// <summary>
+    /// Binds a type to a leaf by its exact full name, and takes that exact name out of any other leaf. Returns
+    /// <see langword="false"/>, and changes nothing, when the identifier does not name a leaf.
+    /// </summary>
+    /// <param name="map">The map to change in place.</param>
+    /// <param name="type">The type's full name.</param>
+    /// <param name="leafId">The identifier of the leaf that receives the type.</param>
+    private static bool Move(ArchitectureMap map, string type, string leafId)
+    {
+        if (!map.Nodes.TryGetValue(leafId, out var leaf) || !leaf.IsLeaf) return false;
+        foreach (var (id, other) in map.Nodes.Where(kv => kv.Value.IsLeaf && kv.Value.Bind!.Contains(type)).ToList())
+            map.Nodes[id] = other with { Bind = other.Bind!.Where(p => p != type).ToList() };
+        map.Nodes[leafId] = map.Nodes[leafId] with { Bind = [.. map.Nodes[leafId].Bind!, type] };
+        return true;
     }
 
     /// <summary>Removes from each view's groups the identifiers that no longer name a leaf.</summary>

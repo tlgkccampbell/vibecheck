@@ -132,6 +132,7 @@ public class MapGeneratorTests
         var progress = new List<string>();
 
         await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress), log: log.Add);
+        log = log.Where(l => l.StartsWith("round 1 ", StringComparison.Ordinal) && !l.Contains(" ran the checker ", StringComparison.Ordinal)).ToList();
 
         Assert.NotEmpty(log);
         Assert.All(log, l => Assert.StartsWith("round 1 was rejected: ", l, StringComparison.Ordinal));
@@ -149,9 +150,20 @@ public class MapGeneratorTests
 
         await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, log: log.Add);
 
-        var finding = Assert.Single(log);
+        var finding = Assert.Single(log, l => l.Contains(" finding", StringComparison.Ordinal));
         Assert.StartsWith("round 1 finding: 2 type(s) are unsorted", finding, StringComparison.Ordinal);
         Assert.Contains("Shared.Result", finding, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LogsHowLongEachRunOfTheCheckerTook()
+    {
+        var log = new List<string>();
+
+        await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), new FakeClaude(MissingShared, AddShared), log: log.Add);
+
+        Assert.Matches(@"^round 1 ran the checker in \d+ ms$", Assert.Single(log, l => l.StartsWith("round 1 ran", StringComparison.Ordinal)));
+        Assert.Matches(@"^round 2 ran the checker in \d+ ms$", Assert.Single(log, l => l.StartsWith("round 2 ran", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -223,6 +235,54 @@ public class MapGeneratorTests
         var moved = MapEdits.Apply(edited, JsonDocument.Parse("""{ "moves": [ { "type": "Shared.Error", "leaf": "shared" } ] }""").RootElement, problems);
         Assert.Equal(["B.**"], moved.Nodes["edge"].Bind);
         Assert.Equal(["Shared.**", "Shared.Error"], moved.Nodes["shared"].Bind);
+    }
+
+    [Fact]
+    public async Task AppliesAMoveWhoseTypeAndLeafAreSwapped()
+    {
+        // Issue #11: the revision names the leaf as the type and the type as the leaf.
+        var proposal = Complete.Replace("\"bind\": [\"Shared.**\"]", "\"bind\": [\"Shared.Result\"]", StringComparison.Ordinal);
+        var swapped = """{ "remove": [], "nodes": [], "groups": [], "moves": [ { "type": "shared", "leaf": "Shared.Error" } ] }""";
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), new FakeClaude(proposal, swapped), log: log.Add);
+
+        Assert.Equal((2, 0), (generated.Round, generated.Findings.Count));
+        Assert.Equal(["Shared.Result", TestData.Error], generated.Map.Nodes["shared"].Bind);
+        Assert.DoesNotContain(log, l => l.Contains("which is not a leaf", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReportsAMoveToALeafThatNamesNoTypeRatherThanSwappingIt()
+    {
+        // A swap would bind a type that does not exist, and the revision would look better than it is.
+        var proposal = Complete.Replace("\"bind\": [\"Shared.**\"]", "\"bind\": [\"Shared.Result\"]", StringComparison.Ordinal);
+        var unknown = """{ "remove": [], "nodes": [], "groups": [], "moves": [ { "type": "shared", "leaf": "No.Such.Type" } ] }""";
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), new FakeClaude(proposal, unknown), log: log.Add);
+
+        Assert.DoesNotContain(generated.Map.Nodes.Values, n => n.Bind?.Contains("No.Such.Type") == true);
+        Assert.Contains(log, l => l.StartsWith("round 2 finding: the edit moves shared to \"No.Such.Type\", which is not a leaf", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExplainsACycleByTheEdgesThatBreakItAndNeverByAStepThatIsNoEdge()
+    {
+        // p references q and r, and each references p back, but q and r share no edge.
+        var map = new ArchitectureMap { Version = 0, Solution = "Example.sln" };
+        map.Nodes["p"] = new NodeSpec { Name = "P", Bind = ["A.X.**"] };
+        map.Nodes["q"] = new NodeSpec { Name = "Q", Bind = ["A.Y.**"] };
+        map.Nodes["r"] = new NodeSpec { Name = "R", Bind = ["B.**", "Shared.**"] };
+        var analysis = TestData.Analysis([
+            new(TestData.Other, TestData.Thing, "references", TestData.Thing, TestData.Y1, 3),
+            new(TestData.Service, TestData.Helper, "references", TestData.Helper, TestData.B1, 6)]);
+
+        var finding = Assert.Single(MapGenerator.Findings(Checking.Checker.Run(map, analysis)));
+
+        Assert.StartsWith("cycle among the children of root: p, q, r\nRemoving these 2 edge(s) breaks it, lightest first:\n", finding.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("0 reference(s)", finding.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("q → r", finding.Text, StringComparison.Ordinal);
     }
 
     [Fact]

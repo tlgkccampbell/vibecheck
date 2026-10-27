@@ -1035,6 +1035,8 @@ public sealed class ReviewServer : IAsyncDisposable
             // GitHub refuses these, so they are refused here before anything is sent. See docs/pull-requests.md section 8.3.
             if (kind != "COMMENT" && pull.ViewerDidAuthor)
                 return Results.BadRequest(new { message = "GitHub does not let the author of a pull request approve it or request changes to it" });
+            if (kind != "COMMENT" && pull.State != "OPEN")
+                return Results.BadRequest(new { message = $"GitHub does not let a {pull.State.ToLowerInvariant()} pull request be approved or have changes requested" });
             var pending = pull.Discussion?.Pending;
             if (kind != "APPROVE" && string.IsNullOrWhiteSpace(summary) && (pending?.Comments ?? 0) == 0)
                 return Results.BadRequest(new { message = "a comment or a request for changes needs a summary or comments" });
@@ -1168,18 +1170,14 @@ public sealed class ReviewServer : IAsyncDisposable
 
     /// <summary>
     /// Returns the review, the client and the snapshot that a write to a review's pull request needs, or null with the
-    /// answer that refuses the write: 404 for a review without a pull request, and 409 for a pull request that is closed
-    /// or merged, which is shown read-only. See <c>docs/pull-requests.md</c> section 8.
+    /// answer that refuses the write: 404 for a review without a pull request, and 409 for a pull request that GitHub has
+    /// not identified yet. A closed or merged pull request still takes comments, as on GitHub. See
+    /// <c>docs/pull-requests.md</c> section 8.
     /// </summary>
     private (Review Review, IGitHub GitHub, PullSnapshot Pull)? Writer(string id, out IResult refusal)
     {
         refusal = Results.NotFound();
         if (!reviews.TryGetValue(id, out var review) || review.Pull is null || options.GitHub is not { } github || review.Snapshot is not { } pull) return null;
-        if (pull.State != "OPEN")
-        {
-            refusal = Results.Conflict(new { message = $"#{pull.Number} is {pull.State.ToLowerInvariant()}, so it is read-only" });
-            return null;
-        }
         if (pull.NodeId is null)
         {
             refusal = Results.Conflict(new { message = $"GitHub has not identified #{pull.Number} yet" });

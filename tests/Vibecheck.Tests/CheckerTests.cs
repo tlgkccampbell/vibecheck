@@ -221,6 +221,88 @@ public class CheckerTests
     }
 
     [Fact]
+    public void ReportsACycleAsASetOfMembersWithTheEdgesThatBreakIt()
+    {
+        // b and c each reference a and are referenced by it, but not each other, so no path runs a → b → c → a.
+        var edges = new List<EdgeCount> { new("a", "b", 5), new("b", "a", 1), new("a", "c", 1), new("c", "a", 4) };
+
+        var cycle = Assert.Single(Checker.Cycles(["c", "b", "a"], edges));
+
+        Assert.Equal(["a", "b", "c"], cycle);
+        Assert.Equal([new EdgeCount("a", "c", 1), new EdgeCount("b", "a", 1)], Checker.CutSet(cycle, edges));
+    }
+
+    [Fact]
+    public void CutsTheLightestEdgeOfARing()
+    {
+        var edges = new List<EdgeCount> { new("a", "b", 3), new("b", "c", 1), new("c", "a", 2), new("x", "a", 9) };
+
+        Assert.Equal([new EdgeCount("b", "c", 1)], Checker.CutSet(["a", "b", "c"], edges));
+    }
+
+    [Fact]
+    public void EveryCutSetBreaksEveryCycleAndKeepsNoEdgeItCouldReturn()
+    {
+        var random = new Random(42);
+        var (compared, greedy) = (0, 0);
+        for (var graph = 0; graph < 340; graph++)
+        {
+            // The last 40 graphs are larger than the exact search takes, so that the greedy order is checked too.
+            var nodes = Enumerable.Range(0, graph < 300 ? random.Next(2, 7) : random.Next(17, 21)).Select(i => $"n{i}").ToList();
+            var density = graph < 300 ? 0.4 : 0.15;
+            var edges = (from a in nodes from b in nodes where a != b && random.NextDouble() < density select new EdgeCount(a, b, random.Next(1, 10))).ToList();
+            foreach (var cycle in Checker.Cycles(nodes, edges))
+            {
+                var cut = Checker.CutSet(cycle, edges);
+                var kept = edges.Where(e => !cut.Contains(e)).ToList();
+                Assert.Empty(Checker.Cycles(cycle, kept));
+                foreach (var e in cut) Assert.NotEmpty(Checker.Cycles(cycle, [.. kept, e]));
+                if (cycle.Count > 16) greedy++;
+                if (edges.Count(e => cycle.Contains(e.From) && cycle.Contains(e.To)) > 14) continue;
+                Assert.Equal(LightestCut(cycle, edges), cut.Sum(e => e.Count));
+                compared++;
+            }
+        }
+        Assert.True(compared > 100 && greedy > 10, $"compared {compared} cuts with the lightest, and checked {greedy} greedy cuts");
+    }
+
+    /// <summary>Returns the fewest references that any set of edges among a cycle's members carries whose removal breaks it, by trying every set. It suits a component of a few edges.</summary>
+    private static int LightestCut(List<string> members, List<EdgeCount> edges)
+    {
+        var inside = edges.Where(e => members.Contains(e.From) && members.Contains(e.To)).ToList();
+        var best = int.MaxValue;
+        for (var mask = 0; mask < 1 << inside.Count; mask++)
+        {
+            var removed = inside.Where((_, i) => (mask & (1 << i)) != 0).Sum(e => e.Count);
+            if (removed >= best) continue;
+            if (Checker.Cycles(members, inside.Where((_, i) => (mask & (1 << i)) == 0).ToList()).Count == 0) best = removed;
+        }
+        return best;
+    }
+
+    [Fact]
+    public void FindsTheLightestCutOfSixteenMembersQuickly()
+    {
+        var nodes = Enumerable.Range(0, 16).Select(i => $"n{i:00}").ToList();
+        var edges = nodes.SelectMany((a, i) => nodes.Where((_, j) => j != i).Select((b, j) => new EdgeCount(a, b, 1 + (i * 7 + j) % 5))).ToList();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var cut = Checker.CutSet(Assert.Single(Checker.Cycles(nodes, edges)), edges);
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"took {watch.Elapsed}");
+        Assert.Empty(Checker.Cycles(nodes, edges.Where(e => !cut.Contains(e)).ToList()));
+    }
+
+    [Fact]
+    public void FindsACycleThroughALongChainWithoutRunningOutOfStack()
+    {
+        var nodes = Enumerable.Range(0, 100_000).Select(i => $"n{i}").ToList();
+        var edges = nodes.Select((n, i) => new EdgeCount(n, nodes[(i + 1) % nodes.Count], 1)).ToList();
+
+        Assert.Equal(100_000, Assert.Single(Checker.Cycles(nodes, edges)).Count);
+    }
+
+    [Fact]
     public void CyclesAmongChildrenAreReportedPerLevel()
     {
         var analysis = TestData.Analysis([new RawDependency(TestData.Other, TestData.Thing, "calls", "A.X.Thing.Back", TestData.Y1, 2)]);
