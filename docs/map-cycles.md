@@ -9,8 +9,8 @@ loop of [review-workflow.md](review-workflow.md) section 4.4 and the checking of
 
 Phases 1 and 2 of section 10, knots and local repair, are built. Phase 3, the
 reviewer's part, is not. Section 3, local repair, was rescoped after the first
-measurement, and its values were set from the second (section 7.2). Phase 2 is to be
-measured as section 7.3 says.
+measurement, and its values were set from the second (section 7.2). Phase 2 was
+measured twice, in sections 7.3 and 7.4, and neither measurement saved a round.
 
 Most revision rounds in practice are spent on cycles among a level's children. Each
 round is an Opus request that takes minutes; the trial of review-workflow.md section
@@ -354,6 +354,40 @@ The first two such generations gave these results:
 - Judged by names, most of the 30 moves fit, and 5 were doubtful.
 - One revision swapped the type and the leaf in 15 moves, which issue #11 records.
 
+### 7.4 The reasons repair gives
+
+Two more generations ran on the same solution with the build that fixes issue #11 and
+logs why repair leaves each cycle.
+
+- Both ran all three rounds, in 607 and 469 seconds. That is less than the 678 to 745
+  seconds of sections 7.2 and 7.3, but most of a round is Claude's time, and repair
+  took only 1 to 7 seconds a round. Every measured run so far has used all three
+  rounds, and the stop rule for entangled cycles has never fired.
+- The cycles among a level's children fell from 13 to 4 to 1 in one run, and from 12
+  to 5 to 3 in the other. One cycle among a view's groups stayed in every round. The
+  runs ended with 2 and 4 findings.
+- Repair broke 0 to 3 cycles a round and moved 0 to 7 types. A checker run took about
+  1 second at the median and 2.4 seconds at most. The search never reached its budget,
+  and no candidate made the map unusable.
+- The fit guard was by far the most common reason. It held 2 to 17 types a round, and
+  almost every cycle it held had a cut of 1 or 2 edges. Several holds were near ties:
+  four types had 2 references to their own leaf and 1 to the new one, and another had
+  3 and 2. Others were clear, such as 118 against 2 and 156 against 4.
+- Cycles entangled by their cut sets had 4 or 5 edges in later rounds and 9 to 41 in
+  the first. Two were entangled by types alone: cuts of 2 and 3 edges that would have
+  moved at least 9 to 14 types. The only entangled cycle left at the end had 36 cut
+  edges, which no reasonable limit covers.
+- Three candidates, with cuts of 2 or 3 edges, left their cycle in place. Their moves
+  likely added references that closed the loop again.
+- Judged by names, 8 of the 15 moves fit and 7 were doubtful. The doubtful ones moved
+  general types into a narrow leaf, or split two types of one namespace across two
+  leaves.
+- When two cycles of one round move the same type, the round's count of moved types
+  counts it twice.
+
+So the limits of 3 edges and 6 types are not what stops repair; the fit guard is. Two
+runs of a model that varies cannot show that phase 2 caused the shorter times.
+
 ## 8. Changes to other documents
 
 - review-workflow.md section 4.4: step 3 finds knots and runs the knot pass and local
@@ -391,13 +425,16 @@ Each question below ends with a recommendation, which stands until it is decided
   `Checker.Run` once on the result, and add a test that the two agree.
 - **The limits of a repairable cycle.** At most 3 cut edges and 6 moved types. The
   edge limit covered 7 of the 8 cycles left at the end of section 7.2's runs.
-  Recommendation: keep both. Raise the edge limit to 5 only if section 7.3 shows
-  that cycles with 4 or 5 cut edges are what remain, and set the type limit from the
-  types it reports moved.
+  Recommendation: keep both. In section 7.4, cycles with 4 or 5 cut edges shrank
+  under Claude's revisions, and the fit guard, not either limit, left most cycles.
 - **Whether the fit guard is too strict.** It holds a type in place when it touches
   its new leaf only through the cut edge, which is also when a move is most likely
-  to be right for a misplaced helper. Recommendation: keep it, and count in section
-  7.3's measurement how often it holds a type in place.
+  to be right for a misplaced helper. In section 7.4 it was the most common reason a
+  cycle with a cut of 1 or 2 edges was left, often on a near tie such as 2 references
+  against 1. Yet 7 of the 15 moves it allowed were doubtful by name, so loosening it
+  trades cycles for worse moves. Recommendation: keep it. On a near tie the graph
+  barely prefers either leaf, so the name decides, and only Claude or the reviewer
+  can judge a name.
 
 ## 10. Phases
 
