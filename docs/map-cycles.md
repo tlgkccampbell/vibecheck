@@ -350,7 +350,7 @@ The first two such generations gave these results:
 - The cycles among a level's children fell from 11 to 5 to 4 in one run, and from
   15 to 6 to 2 in the other. The second run ended with 2 findings, the fewest of any
   measured run. Two runs cannot show that repair caused it.
-- Judged by names, most moves fit, and about a third were doubtful.
+- Judged by names, most of the 30 moves fit, and 5 were doubtful.
 - One revision swapped the type and the leaf in 15 moves, which issue #11 records.
 
 ## 8. Changes to other documents
