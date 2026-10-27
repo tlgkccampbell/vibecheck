@@ -9,7 +9,7 @@ loop of [review-workflow.md](review-workflow.md) section 4.4 and the checking of
 
 Phase 1 of section 10, knots, is built. Phases 2 and 3, local repair and the
 reviewer's part, are not. Section 3, local repair, was rescoped after the first
-measurement, and its values are provisional until the next one.
+measurement, and its values were set from the second (section 7.2).
 
 Most revision rounds in practice are spent on cycles among a level's children. Each
 round is an Opus request that takes minutes; the trial of review-workflow.md section
@@ -102,11 +102,12 @@ says so in its text, and its line in the log starts "finding in the code". Secti
 
 After the knot pass, the tool tries to break each remaining cycle that is not in the
 code, before it asks Claude to. It repairs only the cycles that a few moves break,
-and it leaves the rest to Claude and the reviewer.
+and it leaves the rest to Claude and the reviewer. Repair is part of checking a map,
+so it also runs on the last round's answer, after which Claude is not asked again.
 
-The values in this section are provisional. They come from one measurement on one
-large solution, summarized in section 7, and are to be set again after the next
-measurement. Each is a constant beside `MaxRounds`.
+The values in this section come from two measurements on one large solution,
+summarized in sections 7.1 and 7.2. Each is a constant beside `MaxRounds`, and the
+measurement of section 7.3 checks them again.
 
 ### 3.1 Repairable and entangled cycles
 
@@ -121,9 +122,11 @@ A cycle that is neither repairable nor in the code is **entangled**. Its members
 reference each other in so many ways that the code does not separate them, and the
 fix is a change of grouping, usually a merge, not a move.
 
-In the measurement, 12 of 14 remaining cycles had a weakest edge of 1 to 3
-references. The cycles of two or three members broke with one or two moves. The
-largest needed 6 to 27 edges cut, and a single move changed nothing.
+In the second measurement, 3 edges covered about half of the first round's cycles,
+11 of 14 cycles after the second round, and 7 of the 8 cycles left at the end. Every
+cut set above 10 edges came in the first round, and Claude's revisions broke them.
+The limit of 6 types is not yet measured, and a single cut edge can carry many
+references: one final cycle's only cut edge had 11.
 
 ### 3.2 Candidates
 
@@ -151,38 +154,47 @@ knot away from the rest, or moves a type that section 3.3 holds in place.
 ### 3.3 The fit guard
 
 A move is chosen by the graph, not by the names, so it can put a type where its name
-does not fit. In the measurement, one hand move put a type into the leaf of an
-unrelated concept, and it broke no cycle. The graph cannot judge a name, but it can judge **affinity**:
-how many references a type has to and from the types of a leaf.
+does not fit. In the first measurement, one hand move put a type into the leaf of an
+unrelated concept, and it broke no cycle. The graph cannot judge a name, but it can
+judge **affinity**: how many references a type has to and from the types of a leaf.
 
 A type may move only when its affinity with the leaf it moves into is at least its
 affinity with the leaf it leaves. A unit's affinity is the sum over its members, and
 references among the unit's own members do not count. A type that touches its new
 leaf only through the one cut edge stays where it is, and its cycle goes to Claude.
 
-This guard is untested on a real solution. The next measurement reports how often it
-holds a type in place, and whether the moves it allows fit.
+This guard is untested on a real solution. The measurement of section 7.3 reports
+how often it holds a type in place, and whether the moves it allows fit.
 
 ### 3.4 Entangled cycles and the rounds
 
 Entangled cycles still go to Claude. Their findings list the cut set and say that
 merging some of the members is the likely fix, as the revision prompt does since
-issue #10. In the measurement, the second and third rounds roughly halved the cycles,
-so a round spent on them is not wasted.
+issue #10. In both measurements, the second and third rounds roughly halved the
+cycles, and the largest cut sets did not survive the second round, so a round spent
+on them is not wasted.
 
 A round that fails to break them is, though. The rounds stop when every remaining
 finding other than a cycle in the code is an entangled cycle that the previous usable
 round also reported, with the same members. Such cycles wait for the reviewer, who
-can accept them or merge their members (section 4). Every measured generation spent
-all three rounds, so this rule is where most of the time is saved.
+can accept them or merge their members (section 4).
+
+In the second measurement, entangled cycles were rare after the first round, so this
+rule is a backstop. Most of the gain comes from repair itself. Claude left cycles
+with a cut of one edge after two revisions that named that edge, and a round costs
+about 200 seconds. When repair clears what the second round left, the third round is
+not needed; when it does not, repair after the third round still leaves fewer cycles
+for the reviewer.
 
 ### 3.5 Budget
 
-The search stops after 30 seconds, and keeps every candidate it accepted. Map
-generation logs how long each run of the checker takes, as "round 1 ran the checker 2
-time(s): 812 ms, 790 ms", and the limit is to be set from those numbers. On a large
-solution, a `vibecheck check` from the command line took about a minute, but that
-includes restoring and analyzing the solution, which generation has already done.
+The search stops after 60 seconds, and keeps every candidate it accepted. In the
+second measurement, a run of the checker inside generation took 0.9 to 2.5 seconds on
+a solution of about 3,300 types. A round left at most 7 repairable cycles, so even at
+four checks each the search almost always finishes, and it costs less than a third
+of a Claude round. A `vibecheck check` from the command line took about a minute, but
+that includes restoring and analyzing the solution, which generation has already
+done.
 
 ### 3.6 What the moves cost
 
@@ -287,14 +299,35 @@ with two generations before it and two after. The solution is not named here.
 - The cycles were printed as paths whose steps were often not edges, which issue #10
   fixed.
 
-### 7.2 The next measurement
+### 7.2 The second measurement
 
-It runs two generations with the build that fixes issue #10 and logs checker times,
-on the same solution. It reports what section 7 lists, and also:
+Two generations ran on the same solution with the build that fixes issue #10 and logs
+checker times. The build before phase 1 does not write those lines, so section 7.1's
+runs are the only baseline.
 
-- the size of each remaining cycle's cut set, which sets the limits of section 3.1;
-- the median and longest run of the checker, which set the budget of section 3.5;
-- whether accurate cut sets alone let Claude break more cycles per round.
+- Both generations ran all three rounds, in 710 and 678 seconds, as before.
+- The knot pass moved 5 and 4 types, and no cycle was in the code.
+- The cycles among a level's children fell from 13 to 7 to 2 in one generation, and
+  from 14 to 7 to 6 in the other. There were no cycles among a view's groups.
+- A run of the checker took 0.9 to 2.5 seconds.
+- Cut sets in the first round ran from 1 to 18 edges, and 13 of 27 had 3 or fewer.
+  After the second round, 11 of 14 had 3 or fewer, and the largest had 10.
+- Of the 8 cycles left at the end, 5 had a cut of 1 edge, 2 had 2, and one had 5. Of
+  the 7 whose lightest cut edge was reported, 5 had 1 or 2 references.
+
+The final counts, 2 and 6, are lower than the 7 and 7 of section 7.1. Two runs of a
+model that varies from run to run cannot show that accurate cut sets caused it.
+
+### 7.3 After phase 2
+
+The same solution runs two generations with phase 2 built. Each reports what section
+7 lists, and also:
+
+- the rounds, the time, and the cycles left at the end, against sections 7.1 and 7.2;
+- per round, the cycles repaired, entangled and handed to Claude, and the types moved;
+- how often the fit guard held a type in place, and the cut set of each such cycle;
+- for each move, whether the type's name fits the leaf it moved into;
+- the time the search took per round, and whether it reached its budget.
 
 ## 8. Changes to other documents
 
@@ -325,28 +358,29 @@ Each question below ends with a recommendation, which stands until it is decided
   asks Claude for. Revisit this if the measurements of section 7 show cycles among
   containers that type moves leave behind.
 - **Whether the search's budget should scale with the number of types.** Keep the
-  fixed limit of section 3.5, since a time limit already shrinks the number of
-  candidates as each check grows slower. Map generation now logs each check's time.
-  If one check on a large solution takes more than a few seconds, four checks per
-  cycle leave the search too few cycles. In that case, score candidates by
-  recomputing only the leaf edges that the moved types touch, and find cycles with
-  the checker's own level routine, not a second one. Then run `Checker.Run` once on
-  the result, and add a test that the two agree.
-- **The limits of a repairable cycle.** At most 3 cut edges and 6 moved types, from
-  one solution. Recommendation: keep them until the measurement of section 7.2 gives
-  the cut set sizes.
+  fixed limit of section 3.5, and run `Checker.Run` for each candidate. On about
+  3,300 types a check took at most 2.5 seconds, which leaves room for every
+  repairable cycle. If a larger solution's checks take more than about 5 seconds,
+  score candidates by recomputing only the leaf edges that the moved types touch, and
+  find cycles with the checker's own level routine, not a second one. Then run
+  `Checker.Run` once on the result, and add a test that the two agree.
+- **The limits of a repairable cycle.** At most 3 cut edges and 6 moved types. The
+  edge limit covered 7 of the 8 cycles left at the end of section 7.2's runs.
+  Recommendation: keep both. Raise the edge limit to 5 only if section 7.3 shows
+  that cycles with 4 or 5 cut edges are what remain, and set the type limit from the
+  types it reports moved.
 - **Whether the fit guard is too strict.** It holds a type in place when it touches
   its new leaf only through the cut edge, which is also when a move is most likely
-  to be right for a misplaced helper. Recommendation: keep it, and count in the next
-  measurement how often it holds a type in place.
+  to be right for a misplaced helper. Recommendation: keep it, and count in section
+  7.3's measurement how often it holds a type in place.
 
 ## 10. Phases
 
 1. **Knots.** Find knots, list them in the proposal prompt, run the knot pass, mark
    cycles in the code in the log, and leave them out of the revision prompt and the
    stall. Measure.
-2. **Local repair.** Measure first, as section 7.2 says, and set the values of
-   section 3 from it. Then build repairable and entangled cycles, the candidates and
-   the fit guard, the stop rule for entangled cycles, and the budget. Measure again.
+2. **Local repair.** Repairable and entangled cycles, the candidates and the fit
+   guard, the stop rule for entangled cycles, and the budget, with the values that
+   section 7.2 set. Measure as section 7.3 says.
 3. **The reviewer's part.** The findings panel, stop and keep, applying and undoing
    moves, merging an entangled cycle, notes for **Revise**, and accepted cycles.
