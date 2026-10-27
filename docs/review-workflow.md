@@ -165,8 +165,8 @@ it:
    `vibecheck why` reports them, the cycles among a view's groups, and leaves of more
    than sixty types. A map listed by namespace is not held to the sixty-type limit,
    since splitting a namespace needs the type-level detail that its listing leaves
-   out. Each finding of every round, and each reason a proposal cannot be used, is
-   written to the log.
+   out. Each finding of every round, how long each run of the checker takes, and each
+   reason a proposal cannot be used are written to the log.
 4. If anything was found, send the findings back with the best map so far and ask
    for edits to it: nodes to remove, nodes to add or change, view groups to add, and
    types to move to a leaf by exact name. The request lists only the units, or for a
