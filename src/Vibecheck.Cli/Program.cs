@@ -222,6 +222,13 @@ public static class Program
     }
 
     /// <summary>Prints the warnings, the cycles per level and view, a summary line, how the test types were placed, and the patterns found. Returns the exit code.</summary>
+    /// <summary>Returns a cycle's members and the edges whose removal breaks it, each with its reference count.</summary>
+    private static string Cycle(List<string> members, List<EdgeCount> edges)
+    {
+        var cut = Checker.CutSet(members, edges);
+        return $"{string.Join(", ", members)}; removing {string.Join(", ", cut.Select(e => $"{e.From} → {e.To} ({e.Count})"))} breaks it";
+    }
+
     private static int Report(Facts facts, bool strict)
     {
         foreach (var w in facts.Warnings) Console.Error.WriteLine("warning: " + w);
@@ -233,11 +240,11 @@ public static class Program
         }
         foreach (var (level, m) in facts.Levels)
         {
-            foreach (var cycle in m.Cycles) Console.WriteLine($"cycle at {level}: {string.Join(" → ", cycle)} → {cycle[0]}");
+            foreach (var cycle in m.Cycles) Console.WriteLine($"cycle at {level}: {Cycle(cycle, m.Edges)}");
         }
         foreach (var (view, m) in facts.Views)
         {
-            foreach (var cycle in m.Cycles) Console.WriteLine($"cycle in view {view}: {string.Join(" → ", cycle)} → {cycle[0]}");
+            foreach (var cycle in m.Cycles) Console.WriteLine($"cycle in view {view}: {Cycle(cycle, m.Edges)}");
         }
         var unsorted = facts.Types.Count(t => t.Leaf == ArchitectureMap.Unsorted);
         var leaves = facts.Map.Nodes.Count(kv => kv.Value.IsLeaf);

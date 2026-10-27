@@ -411,7 +411,11 @@ public static class Checker
         return views;
     }
 
-    /// <summary>Returns the strongly connected components with more than one member among some nodes, each listed in a cycle order.</summary>
+    /// <summary>
+    /// Returns the strongly connected components with more than one member among some nodes, each with its members in
+    /// ordinal order. A component is a set, not a path: two members listed next to each other need not share an edge.
+    /// <see cref="CutSet"/> says which edges hold a component together.
+    /// </summary>
     internal static List<List<string>> Cycles(List<string> nodes, List<EdgeCount> edges)
     {
         var adjacency = nodes.ToDictionary(c => c, _ => new List<string>(), StringComparer.Ordinal);
@@ -419,7 +423,98 @@ public static class Checker
         {
             if (adjacency.ContainsKey(e.From) && adjacency.ContainsKey(e.To)) adjacency[e.From].Add(e.To);
         }
-        return Tarjan(nodes, adjacency);
+        return Tarjan(nodes, adjacency).Select(c => c.Order(StringComparer.Ordinal).ToList()).ToList();
+    }
+
+    /// <summary>The most members a component may have for <see cref="CutSet"/> to find its lightest cut exactly.</summary>
+    private const int ExactCut = 16;
+
+    /// <summary>
+    /// Returns the edges among a cycle's members whose removal leaves no cycle among them, lightest first. This answers
+    /// which references a map must stop separating to break a cycle. For a component of at most 16 members the set is
+    /// the one with the fewest references. A larger component's set comes from the greedy ordering of Eades, Lin and
+    /// Smyth, weighted by reference counts, and is then made minimal, so that no edge in it can be kept without a cycle
+    /// coming back.
+    /// </summary>
+    /// <param name="members">The members of one component that <see cref="Cycles"/> returned.</param>
+    /// <param name="edges">The edges among the level's or view's children, with their reference counts.</param>
+    public static List<EdgeCount> CutSet(IReadOnlyList<string> members, IEnumerable<EdgeCount> edges)
+    {
+        var set = members.ToHashSet(StringComparer.Ordinal);
+        var inside = edges.Where(e => e.From != e.To && set.Contains(e.From) && set.Contains(e.To)).ToList();
+        var order = members.Count <= ExactCut ? LightestOrder(members, inside) : GreedyOrder(members, inside);
+
+        // The edges that point backward in the order are the ones that close the cycles.
+        var position = order.Select((n, i) => (n, i)).ToDictionary(x => x.n, x => x.i, StringComparer.Ordinal);
+        var cut = inside.Where(e => position[e.From] > position[e.To]).ToList();
+
+        // An edge whose return leaves no cycle was not needed in the cut. The heaviest are tried first, so that they stay.
+        foreach (var e in cut.OrderByDescending(e => e.Count).ThenBy(e => e.From, StringComparer.Ordinal).ThenBy(e => e.To, StringComparer.Ordinal).ToList())
+        {
+            var kept = inside.Where(x => x == e || !cut.Contains(x)).ToList();
+            if (Cycles(members.ToList(), kept).Count == 0) cut.Remove(e);
+        }
+        return cut.OrderBy(e => e.Count).ThenBy(e => e.From, StringComparer.Ordinal).ThenBy(e => e.To, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Returns the order of some nodes whose backward edges carry the fewest references, by dynamic programming over
+    /// the sets of nodes placed first. Ties go to the order that places the node whose name sorts first earlier.
+    /// </summary>
+    private static List<string> LightestOrder(IReadOnlyList<string> members, List<EdgeCount> edges)
+    {
+        var nodes = members.Order(StringComparer.Ordinal).ToList();
+        var n = nodes.Count;
+        var index = nodes.Select((m, i) => (m, i)).ToDictionary(x => x.m, x => x.i, StringComparer.Ordinal);
+        var weight = new int[n, n];
+        foreach (var e in edges) weight[index[e.From], index[e.To]] += e.Count;
+
+        // best[s] is the least weight of backward edges among the nodes of s, placed first in some order, and last[s] is
+        // the node that order places last. Placing v after s makes each edge from v into s point backward.
+        var best = new int[1 << n];
+        var last = new int[1 << n];
+        Array.Fill(best, int.MaxValue);
+        best[0] = 0;
+        for (var s = 0; s < 1 << n; s++)
+        {
+            if (best[s] == int.MaxValue) continue;
+            for (var v = 0; v < n; v++)
+            {
+                if ((s & (1 << v)) != 0) continue;
+                var backward = 0;
+                for (var u = 0; u < n; u++)
+                {
+                    if ((s & (1 << u)) != 0) backward += weight[v, u];
+                }
+                var t = s | (1 << v);
+                if (best[s] + backward < best[t]) (best[t], last[t]) = (best[s] + backward, v);
+            }
+        }
+        var order = new List<string>();
+        for (var s = (1 << n) - 1; s != 0; s &= ~(1 << last[s])) order.Insert(0, nodes[last[s]]);
+        return order;
+    }
+
+    /// <summary>
+    /// Returns an order of some nodes with few references on its backward edges, by the greedy ordering of Eades, Lin and
+    /// Smyth. Sinks go to the end of the order and sources to the front. Otherwise, the node whose outgoing references
+    /// most outweigh its incoming ones goes to the front.
+    /// </summary>
+    private static List<string> GreedyOrder(IReadOnlyList<string> members, List<EdgeCount> edges)
+    {
+        var remaining = members.Order(StringComparer.Ordinal).ToList();
+        var front = new List<string>();
+        var back = new List<string>();
+        int Weight(string node, bool outgoing) => edges.Where(e => (outgoing ? e.From : e.To) == node && remaining.Contains(outgoing ? e.To : e.From)).Sum(e => e.Count);
+        while (remaining.Count > 0)
+        {
+            if (remaining.FirstOrDefault(n => Weight(n, outgoing: true) == 0) is { } sink) { back.Insert(0, sink); remaining.Remove(sink); continue; }
+            if (remaining.FirstOrDefault(n => Weight(n, outgoing: false) == 0) is { } source) { front.Add(source); remaining.Remove(source); continue; }
+            var chosen = remaining.OrderByDescending(n => Weight(n, outgoing: true) - Weight(n, outgoing: false)).First();
+            front.Add(chosen);
+            remaining.Remove(chosen);
+        }
+        return [.. front, .. back];
     }
 
     private static List<List<string>> Tarjan(List<string> nodes, Dictionary<string, List<string>> adjacency)

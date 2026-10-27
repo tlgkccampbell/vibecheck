@@ -98,12 +98,14 @@ says so in its text, and its line in the log starts "finding in the code".
 After the knot pass, the tool tries to break each remaining cycle that is not in the
 code, before it asks Claude to:
 
-1. For each edge of the cycle, take the type pairs behind it, as `Explain.Pairs`
-   returns them.
-2. On the edge with the fewest references, each pair gives two candidates: move the
-   source type to the target's leaf, or move the target type to the source's leaf. A
-   type moves with the other members of its unit, since a helper folded into a unit
-   would otherwise make a new edge of its own.
+1. Take the cycle's cut set, the edges whose removal breaks it, as `Checker.CutSet`
+   returns them, and the type pairs behind each edge, as `Explain.Pairs` returns them.
+   A cycle is a set of members, not a path, so its edges come from the cut set and
+   never from the order of its members.
+2. On the edge of the cut set with the fewest references, each pair gives two
+   candidates: move the source type to the target's leaf, or move the target type to
+   the source's leaf. A type moves with the other members of its unit, since a helper
+   folded into a unit would otherwise make a new edge of its own.
 3. Check each candidate with `Checker.Run`. Keep the candidate that lowers the number
    of findings the most, preferring the one that moves fewer types.
 4. Repeat until no candidate lowers the number of findings, or until the budget of

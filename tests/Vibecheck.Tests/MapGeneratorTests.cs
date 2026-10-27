@@ -288,6 +288,25 @@ public class MapGeneratorTests
         """;
 
     [Fact]
+    public void ExplainsACycleByTheEdgesThatBreakItAndNeverByAStepThatIsNoEdge()
+    {
+        // p references q and r, and each references p back, but q and r share no edge.
+        var map = new ArchitectureMap { Version = 0, Solution = "Example.sln" };
+        map.Nodes["p"] = new NodeSpec { Name = "P", Bind = ["A.X.**"] };
+        map.Nodes["q"] = new NodeSpec { Name = "Q", Bind = ["A.Y.**"] };
+        map.Nodes["r"] = new NodeSpec { Name = "R", Bind = ["B.**", "Shared.**"] };
+        var analysis = TestData.Analysis([
+            new(TestData.Other, TestData.Thing, "references", TestData.Thing, TestData.Y1, 3),
+            new(TestData.Service, TestData.Helper, "references", TestData.Helper, TestData.B1, 6)]);
+
+        var finding = Assert.Single(MapGenerator.Findings(Checking.Checker.Run(map, analysis)));
+
+        Assert.StartsWith("cycle among the children of root: p, q, r\nRemoving these 2 edge(s) breaks it, lightest first:\n", finding.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("0 reference(s)", finding.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("q → r", finding.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FindsKnotsAndTellsSmallFromLarge()
     {
         var small = Assert.Single(Knots.Find(SmallKnot()));
@@ -339,7 +358,8 @@ public class MapGeneratorTests
         Assert.DoesNotContain("cycle among", claude.Requests[1].Prompt, StringComparison.Ordinal);
         Assert.Equal(2, claude.Requests.Count);
         var finding = Assert.Single(generated.Findings);
-        Assert.StartsWith("cycle among the children of k: ", finding, StringComparison.Ordinal);
+        Assert.StartsWith("cycle among the children of k: k.p, k.q\nRemoving these 1 edge(s) breaks it, lightest first:\n", finding, StringComparison.Ordinal);
+        Assert.Matches(@"\nk\.(p → k\.q|q → k\.p): 1 reference\(s\), from K\.[PQ]\.T\d\d → K\.[PQ]\.T\d\d \(1\)\n", finding);
         Assert.Contains(log, l => l.StartsWith("round 2 finding in the code: cycle among the children of k", StringComparison.Ordinal));
     }
 

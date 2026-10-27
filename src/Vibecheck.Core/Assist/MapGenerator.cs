@@ -30,6 +30,9 @@ public static class MapGenerator
     /// <summary>The most rounds of proposing and revising that one generation runs.</summary>
     public const int MaxRounds = 3;
 
+    /// <summary>The most edges of a cycle's cut set that a finding lists.</summary>
+    public const int MaxCutEdges = 12;
+
     /// <summary>A leaf with more types than this is reported as too large for a view to regroup.</summary>
     public const int LargeLeaf = 60;
 
@@ -301,7 +304,8 @@ public static class MapGenerator
 
     /// <summary>
     /// Returns what the checker's facts say is wrong with a usable map: unsorted types, types two leaves claim equally,
-    /// cycles among a level's children with the type pairs behind each edge, cycles among a view's groups, and, when
+    /// cycles among a level's children with the edges whose removal breaks each and the type pairs behind those edges,
+    /// cycles among a view's groups with the edges whose removal breaks each, and, when
     /// asked for, leaves too large for a view to regroup. Each finding names the types it concerns, and a cycle that is in
     /// the code says so.
     /// </summary>
@@ -321,15 +325,17 @@ public static class MapGenerator
         {
             foreach (var cycle in metrics.Cycles)
             {
-                var sb = new StringBuilder($"cycle among the children of {level}: {string.Join(" → ", cycle)} → {cycle[0]}");
+                var cut = Checker.CutSet(cycle, metrics.Edges);
+                var sb = new StringBuilder($"cycle among the children of {level}: {string.Join(", ", cycle)}");
+                sb.Append($"\nRemoving these {cut.Count} edge(s) breaks it, lightest first:");
                 var types = new List<string>();
-                for (var i = 0; i < cycle.Count; i++)
+                foreach (var e in cut.Take(MaxCutEdges))
                 {
-                    var (from, to) = (cycle[i], cycle[(i + 1) % cycle.Count]);
-                    var pairs = Explain.Pairs(facts, from, to);
-                    sb.Append($"\n{from} → {to}: {pairs.Sum(p => p.Count)} reference(s), from {string.Join(", ", pairs.Take(4).Select(p => $"{p.FromType} → {p.ToType} ({p.Count})"))}");
+                    var pairs = Explain.Pairs(facts, e.From, e.To);
+                    sb.Append($"\n{e.From} → {e.To}: {e.Count} reference(s), from {string.Join(", ", pairs.Take(4).Select(p => $"{p.FromType} → {p.ToType} ({p.Count})"))}");
                     types.AddRange(pairs.Take(4).SelectMany(p => new[] { p.FromType, p.ToType }));
                 }
+                if (cut.Count > MaxCutEdges) sb.Append($"\n…and {cut.Count - MaxCutEdges} more edge(s); so many usually means the code does not separate these children, and merging some of them breaks the cycle.");
                 var code = inCode?.Invoke(level, cycle) == true;
                 if (code) sb.Append("\nThis cycle is in the code: it comes from types that reference each other in a loop and are too many for one leaf.");
                 findings.Add(new(sb.ToString(), types, code));
@@ -337,7 +343,12 @@ public static class MapGenerator
         }
         foreach (var (view, metrics) in facts.Views)
         {
-            foreach (var cycle in metrics.Cycles) findings.Add(new($"cycle among the groups of view {view}: {string.Join(" → ", cycle)} → {cycle[0]}", []));
+            foreach (var cycle in metrics.Cycles)
+            {
+                var cut = Checker.CutSet(cycle, metrics.Edges);
+                findings.Add(new($"cycle among the groups of view {view}: {string.Join(", ", cycle)}; removing "
+                    + $"{string.Join(", ", cut.Take(MaxCutEdges).Select(e => $"{e.From} → {e.To} ({e.Count})"))}{(cut.Count > MaxCutEdges ? $" and {cut.Count - MaxCutEdges} more" : "")} breaks it", []));
+            }
         }
         if (!largeLeaves) return findings;
         foreach (var (id, node) in facts.Map.Nodes)
