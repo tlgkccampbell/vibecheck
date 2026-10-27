@@ -532,9 +532,11 @@ that a wrong grouping reliably shows:
 
 - A cycle among a level's children, where a type was placed by its name in a
   component that the code puts on the other side of a boundary. In the first trial
-  of this process, every top-level cycle was such a misplacement. The one kind of
-  cycle that no grouping removes comes from types that reference each other in a
-  loop and are too many for one leaf.
+  of this process, every top-level cycle was such a misplacement. When map
+  generation runs this loop, it first tries moving the few types behind each such
+  cycle itself, and keeps the moves that the checker confirms. The one kind of cycle
+  that no grouping removes comes from types that reference each other in a loop and
+  are too many for one leaf.
 - A leaf with almost no references inside it and many across its boundary, which
   is either a facade that everything calls, and is fine, or a split finer than the
   code supports.

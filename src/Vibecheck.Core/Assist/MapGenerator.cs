@@ -17,14 +17,17 @@ public sealed record GeneratedMap(ArchitectureMap Map, string Text, int Round, I
 /// Holds one thing the checker reports about a map, the full names of the types it concerns, and whether it is a cycle
 /// in the code, which comes from a <see cref="Knot"/> too large for one leaf and which no map removes.
 /// </summary>
-internal sealed record Finding(string Text, IReadOnlyList<string> Types, bool InCode = false);
+/// <param name="Cycle">For a cycle among a level's children, the key that <see cref="LocalRepair.Key"/> returns for it.</param>
+/// <param name="Entangled">A value indicating whether the finding is a cycle that <see cref="LocalRepair"/> calls entangled.</param>
+internal sealed record Finding(string Text, IReadOnlyList<string> Types, bool InCode = false, string? Cycle = null, bool Entangled = false);
 
 /// <summary>
 /// Runs the bootstrapping loop of <c>docs/vibecheck-spec.md</c> section 5.3 without a person in it. Claude proposes a
 /// concept map from a listing of the solution, the checker reports cycles, unsorted types, ambiguous bindings and
 /// oversized leaves, and Claude edits the map until the checker finds nothing or the rounds run out. Before each check,
-/// the stray types of each small <see cref="Knot"/> are moved into one leaf, without asking Claude. See
-/// <c>docs/review-workflow.md</c> section 4.4 and <c>docs/map-cycles.md</c>.
+/// the stray types of each small <see cref="Knot"/> are moved into one leaf, and <see cref="LocalRepair"/> moves the
+/// types behind the cycles that a few moves break, without asking Claude. See <c>docs/review-workflow.md</c> section 4.4
+/// and <c>docs/map-cycles.md</c>.
 /// </summary>
 public static class MapGenerator
 {
@@ -33,6 +36,15 @@ public static class MapGenerator
 
     /// <summary>The most edges of a cycle's cut set that a finding lists.</summary>
     public const int MaxCutEdges = 12;
+
+    /// <summary>The most edges a cycle's cut set may have for <see cref="LocalRepair"/> to repair it.</summary>
+    public const int RepairEdges = 3;
+
+    /// <summary>The most types that the cheapest candidate for a cycle may move, with their units, for <see cref="LocalRepair"/> to repair it.</summary>
+    public const int RepairTypes = 6;
+
+    /// <summary>Gets how long <see cref="LocalRepair"/> may search in one round.</summary>
+    public static readonly TimeSpan RepairBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>A leaf with more types than this is reported as too large for a view to regroup.</summary>
     public const int LargeLeaf = 60;
@@ -54,20 +66,23 @@ public static class MapGenerator
     /// fewest findings that a map can fix, then the fewest findings, preferring the later of two that tie. Each revision edits that
     /// proposal, and is told only the findings that a map can fix. A revision that fails, or takes longer than
     /// <see cref="RequestTimeout"/>, ends the rounds and keeps the best proposal so far. While Claude works, the progress
-    /// says every few seconds how long the request has run and how much Claude has thought and written. The log
-    /// receives each finding of every round, each type moved to keep a knot in one leaf, how long each run of the
-    /// checker took, and each reason a proposal could not be used as a map.
+    /// says every few seconds how long the request has run and how much Claude has thought and written. The rounds also
+    /// stop when a usable map's only findings that a map can fix are entangled cycles that the previous usable map also
+    /// had, since Claude has already failed to break them. The log receives each finding of every round, each type moved
+    /// to keep a knot in one leaf or to break a cycle, each type the fit guard held in place, what local repair did in
+    /// each round, how long each run of the checker took, and each reason a proposal could not be used as a map.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null, Action<string>? log = null) =>
-        GenerateAsync(skeleton, analysis, claude, progress, ct, model, log, MaxListing);
+        GenerateAsync(skeleton, analysis, claude, progress, ct, model, log, MaxListing, RepairBudget);
 
     /// <summary>
     /// Proposes and revises a concept map as the public overload does, listing the solution by namespace when its
-    /// unit listing is longer than <paramref name="maxListing"/> characters.
+    /// unit listing is longer than <paramref name="maxListing"/> characters, and searching for local repairs for at most
+    /// <paramref name="repairBudget"/> per round.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
-    internal static async Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress, CancellationToken ct, string? model, Action<string>? log, int maxListing)
+    internal static async Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress, CancellationToken ct, string? model, Action<string>? log, int maxListing, TimeSpan repairBudget)
     {
         var errors = new List<string>();
         var (included, _) = Exclusion.Parse(skeleton, errors).Apply(analysis);
@@ -75,6 +90,7 @@ public static class MapGenerator
         var (byNamespace, format, listing) = Listing(included, units, maxListing);
         var knots = Knots.Find(included);
         var knotSection = KnotSection(knots, included, byNamespace);
+        var repair = new LocalRepair(units, knots, repairBudget);
         var rules = Prompts.Fill(Prompts.Read("map-rules.md"),
             ("externals", skeleton.Externals.Count == 0 ? "none" : string.Join(", ", skeleton.Externals.Keys.Select(k => $"`{k}`"))),
             ("exclude", string.Join(", ", skeleton.Exclude.Concat(skeleton.Tests).Select(e => $"`{e}`"))));
@@ -94,9 +110,10 @@ public static class MapGenerator
         IReadOnlyList<Finding> bestFindings = [];
         IReadOnlyList<string> findings = [];
         var previous = int.MaxValue;
+        var entangledBefore = new HashSet<string>(StringComparer.Ordinal);
         for (var round = 1; ; round++)
         {
-            var (map, text, found, gathered, checks) = Check(candidate, problems, analysis, !byNamespace, knots);
+            var (map, text, found, gathered, checks, repaired) = Check(candidate, problems, analysis, !byNamespace, knots, repair);
             if (checks.Count > 0) log?.Invoke($"round {round} ran the checker {checks.Count} time(s): {string.Join(", ", checks.Select(c => $"{c.TotalMilliseconds:F0} ms"))}");
             findings = found.Select(f => f.Text).ToList();
             var fixable = found.Count(f => !f.InCode);
@@ -104,6 +121,15 @@ public static class MapGenerator
             {
                 progress?.Report($"round {round}: moved {gathered.Count} type(s) to keep types that reference each other in a loop in one leaf");
                 foreach (var (type, leaf) in gathered) log?.Invoke($"round {round} moved {type} to {leaf}, to keep a knot in one leaf");
+            }
+            if (repaired is not null)
+            {
+                if (repaired.Repaired > 0) progress?.Report($"round {round}: broke {repaired.Repaired} cycle(s) by moving {repaired.Moves.Count} type(s)");
+                foreach (var m in repaired.Moves) log?.Invoke($"round {round} moved {m.Type} to {m.Leaf}, to break a cycle among the children of {m.Level}");
+                foreach (var h in repaired.Held) log?.Invoke($"round {round} fit guard held {h.Type} in {h.Leaf}, for a cycle among the children of {h.Level}");
+                var cycles = found.Where(f => f.Cycle is not null && !f.InCode).ToList();
+                log?.Invoke($"round {round} local repair broke {repaired.Repaired} cycle(s) and moved {repaired.Moves.Count} type(s) in {repaired.Elapsed.TotalMilliseconds:F0} ms"
+                    + $"{(repaired.OutOfTime ? ", and ran out of time" : "")}; {cycles.Count(f => f.Entangled)} entangled cycle(s) and {cycles.Count(f => !f.Entangled)} other cycle(s) remain");
             }
             if (map is null)
             {
@@ -123,8 +149,14 @@ public static class MapGenerator
             // A usable revision that fixes nothing gets no further round, since another would only spend the reviewer's
             // usage. Cycles in the code do not count, since no revision removes them. An unusable revision gets another round.
             var stalled = map is not null && fixable >= previous;
-            if (fixable == 0 || round == MaxRounds || stalled) break;
+            // Nor does a usable map whose only fixable findings are entangled cycles that the previous usable map had too,
+            // since Claude has already failed to break them; they wait for the reviewer.
+            var entangled = found.Where(f => f.Entangled).Select(f => f.Cycle!).ToHashSet(StringComparer.Ordinal);
+            var stuck = map is not null && fixable > 0 && found.Where(f => !f.InCode).All(f => f.Entangled && entangledBefore.Contains(f.Cycle!));
+            if (stuck) progress?.Report($"round {round}: only entangled cycles that the last revision did not break remain, so they are left for the reviewer");
+            if (fixable == 0 || round == MaxRounds || stalled || stuck) break;
             previous = map is null ? previous : fixable;
+            if (map is not null) entangledBefore = entangled;
             var rejected = map is null ? findings : [];
 
             // Until some proposal is usable there is no map to edit, so Claude proposes a whole map again.
@@ -201,7 +233,7 @@ public static class MapGenerator
     internal static (ArchitectureMap? Map, string Text, IReadOnlyList<string> Findings) Evaluate(ArchitectureMap skeleton, JsonElement answer, AnalysisResult analysis)
     {
         var problems = new List<string>();
-        var (map, text, findings, _, _) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true, knots: []);
+        var (map, text, findings, _, _, _) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true, knots: [], repair: null);
         return (map, text, findings.Select(f => f.Text).ToList());
     }
 
@@ -244,43 +276,51 @@ public static class MapGenerator
     }
 
     /// <summary>
-    /// Checks a map, after moving the stray types of each small knot into one leaf. Returns a null map when it cannot be
-    /// used at all, with the problems and the reasons as findings. Otherwise returns the map as the reader reads it back,
-    /// its canonical text, the problems and what the checker reports about it, and the moves that kept knots whole.
-    /// Also returns how long each run of <see cref="Checker.Run"/> took, since a map is checked again after the knot pass.
+    /// Checks a map, after moving the stray types of each small knot into one leaf and, when a search is given, after
+    /// repairing the cycles that a few moves break. Returns a null map when it cannot be used at all, with the problems
+    /// and the reasons as findings. Otherwise returns the map as the reader reads it back, its canonical text, the
+    /// problems and what the checker reports about it, the moves that kept knots whole, and what the repair did. Also
+    /// returns how long each run of <see cref="Checker.Run"/> took, since the knot pass and the repair check the map again.
     /// </summary>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
     /// <param name="knots">The solution's knots.</param>
-    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings, IReadOnlyList<(string Type, string Leaf)> Gathered, IReadOnlyList<TimeSpan> Checks) Check(
-        ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves, IReadOnlyList<Knot> knots)
+    /// <param name="repair">The search that repairs cycles, or <see langword="null"/> to repair none.</param>
+    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings, IReadOnlyList<(string Type, string Leaf)> Gathered, IReadOnlyList<TimeSpan> Checks, RepairOutcome? Repaired) Check(
+        ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves, IReadOnlyList<Knot> knots, LocalRepair? repair)
     {
         IEnumerable<Finding> Plain(IEnumerable<string> texts) => texts.Select(t => new Finding(t, []));
         var checks = new List<TimeSpan>();
-        (ArchitectureMap? Parsed, string Text, Facts? Facts, List<Finding> Failures) Run(ArchitectureMap map)
+        (CheckedMap? Checked, string Text, List<Finding> Failures) Run(ArchitectureMap map)
         {
             var text = MapWriter.Write(map);
             var errors = new List<string>();
             var parsed = MapReader.Read(text, errors);
-            if (parsed is null || errors.Count > 0) return (null, text, null, [.. Plain(problems), .. Plain(errors)]);
+            if (parsed is null || errors.Count > 0) return (null, text, [.. Plain(problems), .. Plain(errors)]);
             var watch = Stopwatch.StartNew();
             var facts = Checker.Run(parsed, analysis, new CheckOptions { MapText = text });
             checks.Add(watch.Elapsed);
-            if (!facts.Passed) return (null, text, null, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))]);
-            return (parsed, text, facts, []);
+            if (!facts.Passed) return (null, text, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))]);
+            return (new CheckedMap(parsed, text, facts), text, []);
         }
 
-        var (parsed, text, facts, failures) = Run(map);
-        if (facts is null) return (null, text, failures, [], checks);
-        var gathered = Knots.Gathering(facts, knots);
+        var (current, text, failures) = Run(map);
+        if (current is null) return (null, text, failures, [], checks, null);
+        var gathered = Knots.Gathering(current.Facts, knots);
         if (gathered.Count > 0)
         {
-            var moved = parsed!.Clone();
+            var moved = current.Map.Clone();
             foreach (var (type, leaf) in gathered) MapEdits.Move(moved, type, leaf);
-            var again = Run(moved);
-            if (again.Facts is not null) (parsed, text, facts) = (again.Parsed, again.Text, again.Facts);
+            if (Run(moved).Checked is { } again) current = again;
             else gathered = [];
         }
-        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves, Knots.InCode(facts, knots))], gathered, checks);
+        RepairOutcome? repaired = null;
+        if (repair is not null)
+        {
+            repaired = repair.Run(current, m => Run(m).Checked, f => Findings(f, largeLeaves, Knots.InCode(f, knots)).Count(x => !x.InCode));
+            current = repaired.Map;
+        }
+        var facts = current.Facts;
+        return (current.Map, current.Text, [.. Plain(problems), .. Findings(facts, largeLeaves, Knots.InCode(facts, knots), repair?.Entangled(facts))], gathered, checks, repaired);
     }
 
     /// <summary>
@@ -313,12 +353,13 @@ public static class MapGenerator
     /// cycles among a level's children with the edges whose removal breaks each and the type pairs behind those edges,
     /// cycles among a view's groups with the edges whose removal breaks each, and, when
     /// asked for, leaves too large for a view to regroup. Each finding names the types it concerns, and a cycle that is in
-    /// the code says so.
+    /// the code or entangled says so.
     /// </summary>
     /// <param name="facts">The checker's facts about the map.</param>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
     /// <param name="inCode">A function that tells whether a level's cycle is in the code, as <see cref="Knots.InCode"/> returns it, or <see langword="null"/> when none is.</param>
-    internal static List<Finding> Findings(Facts facts, bool largeLeaves = true, Func<string, IReadOnlyList<string>, bool>? inCode = null)
+    /// <param name="entangled">A function that tells whether a level's cycle is entangled, as <see cref="LocalRepair.Entangled"/> returns it, or <see langword="null"/> when none is.</param>
+    internal static List<Finding> Findings(Facts facts, bool largeLeaves = true, Func<string, IReadOnlyList<string>, bool>? inCode = null, Func<string, IReadOnlyList<string>, bool>? entangled = null)
     {
         var findings = new List<Finding>();
         var unsorted = facts.Types.Where(t => t.Leaf == ArchitectureMap.Unsorted).Select(t => t.Name).ToList();
@@ -341,10 +382,12 @@ public static class MapGenerator
                     sb.Append($"\n{e.From} → {e.To}: {e.Count} reference(s), from {string.Join(", ", pairs.Take(4).Select(p => $"{p.FromType} → {p.ToType} ({p.Count})"))}");
                     types.AddRange(pairs.Take(4).SelectMany(p => new[] { p.FromType, p.ToType }));
                 }
-                if (cut.Count > MaxCutEdges) sb.Append($"\n…and {cut.Count - MaxCutEdges} more edge(s); so many usually means the code does not separate these children, and merging some of them breaks the cycle.");
                 var code = inCode?.Invoke(level, cycle) == true;
+                var tangled = !code && entangled?.Invoke(level, cycle) == true;
+                if (cut.Count > MaxCutEdges) sb.Append($"\n…and {cut.Count - MaxCutEdges} more edge(s){(tangled ? "." : "; so many usually means the code does not separate these children, and merging some of them breaks the cycle.")}");
                 if (code) sb.Append("\nThis cycle is in the code: it comes from types that reference each other in a loop and are too many for one leaf.");
-                findings.Add(new(sb.ToString(), types, code));
+                if (tangled) sb.Append("\nThis cycle is entangled: these children reference each other in too many ways for a few moves to separate them, so merging some of them is the likely fix.");
+                findings.Add(new(sb.ToString(), types, code, LocalRepair.Key(level, cycle), tangled));
             }
         }
         foreach (var (view, metrics) in facts.Views)

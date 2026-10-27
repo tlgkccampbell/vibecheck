@@ -7,9 +7,10 @@ loop of [review-workflow.md](review-workflow.md) section 4.4 and the checking of
 [vibecheck-spec.md](vibecheck-spec.md) sections 4 and 5.3, and it lists, in section
 8, the changes it makes to those documents.
 
-Phase 1 of section 10, knots, is built. Phases 2 and 3, local repair and the
-reviewer's part, are not. Section 3, local repair, was rescoped after the first
-measurement, and its values were set from the second (section 7.2).
+Phases 1 and 2 of section 10, knots and local repair, are built. Phase 3, the
+reviewer's part, is not. Section 3, local repair, was rescoped after the first
+measurement, and its values were set from the second (section 7.2). Phase 2 is to be
+measured as section 7.3 says.
 
 Most revision rounds in practice are spent on cycles among a level's children. Each
 round is an Opus request that takes minutes; the trial of review-workflow.md section
@@ -147,6 +148,12 @@ otherwise make a new edge of its own.
 A cycle therefore costs at most four runs of the checker. Repairable cycles are
 tried in the order of their cut set's total references, lightest first, and each kept
 candidate is the map the next one starts from.
+
+A source type moves into the leaf of the type it references most across the edge, and
+a target type into the leaf of the type that references it most. A cycle is gone when
+no cycle among the same level's children holds two of its members. A candidate that
+moves more than 6 types is not tried, and a cycle with an edge to an external or the
+unsorted leaf goes to Claude, since no move clears such an edge.
 
 No candidate moves a type bound by a `[Vibecheck]` attribute, moves part of a small
 knot away from the rest, or moves a type that section 3.3 holds in place.

@@ -173,7 +173,7 @@ public class MapGeneratorTests
         var claude = new FakeClaude(MissingShared, AddShared);
         var progress = new List<string>();
 
-        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress), CancellationToken.None, null, null, maxListing: 100);
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress), CancellationToken.None, null, null, maxListing: 100, MapGenerator.RepairBudget);
 
         Assert.Equal((2, 0), (generated.Round, generated.Findings.Count));
         Assert.Contains("proposing a concept map from 6 types, listed by namespace", progress);
@@ -344,7 +344,7 @@ public class MapGeneratorTests
         Assert.Contains("Bind the types of each of these sets to one leaf.\n\n- `A.X.Thing`, `A.Y.Other`\n", claude.Requests[0].Prompt, StringComparison.Ordinal);
         Assert.Equal((1, 0), (generated.Round, generated.Findings.Count));
         Assert.Equal(["A.X.**", TestData.Other], generated.Map.Nodes["app.x"].Bind);
-        Assert.Equal(["round 1 moved A.Y.Other to app.x, to keep a knot in one leaf"], log.Where(l => !l.Contains(" ran the checker ", StringComparison.Ordinal)));
+        Assert.Equal(["round 1 moved A.Y.Other to app.x, to keep a knot in one leaf"], log.Where(l => !l.Contains(" ran the checker ", StringComparison.Ordinal) && !l.Contains(" local repair ", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -385,6 +385,144 @@ public class MapGeneratorTests
             names.Select(n => new TypeInfo(n, "Example.A", [TestData.X1])));
 
         Assert.Equal(100_000, Assert.Single(Knots.Find(analysis)).Types.Count);
+    }
+
+    private const string Stray = "A.Y.Stray";
+
+    /// <summary>A revision that changes nothing.</summary>
+    private const string NoEdits = """{ "remove": [], "nodes": [], "groups": [], "moves": [] }""";
+
+    /// <summary>
+    /// The synthetic analysis with a cycle between leaves app.x and app.y of <see cref="Complete"/>: Thing references Other
+    /// twice, and A.Y.Stray, which nothing references, references Helper once. Removing the edge from app.y to app.x breaks it.
+    /// </summary>
+    private static AnalysisResult StrayCycle(IEnumerable<RawDependency>? extra = null, Func<TypeInfo, TypeInfo>? adjust = null) =>
+        TestData.Analysis(
+            [
+                new(TestData.Thing, TestData.Other, "references", TestData.Other, TestData.X1, 13),
+                new(Stray, TestData.Helper, "references", TestData.Helper, TestData.Y1, 3),
+                .. extra ?? [],
+            ],
+            [new TypeInfo(Stray, "Example.A", [TestData.Y1])], adjust: adjust);
+
+    [Fact]
+    public async Task RepairsACycleThatOneMoveBreaksWithoutAskingClaudeAgain()
+    {
+        var claude = new FakeClaude(Complete);
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), StrayCycle(), claude, log: log.Add);
+
+        Assert.Single(claude.Requests);
+        Assert.Equal((1, 0), (generated.Round, generated.Findings.Count));
+        Assert.Equal(["A.X.**", Stray], generated.Map.Nodes["app.x"].Bind);
+        Assert.Contains("round 1 moved A.Y.Stray to app.x, to break a cycle among the children of app", log);
+        Assert.Matches(@"^round 1 local repair broke 1 cycle\(s\) and moved 1 type\(s\) in \d+ ms; 0 entangled cycle\(s\) and 0 other cycle\(s\) remain$",
+            Assert.Single(log, l => l.Contains(" local repair ", StringComparison.Ordinal)));
+        Assert.Matches(@"^round 1 ran the checker 2 time\(s\)", Assert.Single(log, l => l.Contains(" ran the checker ", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task ClearsAnEdgeFromItsOtherSideWhenOneSideIsBoundByAnAttribute()
+    {
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), StrayCycle(adjust: t => t.Name == Stray ? t with { Attribute = "app.y" } : t), new FakeClaude(Complete), log: log.Add);
+
+        // The first candidate already clears the edge from the target side, so the checker runs once for it.
+        Assert.Matches(@"^round 1 ran the checker 2 time\(s\)", Assert.Single(log, l => l.Contains(" ran the checker ", StringComparison.Ordinal)));
+        Assert.Empty(generated.Findings);
+        Assert.Equal(["A.Y.**", TestData.Helper], generated.Map.Nodes["app.y"].Bind);
+        Assert.Equal(["A.X.**"], generated.Map.Nodes["app.x"].Bind);
+    }
+
+    [Fact]
+    public async Task LeavesACycleToClaudeWhenTheFitGuardHoldsEveryTypeInPlace()
+    {
+        // Stray references Other more than Helper, and Thing references Helper more than Stray does, so each side of the
+        // edge has more references to its own leaf than to the other.
+        var analysis = StrayCycle([
+            new(Stray, TestData.Other, "references", TestData.Other, TestData.Y1, 4),
+            new(Stray, TestData.Other, "calls", TestData.Other, TestData.Y1, 5),
+            new(TestData.Thing, TestData.Helper, "calls", TestData.Helper, TestData.X1, 14)]);
+        var claude = new FakeClaude(Complete, NoEdits);
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), analysis, claude, log: log.Add);
+
+        Assert.Equal(2, claude.Requests.Count);
+        Assert.Contains("cycle among the children of app: app.x, app.y", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("round 1 fit guard held A.Y.Stray in app.y, for a cycle among the children of app", log);
+        Assert.Contains("round 1 fit guard held A.X.Helper in app.x, for a cycle among the children of app", log);
+        Assert.Equal(["A.Y.**"], generated.Map.Nodes["app.y"].Bind);
+        Assert.DoesNotContain("entangled", Assert.Single(generated.Findings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SearchesNoLongerThanItsBudget()
+    {
+        var claude = new FakeClaude(Complete, NoEdits);
+        var log = new List<string>();
+
+        await MapGenerator.GenerateAsync(Skeleton(), StrayCycle(), claude, null, CancellationToken.None, null, log.Add, MapGenerator.MaxListing, TimeSpan.Zero);
+
+        Assert.Equal(2, claude.Requests.Count);
+        Assert.Contains(log, l => l.StartsWith("round 1 local repair broke 0 cycle(s) and moved 0 type(s) in ", StringComparison.Ordinal) && l.Contains(", and ran out of time; 0 entangled cycle(s) and 1 other cycle(s) remain", StringComparison.Ordinal));
+        Assert.Matches(@"^round 1 ran the checker 1 time\(s\)", Assert.Single(log, l => l.StartsWith("round 1 ran the checker", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// The synthetic analysis with a cycle between app.x and app.y that seven types on each side hold together: A.X.Pn
+    /// references A.Y.Qn, and A.Y.Rn references A.X.Sn. Clearing the lighter edge moves seven types either way.
+    /// </summary>
+    private static AnalysisResult EntangledCycle()
+    {
+        var range = Enumerable.Range(0, 7).ToList();
+        var names = range.SelectMany(i => new[] { $"A.X.P{i}", $"A.Y.Q{i}", $"A.Y.R{i}", $"A.X.S{i}" });
+        return TestData.Analysis(
+            range.SelectMany(i => new RawDependency[] { new($"A.X.P{i}", $"A.Y.Q{i}", "references", "x", TestData.X1, i), new($"A.Y.R{i}", $"A.X.S{i}", "references", "x", TestData.Y1, i) }),
+            names.Select(n => new TypeInfo(n, "Example.A", [n.StartsWith("A.X.", StringComparison.Ordinal) ? TestData.X1 : TestData.Y1])));
+    }
+
+    [Theory]
+    [InlineData(3, false)]
+    [InlineData(4, true)]
+    public void CallsACycleEntangledWhenItsCutSetHasMoreThanThreeEdges(int leaves, bool entangled)
+    {
+        // Every leaf references every other through one type of its own, so the cut set has an edge for each pair of
+        // leaves while each edge moves one type: 3 edges among three leaves, 6 among four.
+        var ids = Enumerable.Range(0, leaves).Select(i => $"l{i}").ToList();
+        var pairs = ids.SelectMany(a => ids.Where(b => b != a).Select(b => (From: a, To: b))).ToList();
+        var analysis = TestData.Analysis(
+            pairs.Select(p => new RawDependency($"E.{p.From}.To{p.To}", $"E.{p.To}.From{p.From}", "references", "x", TestData.X1, 1)),
+            pairs.SelectMany(p => new[] { $"E.{p.From}.To{p.To}", $"E.{p.To}.From{p.From}" }).Select(n => new TypeInfo(n, "Example.A", [TestData.X1])));
+        var map = new ArchitectureMap { Version = 0, Solution = "Example.sln" };
+        foreach (var id in ids) map.Nodes[id] = new NodeSpec { Name = id, Bind = [$"E.{id}.**"] };
+        map.Nodes["rest"] = new NodeSpec { Name = "Rest", Bind = ["A.**", "B.**", "Shared.**"] };
+        var facts = Checking.Checker.Run(map, analysis);
+        var repair = new LocalRepair(Units.Build(analysis), Knots.Find(analysis), MapGenerator.RepairBudget);
+
+        var cycle = Assert.Single(facts.Levels["root"].Cycles);
+
+        Assert.Equal(leaves * (leaves - 1) / 2, Checking.Checker.CutSet(cycle, facts.Levels["root"].Edges).Count);
+        Assert.Equal(entangled, repair.Entangled(facts)("root", cycle));
+    }
+
+    [Fact]
+    public async Task StopsWhenOnlyEntangledCyclesThatTheLastRevisionKeptRemain()
+    {
+        var claude = new FakeClaude(MissingShared, AddShared, NoEdits);
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), EntangledCycle(), claude, log: log.Add);
+
+        Assert.Equal(2, claude.Requests.Count);
+        Assert.Contains("cycle among the children of app: app.x, app.y", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        Assert.Contains("This cycle is entangled", claude.Requests[1].Prompt, StringComparison.Ordinal);
+        var finding = Assert.Single(generated.Findings);
+        Assert.StartsWith("cycle among the children of app: app.x, app.y\nRemoving these 1 edge(s) breaks it", finding, StringComparison.Ordinal);
+        Assert.Contains(log, l => l.StartsWith("round 2 local repair broke 0 cycle(s) and moved 0 type(s) in ", StringComparison.Ordinal) && l.EndsWith("; 1 entangled cycle(s) and 0 other cycle(s) remain", StringComparison.Ordinal));
+        Assert.DoesNotContain(log, l => l.Contains(" moved A.", StringComparison.Ordinal));
     }
 
     [Fact]

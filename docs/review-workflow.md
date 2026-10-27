@@ -168,9 +168,14 @@ it:
    out. Before the check, the knot pass of [map-cycles.md](map-cycles.md) section 2
    moves the stray types of each set of types that reference each other in a loop
    into one leaf, and the proposal prompt lists those sets. A cycle that comes from
-   such a set too large for one leaf is marked as in the code. Each finding of every
-   round, each type the knot pass moves, how long each run of the checker takes, and
-   each reason a proposal cannot be used, are written to the log.
+   such a set too large for one leaf is marked as in the code. Local repair, in
+   map-cycles.md section 3, then moves the few types behind each cycle that a few
+   moves break, keeping each move that breaks its cycle without raising the number of
+   findings, and marks the cycles that a few moves cannot break as entangled. Each
+   finding of every round, each type the knot pass or the repair moves, each type the
+   repair's fit guard holds in place, what the repair did in each round, how long each
+   run of the checker takes, and each reason a proposal cannot be used, are written to
+   the log.
 4. If anything was found, send the findings other than cycles in the code back with
    the best map so far and ask for edits to it: nodes to remove, nodes to add or
    change, view groups to add, and types to move to a leaf by exact name. The request lists only the units, or for a
@@ -178,8 +183,10 @@ it:
    as long as its edits rather than as long as the map. Until some proposal is usable
    there is no map to edit, so Claude proposes a whole map again, told why the last
    one was rejected. Stop when nothing but cycles in the code is found, after three
-   rounds, or when a usable revision does not reduce the number of other findings. A
-   revision that fails, or takes longer than fifteen minutes, also ends the rounds.
+   rounds, when a usable revision does not reduce the number of other findings, or
+   when the only other findings are entangled cycles that the previous usable map also
+   had. A revision that fails, or takes longer than fifteen minutes, also ends the
+   rounds.
 5. Keep the usable proposal with the fewest findings other than cycles in the code,
    then the fewest findings, preferring the later of two that tie.
 

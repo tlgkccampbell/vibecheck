@@ -8,7 +8,7 @@ These are the map's nodes and views, one to a line.
 
 ## What the dependency graph says about it
 
-The map was applied to the code, and the checker reports the following. A cycle between nodes usually means that a type was placed by its name on the wrong side of a boundary. Each cycle lists its members, which are not in any order, and the edges whose removal breaks it, with the type pairs behind each edge. Moving the types behind those edges to the other side breaks the cycle. When it needs many edges removed, the code does not separate those nodes, and merging some of them is the better edit. Unsorted types need a leaf.
+The map was applied to the code, and the checker reports the following. A cycle between nodes usually means that a type was placed by its name on the wrong side of a boundary. Each cycle lists its members, which are not in any order, and the edges whose removal breaks it, with the type pairs behind each edge. Moving the types behind those edges to the other side breaks the cycle. When it needs many edges removed, the code does not separate those nodes, and merging some of them is the better edit; a cycle marked entangled is such a cycle. The tool has already moved the types behind each cycle that a few moves break, when that broke the cycle without making the map worse, and those moves appear in the map above as exact names; undo one only if the type plainly belongs elsewhere. Unsorted types need a leaf.
 
 {{findings}}
 
