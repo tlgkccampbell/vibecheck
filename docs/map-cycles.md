@@ -345,8 +345,9 @@ The first two such generations gave these results:
   seconds. It never reached its budget.
 - After repair, the first round left 9 entangled cycles in each run, and later
   rounds left 1 to 4. The other cycles left after repair numbered 1 to 6.
-- The fit guard held 2 to 15 types a round in place. The log does not say which
-  cycles it held, or why each remaining cycle was not repaired.
+- The fit guard held 2 to 15 types a round in place. The log did not say which
+  cycles it held, or why each remaining cycle was not repaired; it now writes a line
+  for each cycle that repair leaves, with the reason.
 - The cycles among a level's children fell from 11 to 5 to 4 in one run, and from
   15 to 6 to 2 in the other. The second run ended with 2 findings, the fewest of any
   measured run. Two runs cannot show that repair caused it.

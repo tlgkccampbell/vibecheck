@@ -469,6 +469,9 @@ public class MapGeneratorTests
         Assert.Contains("cycle among the children of app: app.x, app.y", claude.Requests[1].Prompt, StringComparison.Ordinal);
         Assert.Contains("round 1 fit guard held A.Y.Stray in app.y, for a cycle among the children of app", log);
         Assert.Contains("round 1 fit guard held A.X.Helper in app.x, for a cycle among the children of app", log);
+        Assert.Contains("round 1 left the cycle among the children of app: app.x, app.y, because neither side of app.y → app.x may move: "
+            + "the fit guard holds A.Y.Stray in app.y, with 2 reference(s) there and 1 to app.x, "
+            + "and the fit guard holds A.X.Helper in app.x, with 2 reference(s) there and 1 to app.y", log);
         Assert.Equal(["A.Y.**"], generated.Map.Nodes["app.y"].Bind);
         Assert.DoesNotContain("entangled", Assert.Single(generated.Findings), StringComparison.Ordinal);
     }
@@ -484,6 +487,7 @@ public class MapGeneratorTests
         Assert.Equal(2, claude.Requests.Count);
         Assert.Contains(log, l => l.StartsWith("round 1 local repair broke 0 cycle(s) and moved 0 type(s) in ", StringComparison.Ordinal) && l.Contains(", and ran out of time; 0 entangled cycle(s) and 1 other cycle(s) remain", StringComparison.Ordinal));
         Assert.Matches(@"^round 1 ran the checker 1 time\(s\)", Assert.Single(log, l => l.StartsWith("round 1 ran the checker", StringComparison.Ordinal)));
+        Assert.Contains("round 1 left the cycle among the children of app: app.x, app.y, because candidate 1 (1 type(s)) was not tried before the budget ran out", log);
     }
 
     /// <summary>
@@ -521,6 +525,10 @@ public class MapGeneratorTests
 
         Assert.Equal(leaves * (leaves - 1) / 2, Checking.Checker.CutSet(cycle, facts.Levels["root"].Edges).Count);
         Assert.Equal(entangled, repair.Entangled(facts)("root", cycle));
+        var left = Assert.Single(repair.Run(new CheckedMap(map, "", facts), _ => null, _ => 1).Left);
+        if (entangled) Assert.Equal(("root: l0, l1, l2, l3", "it is entangled: its cut set has 6 edges, more than 3"), left);
+        else Assert.Equal(("root: l0, l1, l2", "candidate 1 (3 type(s)) made the map unusable; candidate 2 (3 type(s)) made the map unusable; "
+            + "candidate 3 (3 type(s)) made the map unusable; candidate 4 (3 type(s)) made the map unusable"), left);
     }
 
     [Fact]
@@ -538,6 +546,7 @@ public class MapGeneratorTests
         Assert.StartsWith("cycle among the children of app: app.x, app.y\nRemoving these 1 edge(s) breaks it", finding, StringComparison.Ordinal);
         Assert.Contains(log, l => l.StartsWith("round 2 local repair broke 0 cycle(s) and moved 0 type(s) in ", StringComparison.Ordinal) && l.EndsWith("; 1 entangled cycle(s) and 0 other cycle(s) remain", StringComparison.Ordinal));
         Assert.DoesNotContain(log, l => l.Contains(" moved A.", StringComparison.Ordinal));
+        Assert.Contains("round 2 left the cycle among the children of app: app.x, app.y, because it is entangled: clearing its 1 cut edge(s) moves at least 7 types, more than 6", log);
     }
 
     [Fact]

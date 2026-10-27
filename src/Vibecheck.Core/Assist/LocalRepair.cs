@@ -21,7 +21,9 @@ internal sealed record RepairMove(string Type, string Leaf, string Level);
 /// <param name="Repaired">The number of cycles broken.</param>
 /// <param name="Elapsed">How long the search took.</param>
 /// <param name="OutOfTime">A value indicating whether the search stopped at its budget.</param>
-internal sealed record RepairOutcome(CheckedMap Map, IReadOnlyList<RepairMove> Moves, IReadOnlyList<RepairMove> Held, int Repaired, TimeSpan Elapsed, bool OutOfTime);
+/// <param name="Left">Each cycle among a level's children that is not in the code and that the search left, by the key that <see cref="LocalRepair.Key"/> returns, with why it was left.</param>
+internal sealed record RepairOutcome(CheckedMap Map, IReadOnlyList<RepairMove> Moves, IReadOnlyList<RepairMove> Held, int Repaired, TimeSpan Elapsed, bool OutOfTime,
+    IReadOnlyList<(string Cycle, string Why)> Left);
 
 /// <summary>
 /// Breaks cycles among a level's children by moving the few types behind them, and checks each candidate with the
@@ -58,7 +60,9 @@ internal sealed class LocalRepair
     /// <summary>
     /// Breaks the repairable cycles of a map, lightest cut set first, and returns the map with every candidate that
     /// broke its cycle without raising the number of findings. Each cycle is tried once, with at most one candidate per
-    /// edge of its cut set and one more, and each kept candidate is the map the next cycle starts from.
+    /// edge of its cut set and one more, and each kept candidate is the map the next cycle starts from. Also returns
+    /// why each cycle that remains was left: entangled, an edge that no move clears, an edge whose sides may not move,
+    /// or what each candidate did.
     /// </summary>
     /// <param name="start">The map to repair.</param>
     /// <param name="check">A function that checks a candidate map, and returns <see langword="null"/> when it cannot be used.</param>
@@ -70,6 +74,7 @@ internal sealed class LocalRepair
         var moves = new List<RepairMove>();
         var held = new List<RepairMove>();
         var tried = new HashSet<string>(StringComparer.Ordinal);
+        var why = new Dictionary<string, string>(StringComparer.Ordinal);
         var (repaired, outOfTime) = (0, false);
         while (!outOfTime)
         {
@@ -79,21 +84,36 @@ internal sealed class LocalRepair
             tried.Add(plan.Key);
             held.AddRange(plan.Edges!.SelectMany(e => new[] { e.Source, e.Target }).Where(s => s.Held is not null).Select(s => s.Held!)
                 .DistinctBy(h => h.Type).Select(h => h with { Level = plan.Level }));
-            foreach (var candidate in Candidates(plan.Edges!))
+            var blocked = plan.Edges!.Where(e => !e.Source.Allowed && !e.Target.Allowed).ToList();
+            if (blocked.Count > 0)
             {
-                if (watch.Elapsed >= budget) { outOfTime = true; break; }
+                why[plan.Key] = string.Join("; ", blocked.Select(e => $"neither side of {e.Edge.From} → {e.Edge.To} may move: {e.Source.Blocked}, and {e.Target.Blocked}"));
+                continue;
+            }
+            var results = new List<string>();
+            var broken = false;
+            foreach (var (candidate, n) in Candidates(plan.Edges!).Select((c, i) => (c, i + 1)))
+            {
+                string Result(string what) => $"candidate {n} ({candidate.Count} type(s)) {what}";
+                if (candidate.Count > MapGenerator.RepairTypes) { results.Add(Result($"moves more than {MapGenerator.RepairTypes} types and was not tried")); continue; }
+                if (watch.Elapsed >= budget) { outOfTime = true; results.Add(Result("was not tried before the budget ran out")); break; }
                 var moved = current.Map.Clone();
                 foreach (var (type, leaf) in candidate) MapEdits.Move(moved, type, leaf);
-                if (check(moved) is not { } after || !Gone(after.Facts, plan.Level, plan.Members)) continue;
+                if (check(moved) is not { } after) { results.Add(Result("made the map unusable")); continue; }
+                if (!Gone(after.Facts, plan.Level, plan.Members)) { results.Add(Result("left the cycle")); continue; }
                 var found = score(after.Facts);
-                if (found > best) continue;
+                if (found > best) { results.Add(Result($"broke the cycle but raised the findings from {best} to {found}")); continue; }
                 (current, best) = (after, found);
                 moves.AddRange(candidate.Select(m => new RepairMove(m.Type, m.Leaf, plan.Level)));
                 repaired++;
+                broken = true;
                 break;
             }
+            if (!broken) why[plan.Key] = string.Join("; ", results);
         }
-        return new RepairOutcome(current, moves, held, repaired, watch.Elapsed, outOfTime);
+        var left = Plans(current.Facts).Select(p => (p.Key, p.Why ?? why.GetValueOrDefault(p.Key)
+            ?? (tried.Contains(p.Key) ? "a later repair brought it back" : "it was not tried before the budget ran out"))).ToList();
+        return new RepairOutcome(current, moves, held, repaired, watch.Elapsed, outOfTime, left);
     }
 
     /// <summary>Returns a function that tells whether a cycle among a level's children is entangled.</summary>
@@ -111,7 +131,8 @@ internal sealed class LocalRepair
     /// <param name="Moves">The moves, or an empty list when the side cannot move.</param>
     /// <param name="Allowed">A value indicating whether the side may move.</param>
     /// <param name="Held">The type the fit guard held in place, when it did.</param>
-    private sealed record Side(IReadOnlyList<(string Type, string Leaf)> Moves, bool Allowed, RepairMove? Held);
+    /// <param name="Blocked">Why the side may not move, when it may not.</param>
+    private sealed record Side(IReadOnlyList<(string Type, string Leaf)> Moves, bool Allowed, RepairMove? Held, string? Blocked);
 
     /// <summary>Holds the two ways to clear one edge of a cut set.</summary>
     private sealed record EdgePlan(EdgeCount Edge, Side Source, Side Target)
@@ -122,7 +143,8 @@ internal sealed class LocalRepair
 
     /// <summary>Holds a cycle that is not in the code, its cut set, and the ways to clear each edge of it.</summary>
     /// <param name="Edges">The ways to clear each edge, or <see langword="null"/> when the cycle is entangled or an edge cannot be cleared by moving types.</param>
-    private sealed record CyclePlan(string Level, IReadOnlyList<string> Members, List<EdgeCount> Cut, List<EdgePlan>? Edges, bool Entangled)
+    /// <param name="Why">Why the cycle cannot be repaired, when <paramref name="Edges"/> is <see langword="null"/>.</param>
+    private sealed record CyclePlan(string Level, IReadOnlyList<string> Members, List<EdgeCount> Cut, List<EdgePlan>? Edges, bool Entangled, string? Why = null)
     {
         /// <summary>Gets the key that names the cycle, as <see cref="LocalRepair.Key"/> returns it.</summary>
         public string Key => LocalRepair.Key(Level, Members);
@@ -139,11 +161,22 @@ internal sealed class LocalRepair
             foreach (var cycle in metrics.Cycles.Where(c => !inCode(level, c)))
             {
                 var cut = Checker.CutSet(cycle, metrics.Edges);
-                if (cut.Count > MapGenerator.RepairEdges) { plans.Add(new(level, cycle, cut, null, true)); continue; }
+                if (cut.Count > MapGenerator.RepairEdges)
+                {
+                    plans.Add(new(level, cycle, cut, null, true, $"it is entangled: its cut set has {cut.Count} edges, more than {MapGenerator.RepairEdges}"));
+                    continue;
+                }
                 var edges = cut.Select(e => Plan(facts, index, e)).OfType<EdgePlan>().ToList();
-                if (edges.Count < cut.Count) { plans.Add(new(level, cycle, cut, null, false)); continue; }
-                var entangled = edges.Sum(e => e.Cheapest) > MapGenerator.RepairTypes;
-                plans.Add(new(level, cycle, cut, entangled ? null : edges, entangled));
+                if (edges.Count < cut.Count)
+                {
+                    var outside = cut.First(e => !facts.Map.Nodes.ContainsKey(e.From) || !facts.Map.Nodes.ContainsKey(e.To));
+                    plans.Add(new(level, cycle, cut, null, false, $"no move clears its edge {outside.From} → {outside.To}, which leads to or from an external or the unsorted leaf"));
+                    continue;
+                }
+                var cheapest = edges.Sum(e => e.Cheapest);
+                var entangled = cheapest > MapGenerator.RepairTypes;
+                plans.Add(new(level, cycle, cut, entangled ? null : edges, entangled,
+                    entangled ? $"it is entangled: clearing its {cut.Count} cut edge(s) moves at least {cheapest} types, more than {MapGenerator.RepairTypes}" : null));
             }
         }
         return plans;
@@ -161,7 +194,7 @@ internal sealed class LocalRepair
         var moves = new List<(string Type, string Leaf)>();
         var taken = new HashSet<string>(StringComparer.Ordinal);
         RepairMove? held = null;
-        var allowed = true;
+        string? blocked = null;
         foreach (var (type, leaf) in wanted)
         {
             if (taken.Contains(type)) continue;
@@ -169,10 +202,16 @@ internal sealed class LocalRepair
             var group = Group(index, type);
             taken.UnionWith(group);
             moves.AddRange(group.Select(t => (t, leaf)));
-            if (from == ArchitectureMap.Unsorted || leaf == ArchitectureMap.Unsorted || group.Any(t => index.Types[t].By == "attribute")) allowed = false;
-            else if (allowed && index.Affinity(group, leaf) < index.Affinity(group, from)) (allowed, held) = (false, new RepairMove(type, from, ""));
+            if (blocked is not null) continue;
+            if (from == ArchitectureMap.Unsorted || leaf == ArchitectureMap.Unsorted) blocked = $"{type} would move into or out of the unsorted leaf";
+            else if (group.FirstOrDefault(t => index.Types[t].By == "attribute") is { } bound) blocked = $"{bound} is bound by an attribute";
+            else if ((index.Affinity(group, from), index.Affinity(group, leaf)) is var (own, other) && other < own)
+            {
+                held = new RepairMove(type, from, "");
+                blocked = $"the fit guard holds {type} in {from}, with {own} reference(s) there and {other} to {leaf}";
+            }
         }
-        return new Side(moves, allowed, held);
+        return new Side(moves, blocked is null, held, blocked);
     }
 
     /// <summary>
@@ -210,9 +249,8 @@ internal sealed class LocalRepair
 
     /// <summary>
     /// Returns the candidates for a cycle, in the order they are tried. The first clears each edge from its cheaper side
-    /// that may move, the source side when they tie. Each later one clears one edge from its other side instead. A
-    /// candidate that moves more than <see cref="MapGenerator.RepairTypes"/> types is left out, and so is every candidate
-    /// when some edge has no side that may move.
+    /// that may move, the source side when they tie. Each later one clears one edge from its other side instead. There is
+    /// no candidate when some edge has no side that may move.
     /// </summary>
     private static IEnumerable<List<(string Type, string Leaf)>> Candidates(List<EdgePlan> edges)
     {
@@ -226,11 +264,7 @@ internal sealed class LocalRepair
             var other = ReferenceEquals(choice[i], edges[i].Source) ? edges[i].Target : edges[i].Source;
             if (other.Allowed) candidates.Add([.. choice.Take(i), other, .. choice.Skip(i + 1)]);
         }
-        foreach (var sides in candidates)
-        {
-            var moves = sides.SelectMany(s => s.Moves).DistinctBy(m => m.Type).ToList();
-            if (moves.Count <= MapGenerator.RepairTypes) yield return moves;
-        }
+        foreach (var sides in candidates) yield return sides.SelectMany(s => s.Moves).DistinctBy(m => m.Type).ToList();
     }
 
     /// <summary>Returns a value indicating whether no cycle among a level's children still holds two of a cycle's members.</summary>

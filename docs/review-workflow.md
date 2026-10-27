@@ -173,9 +173,9 @@ it:
    moves break, keeping each move that breaks its cycle without raising the number of
    findings, and marks the cycles that a few moves cannot break as entangled. Each
    finding of every round, each type the knot pass or the repair moves, each type the
-   repair's fit guard holds in place, what the repair did in each round, how long each
-   run of the checker takes, and each reason a proposal cannot be used, are written to
-   the log.
+   repair's fit guard holds in place, each cycle the repair leaves and why, what the
+   repair did in each round, how long each run of the checker takes, and each reason a
+   proposal cannot be used, are written to the log.
 4. If anything was found, send the findings other than cycles in the code back with
    the best map so far and ask for edits to it: nodes to remove, nodes to add or
    change, view groups to add, and types to move to a leaf by exact name. The request lists only the units, or for a

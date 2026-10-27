@@ -69,8 +69,8 @@ public static class MapGenerator
     /// says every few seconds how long the request has run and how much Claude has thought and written. The rounds also
     /// stop when a usable map's only findings that a map can fix are entangled cycles that the previous usable map also
     /// had, since Claude has already failed to break them. The log receives each finding of every round, each type moved
-    /// to keep a knot in one leaf or to break a cycle, each type the fit guard held in place, what local repair did in
-    /// each round, how long each run of the checker took, and each reason a proposal could not be used as a map.
+    /// to keep a knot in one leaf or to break a cycle, each type the fit guard held in place, each cycle that local repair
+    /// left and why, what local repair did in each round, how long each run of the checker took, and each reason a proposal could not be used as a map.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null, Action<string>? log = null) =>
@@ -127,6 +127,7 @@ public static class MapGenerator
                 if (repaired.Repaired > 0) progress?.Report($"round {round}: broke {repaired.Repaired} cycle(s) by moving {repaired.Moves.Count} type(s)");
                 foreach (var m in repaired.Moves) log?.Invoke($"round {round} moved {m.Type} to {m.Leaf}, to break a cycle among the children of {m.Level}");
                 foreach (var h in repaired.Held) log?.Invoke($"round {round} fit guard held {h.Type} in {h.Leaf}, for a cycle among the children of {h.Level}");
+                foreach (var (cycle, why) in repaired.Left) log?.Invoke($"round {round} left the cycle among the children of {cycle}, because {why}");
                 var cycles = found.Where(f => f.Cycle is not null && !f.InCode).ToList();
                 log?.Invoke($"round {round} local repair broke {repaired.Repaired} cycle(s) and moved {repaired.Moves.Count} type(s) in {repaired.Elapsed.TotalMilliseconds:F0} ms"
                     + $"{(repaired.OutOfTime ? ", and ran out of time" : "")}; {cycles.Count(f => f.Entangled)} entangled cycle(s) and {cycles.Count(f => !f.Entangled)} other cycle(s) remain");
