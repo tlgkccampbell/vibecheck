@@ -336,6 +336,23 @@ The same solution runs two generations with phase 2 built. Each reports what sec
 - for each move, whether the type's name fits the leaf it moved into;
 - the time the search took per round, and whether it reached its budget.
 
+The first two such generations gave these results:
+
+- Both ran all three rounds, in 745 and 695 seconds, so neither rounds nor time fell.
+  The stop rule for entangled cycles never fired, because cycles that were not
+  entangled always remained.
+- Repair broke 0 to 3 cycles a round, moved 0 to 10 types, and took 0.2 to 6.6
+  seconds. It never reached its budget.
+- After repair, the first round left 9 entangled cycles in each run, and later
+  rounds left 1 to 4. The other cycles left after repair numbered 1 to 6.
+- The fit guard held 2 to 15 types a round in place. The log does not say which
+  cycles it held, or why each remaining cycle was not repaired.
+- The cycles among a level's children fell from 11 to 5 to 4 in one run, and from
+  15 to 6 to 2 in the other. The second run ended with 2 findings, the fewest of any
+  measured run. Two runs cannot show that repair caused it.
+- Judged by names, most moves fit, and about a third were doubtful.
+- One revision swapped the type and the leaf in 15 moves, which issue #11 records.
+
 ## 8. Changes to other documents
 
 - review-workflow.md section 4.4: step 3 finds knots and runs the knot pass and local
