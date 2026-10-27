@@ -8,14 +8,15 @@ loop of [review-workflow.md](review-workflow.md) section 4.4 and the checking of
 8, the changes it makes to those documents.
 
 Phase 1 of section 10, knots, is built. Phases 2 and 3, local repair and the
-reviewer's part, are not.
+reviewer's part, are not. Section 3, local repair, was rescoped after the first
+measurement, and its values are provisional until the next one.
 
 Most revision rounds in practice are spent on cycles among a level's children. Each
 round is an Opus request that takes minutes; the trial of review-workflow.md section
 7 took 434 s for one proposal. The checker, by contrast, answers a candidate map
-locally. The revision prompt tells Claude that "moving the type that causes the
-fewest of them usually breaks the cycle", which is a search the tool can run itself
-against the checker, in seconds, with each step verified.
+locally. The revision prompt asks Claude to move the types behind the edges that
+break a cycle, which is a search the tool can run itself against the checker, with
+each step verified.
 
 The loop also stops when a usable revision fixes nothing, on the ground that such a
 revision "usually meets a cycle in the code itself, which no grouping removes". That
@@ -26,6 +27,9 @@ leaf may hold, and the tool can tell the two apart before Claude is asked anythi
 ## 1. Goals
 
 - A cycle that a move of a few types removes is removed without a round of Claude.
+- A cycle that its members' many references hold together is told apart from one
+  that a few moves break. Once Claude has failed to break it, it costs no further
+  round.
 - A proposal does not split types that reference each other in a loop, unless they
   are too many for one leaf.
 - A cycle that is in the code itself is reported as such, is never sent back to
@@ -91,52 +95,102 @@ finding, and the generated map still draws it, but it is not sent to Claude and 
 not count when the loop compares a revision with the one before. The loop
 stops once only cycles in the code remain, and among usable proposals it keeps the
 one with the fewest other findings, then the fewest findings. A finding in the code
-says so in its text, and its line in the log starts "finding in the code".
+says so in its text, and its line in the log starts "finding in the code". Section
+3.4 adds a second reason to stop, for entangled cycles that a round failed to break.
 
 ## 3. Local repair
 
 After the knot pass, the tool tries to break each remaining cycle that is not in the
-code, before it asks Claude to:
+code, before it asks Claude to. It repairs only the cycles that a few moves break,
+and it leaves the rest to Claude and the reviewer.
 
-1. Take the cycle's cut set, the edges whose removal breaks it, as `Checker.CutSet`
-   returns them, and the type pairs behind each edge, as `Explain.Pairs` returns them.
-   A cycle is a set of members, not a path, so its edges come from the cut set and
-   never from the order of its members.
-2. On the edge of the cut set with the fewest references, each pair gives two
-   candidates: move the source type to the target's leaf, or move the target type to
-   the source's leaf. A type moves with the other members of its unit, since a helper
-   folded into a unit would otherwise make a new edge of its own.
-3. Check each candidate with `Checker.Run`. Keep the candidate that lowers the number
-   of findings the most, preferring the one that moves fewer types.
-4. Repeat until no candidate lowers the number of findings, or until the budget of
-   section 3.1 is spent.
+The values in this section are provisional. They come from one measurement on one
+large solution, summarized in section 7, and are to be set again after the next
+measurement. Each is a constant beside `MaxRounds`.
 
-A candidate never moves a type bound by a `[Vibecheck]` attribute, and never moves
-part of a small knot away from the rest.
+### 3.1 Repairable and entangled cycles
 
-Only what is left goes to Claude. The revision prompt says that the listed cycles are
-the ones that moving a few types did not break, and asks for a change of grouping:
-a new leaf, a split, or a merge.
+Every cycle comes with its cut set: the edges whose removal breaks it, as
+`Checker.CutSet` returns them, with the type pairs behind each edge, as
+`Explain.Pairs` returns them. A cycle is a set of members, not a path, so its edges
+come from the cut set and never from the order of its members.
 
-### 3.1 Budget
+A cycle is **repairable** when its cut set has at most 3 edges and the cheapest
+candidate of section 3.2 moves at most 6 types, counting the members of their units.
+A cycle that is neither repairable nor in the code is **entangled**. Its members
+reference each other in so many ways that the code does not separate them, and the
+fix is a change of grouping, usually a merge, not a move.
 
-Each candidate costs one run of the checker. The search stops after 40 moves or 30
-seconds, whichever comes first, and keeps every move it made. Map generation logs how
-long each run of the checker takes, as "round 1 ran the checker 2 time(s): 812 ms,
-790 ms", so that the limits can be set from real runs. On a large solution, a
-`vibecheck check` from the command line took about a minute, but that includes
-restoring and analyzing the solution, which generation has already done. Both limits are
-constants beside `MaxRounds`, set from the measurements of section 7.
+In the measurement, 12 of 14 remaining cycles had a weakest edge of 1 to 3
+references. The cycles of two or three members broke with one or two moves. The
+largest needed 6 to 27 edges cut, and a single move changed nothing.
 
-### 3.2 What the moves cost
+### 3.2 Candidates
 
-A move is chosen by the graph, not by the names, so a type can land in a leaf that
-its name does not fit. That is the misplacement spec section 5.3 describes in reverse,
-and it is the cost of saving a round. Every move is written to the log, the generated
-map's notice lists them (section 4), and the next revision's prompt shows them to
-Claude as part of the map. For a solution listed by namespace, each move adds an
-exact name beside a namespace pattern, which is why the budget caps the number of
-moves.
+A candidate breaks one cycle by clearing every edge of its cut set at once. Each pair
+behind an edge can be cleared from either side: move its source type into the leaf of
+its target type, or move its target type into the leaf of its source type. A type
+moves with the other members of its unit, since a helper folded into a unit would
+otherwise make a new edge of its own.
+
+1. Build the first candidate by clearing each edge from the side that moves fewer
+   types, the source side when they tie.
+2. Check it with `Checker.Run`. Keep it if the cycle is gone and the number of
+   findings has not risen.
+3. Otherwise, try each edge from its other side, one edge at a time, and keep the
+   first such candidate that passes the same test.
+4. If none passes, the cycle goes to Claude unchanged.
+
+A cycle therefore costs at most four runs of the checker. Repairable cycles are
+tried in the order of their cut set's total references, lightest first, and each kept
+candidate is the map the next one starts from.
+
+No candidate moves a type bound by a `[Vibecheck]` attribute, moves part of a small
+knot away from the rest, or moves a type that section 3.3 holds in place.
+
+### 3.3 The fit guard
+
+A move is chosen by the graph, not by the names, so it can put a type where its name
+does not fit. In the measurement, one hand move put a type into the leaf of an
+unrelated concept, and it broke no cycle. The graph cannot judge a name, but it can judge **affinity**:
+how many references a type has to and from the types of a leaf.
+
+A type may move only when its affinity with the leaf it moves into is at least its
+affinity with the leaf it leaves. A unit's affinity is the sum over its members, and
+references among the unit's own members do not count. A type that touches its new
+leaf only through the one cut edge stays where it is, and its cycle goes to Claude.
+
+This guard is untested on a real solution. The next measurement reports how often it
+holds a type in place, and whether the moves it allows fit.
+
+### 3.4 Entangled cycles and the rounds
+
+Entangled cycles still go to Claude. Their findings list the cut set and say that
+merging some of the members is the likely fix, as the revision prompt does since
+issue #10. In the measurement, the second and third rounds roughly halved the cycles,
+so a round spent on them is not wasted.
+
+A round that fails to break them is, though. The rounds stop when every remaining
+finding other than a cycle in the code is an entangled cycle that the previous usable
+round also reported, with the same members. Such cycles wait for the reviewer, who
+can accept them or merge their members (section 4). Every measured generation spent
+all three rounds, so this rule is where most of the time is saved.
+
+### 3.5 Budget
+
+The search stops after 30 seconds, and keeps every candidate it accepted. Map
+generation logs how long each run of the checker takes, as "round 1 ran the checker 2
+time(s): 812 ms, 790 ms", and the limit is to be set from those numbers. On a large
+solution, a `vibecheck check` from the command line took about a minute, but that
+includes restoring and analyzing the solution, which generation has already done.
+
+### 3.6 What the moves cost
+
+Every move is written to the log, the generated map's notice lists them (section 4),
+and the next revision's prompt shows them to Claude as part of the map, so Claude
+can undo a move that does not fit. For a solution listed by namespace, each move adds
+an exact name beside a namespace pattern. The limit of 6 types per cycle keeps those
+names few.
 
 ## 4. The reviewer's part
 
@@ -150,10 +204,14 @@ panel that lists them, and the reviewer acts on them there.
 - **The findings.** Each finding is listed with its kind and, for a cycle, its nodes,
   the type pairs behind each edge, and whether it is in the code. The moves of
   sections 2.2 and 3 are listed under a heading of their own, each with an undo.
-- **Apply a move.** For a cycle that local repair could not break without raising the
-  number of findings elsewhere, the panel offers the best move it found and what that
-  move would make worse. Applying it, or undoing an earlier move, writes a new version
-  of the generated map without calling Claude.
+- **Apply a move.** For a repairable cycle that local repair could not break, because
+  every candidate raised the number of findings or the fit guard held a type in place,
+  the panel offers the best candidate it found and what that candidate would make
+  worse. Applying it, or undoing an earlier move, writes a new version of the
+  generated map without calling Claude.
+- **Merge.** For an entangled cycle, the panel offers to merge its members into one
+  node: a leaf when they are all leaves, and a container otherwise. Merging writes a
+  new version without calling Claude.
 - **Tell Claude.** A text box beside each finding, and one for the whole map, takes a
   note such as "`PaymentGateway` belongs in Billing; the cycle with Orders is real".
   **Revise** sends one more round with the notes in the prompt, above the findings,
@@ -172,8 +230,8 @@ it reruns the review without compilation, as review-workflow.md section 4.4 says
   kind, text, nodes, type pairs, whether the cycle is in the code, and whether it is
   accepted. They also carry the moves made locally.
 - `POST /api/reviews/{id}/map/stop` cancels a generating job and keeps the best map.
-- `POST /api/reviews/{id}/map/edits` takes moves and undos, applies them to the newest
-  generated map, checks it, and writes a new version.
+- `POST /api/reviews/{id}/map/edits` takes moves, merges and undos, applies them to
+  the newest generated map, checks it, and writes a new version.
 - `POST /api/reviews/{id}/map/revise` takes the notes and the accepted cycles and runs
   one round of Claude on the newest generated map.
 
@@ -188,11 +246,18 @@ to, and a new version carries them forward while the same cycle exists in it.
   a small one.
 - A proposal that splits a small knot comes out of the knot pass with the knot in the
   leaf that held most of it, and the fake Claude is asked once.
-- A proposal with one misplaced type behind a cycle is repaired locally, and the fake
-  Claude is asked once.
+- A proposal with one misplaced type behind a two-member cycle is repaired locally,
+  and the fake Claude is asked once.
+- A cycle whose cut set has more than 3 edges is entangled, is not repaired, and goes
+  to Claude.
+- A candidate that would move a type into a leaf it has less affinity with than its
+  own is not tried, and the cycle goes to Claude.
+- When a round's only remaining findings are entangled cycles that the round before
+  also reported, the rounds stop.
 - A cycle caused by a large knot is reported as in the code, is not in the revision
   prompt, and does not stop the loop as a stall.
-- The search keeps to its budget and never moves an attributed type.
+- The search keeps to its budget, never moves an attributed type, and runs the
+  checker at most four times per cycle.
 - Stopping during a round keeps the best map so far; applying and undoing moves, and
   accepting a cycle, write new versions with the expected findings.
 
@@ -204,6 +269,32 @@ in the code, the moves made locally, and the time spent in Claude and in the sea
 The results are kept in a table in this section, as review-workflow.md section 7 does
 for models. The first run also tests the premise of this document: how many of the
 cycles that cost a round came from knots that the knot pass would have kept together.
+
+### 7.1 The first measurement
+
+Phase 1 was measured on one large solution of about 3,300 types, listed by namespace,
+with two generations before it and two after. The solution is not named here.
+
+- Every generation ran all three rounds and three Claude requests, in about ten
+  minutes, and ended with 7 to 11 findings, almost all of them cycles.
+- The knot pass moved 4 and 9 types, and no cycle was in the code. The first round's
+  cycles did not fall: 13 and 15 before, 16 and 13 after.
+- So no remaining cycle had a knot beneath it. Each came from one-way references that
+  close a loop between leaves.
+- Of the 14 cycles left in the two maps, 12 had a weakest edge of 1 to 3 references,
+  and none was clearly a layering violation. A hand move broke a two-member cycle and
+  failed on larger ones.
+- The cycles were printed as paths whose steps were often not edges, which issue #10
+  fixed.
+
+### 7.2 The next measurement
+
+It runs two generations with the build that fixes issue #10 and logs checker times,
+on the same solution. It reports what section 7 lists, and also:
+
+- the size of each remaining cycle's cut set, which sets the limits of section 3.1;
+- the median and longest run of the checker, which set the budget of section 3.5;
+- whether accurate cut sets alone let Claude break more cycles per round.
 
 ## 8. Changes to other documents
 
@@ -234,20 +325,28 @@ Each question below ends with a recommendation, which stands until it is decided
   asks Claude for. Revisit this if the measurements of section 7 show cycles among
   containers that type moves leave behind.
 - **Whether the search's budget should scale with the number of types.** Keep the
-  fixed limits of section 3.1, since a time limit already shrinks the number of
-  candidates as each check grows slower. In phase 2, time one `Checker.Run` on the
-  largest sample first. If it takes more than about half a second, the search would
-  try too few candidates. In that case, score candidates by recomputing only the leaf
-  edges that the moved types touch, and find cycles with the checker's own level
-  routine, not a second one. Then run `Checker.Run` once on the result, and add a
-  test that the two agree.
+  fixed limit of section 3.5, since a time limit already shrinks the number of
+  candidates as each check grows slower. Map generation now logs each check's time.
+  If one check on a large solution takes more than a few seconds, four checks per
+  cycle leave the search too few cycles. In that case, score candidates by
+  recomputing only the leaf edges that the moved types touch, and find cycles with
+  the checker's own level routine, not a second one. Then run `Checker.Run` once on
+  the result, and add a test that the two agree.
+- **The limits of a repairable cycle.** At most 3 cut edges and 6 moved types, from
+  one solution. Recommendation: keep them until the measurement of section 7.2 gives
+  the cut set sizes.
+- **Whether the fit guard is too strict.** It holds a type in place when it touches
+  its new leaf only through the cut edge, which is also when a move is most likely
+  to be right for a misplaced helper. Recommendation: keep it, and count in the next
+  measurement how often it holds a type in place.
 
 ## 10. Phases
 
 1. **Knots.** Find knots, list them in the proposal prompt, run the knot pass, mark
    cycles in the code in the log, and leave them out of the revision prompt and the
    stall. Measure.
-2. **Local repair.** The search of section 3, its budget, and the revised prompt.
-   Measure.
+2. **Local repair.** Measure first, as section 7.2 says, and set the values of
+   section 3 from it. Then build repairable and entangled cycles, the candidates and
+   the fit guard, the stop rule for entangled cycles, and the budget. Measure again.
 3. **The reviewer's part.** The findings panel, stop and keep, applying and undoing
-   moves, notes for **Revise**, and accepted cycles.
+   moves, merging an entangled cycle, notes for **Revise**, and accepted cycles.
