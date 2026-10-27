@@ -169,8 +169,8 @@ it:
    moves the stray types of each set of types that reference each other in a loop
    into one leaf, and the proposal prompt lists those sets. A cycle that comes from
    such a set too large for one leaf is marked as in the code. Each finding of every
-   round, each type the knot pass moves, and each reason a proposal cannot be used,
-   is written to the log.
+   round, each type the knot pass moves, how long each run of the checker takes, and
+   each reason a proposal cannot be used, are written to the log.
 4. If anything was found, send the findings other than cycles in the code back with
    the best map so far and ask for edits to it: nodes to remove, nodes to add or
    change, view groups to add, and types to move to a leaf by exact name. The request lists only the units, or for a

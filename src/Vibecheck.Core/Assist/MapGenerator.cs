@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -54,8 +55,8 @@ public static class MapGenerator
     /// proposal, and is told only the findings that a map can fix. A revision that fails, or takes longer than
     /// <see cref="RequestTimeout"/>, ends the rounds and keeps the best proposal so far. While Claude works, the progress
     /// says every few seconds how long the request has run and how much Claude has thought and written. The log
-    /// receives each finding of every round, each type moved to keep a knot in one leaf, and each reason a proposal
-    /// could not be used as a map.
+    /// receives each finding of every round, each type moved to keep a knot in one leaf, how long each run of the
+    /// checker took, and each reason a proposal could not be used as a map.
     /// </summary>
     /// <exception cref="ClaudeException">The proposal failed, or no proposal could be used as a map.</exception>
     public static Task<GeneratedMap> GenerateAsync(ArchitectureMap skeleton, AnalysisResult analysis, IClaude claude, IProgress<string>? progress = null, CancellationToken ct = default, string? model = null, Action<string>? log = null) =>
@@ -95,7 +96,8 @@ public static class MapGenerator
         var previous = int.MaxValue;
         for (var round = 1; ; round++)
         {
-            var (map, text, found, gathered) = Check(candidate, problems, analysis, !byNamespace, knots);
+            var (map, text, found, gathered, checks) = Check(candidate, problems, analysis, !byNamespace, knots);
+            if (checks.Count > 0) log?.Invoke($"round {round} ran the checker {checks.Count} time(s): {string.Join(", ", checks.Select(c => $"{c.TotalMilliseconds:F0} ms"))}");
             findings = found.Select(f => f.Text).ToList();
             var fixable = found.Count(f => !f.InCode);
             if (gathered.Count > 0)
@@ -199,7 +201,7 @@ public static class MapGenerator
     internal static (ArchitectureMap? Map, string Text, IReadOnlyList<string> Findings) Evaluate(ArchitectureMap skeleton, JsonElement answer, AnalysisResult analysis)
     {
         var problems = new List<string>();
-        var (map, text, findings, _) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true, knots: []);
+        var (map, text, findings, _, _) = Check(Build(skeleton, answer, problems), problems, analysis, largeLeaves: true, knots: []);
         return (map, text, findings.Select(f => f.Text).ToList());
     }
 
@@ -245,26 +247,30 @@ public static class MapGenerator
     /// Checks a map, after moving the stray types of each small knot into one leaf. Returns a null map when it cannot be
     /// used at all, with the problems and the reasons as findings. Otherwise returns the map as the reader reads it back,
     /// its canonical text, the problems and what the checker reports about it, and the moves that kept knots whole.
+    /// Also returns how long each run of <see cref="Checker.Run"/> took, since a map is checked again after the knot pass.
     /// </summary>
     /// <param name="largeLeaves">A value indicating whether leaves too large for a view to regroup are reported.</param>
     /// <param name="knots">The solution's knots.</param>
-    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings, IReadOnlyList<(string Type, string Leaf)> Gathered) Check(
+    private static (ArchitectureMap? Map, string Text, IReadOnlyList<Finding> Findings, IReadOnlyList<(string Type, string Leaf)> Gathered, IReadOnlyList<TimeSpan> Checks) Check(
         ArchitectureMap map, List<string> problems, AnalysisResult analysis, bool largeLeaves, IReadOnlyList<Knot> knots)
     {
         IEnumerable<Finding> Plain(IEnumerable<string> texts) => texts.Select(t => new Finding(t, []));
+        var checks = new List<TimeSpan>();
         (ArchitectureMap? Parsed, string Text, Facts? Facts, List<Finding> Failures) Run(ArchitectureMap map)
         {
             var text = MapWriter.Write(map);
             var errors = new List<string>();
             var parsed = MapReader.Read(text, errors);
             if (parsed is null || errors.Count > 0) return (null, text, null, [.. Plain(problems), .. Plain(errors)]);
+            var watch = Stopwatch.StartNew();
             var facts = Checker.Run(parsed, analysis, new CheckOptions { MapText = text });
+            checks.Add(watch.Elapsed);
             if (!facts.Passed) return (null, text, null, [.. Plain(problems), .. Plain(facts.Violations.Select(v => v.Message))]);
             return (parsed, text, facts, []);
         }
 
         var (parsed, text, facts, failures) = Run(map);
-        if (facts is null) return (null, text, failures, []);
+        if (facts is null) return (null, text, failures, [], checks);
         var gathered = Knots.Gathering(facts, knots);
         if (gathered.Count > 0)
         {
@@ -274,7 +280,7 @@ public static class MapGenerator
             if (again.Facts is not null) (parsed, text, facts) = (again.Parsed, again.Text, again.Facts);
             else gathered = [];
         }
-        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves, Knots.InCode(facts, knots))], gathered);
+        return (parsed, text, [.. Plain(problems), .. Findings(facts, largeLeaves, Knots.InCode(facts, knots))], gathered, checks);
     }
 
     /// <summary>

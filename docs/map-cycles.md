@@ -121,7 +121,11 @@ a new leaf, a split, or a merge.
 ### 3.1 Budget
 
 Each candidate costs one run of the checker. The search stops after 40 moves or 30
-seconds, whichever comes first, and keeps every move it made. Both limits are
+seconds, whichever comes first, and keeps every move it made. Map generation logs how
+long each run of the checker takes, as "round 1 ran the checker 2 time(s): 812 ms,
+790 ms", so that the limits can be set from real runs. On a large solution, a
+`vibecheck check` from the command line took about a minute, but that includes
+restoring and analyzing the solution, which generation has already done. Both limits are
 constants beside `MaxRounds`, set from the measurements of section 7.
 
 ### 3.2 What the moves cost

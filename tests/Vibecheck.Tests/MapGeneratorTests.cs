@@ -132,6 +132,7 @@ public class MapGeneratorTests
         var progress = new List<string>();
 
         await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, new Progress(progress), log: log.Add);
+        log = log.Where(l => l.StartsWith("round 1 ", StringComparison.Ordinal)).ToList();
 
         Assert.NotEmpty(log);
         Assert.All(log, l => Assert.StartsWith("round 1 was rejected: ", l, StringComparison.Ordinal));
@@ -149,9 +150,21 @@ public class MapGeneratorTests
 
         await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), claude, log: log.Add);
 
-        var finding = Assert.Single(log);
+        var finding = Assert.Single(log, l => l.Contains(" finding", StringComparison.Ordinal));
         Assert.StartsWith("round 1 finding: 2 type(s) are unsorted", finding, StringComparison.Ordinal);
         Assert.Contains("Shared.Result", finding, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LogsHowLongEachRunOfTheCheckerTook()
+    {
+        var log = new List<string>();
+
+        await MapGenerator.GenerateAsync(Skeleton(), SmallKnot(), new FakeClaude(MissingShared, AddShared), log: log.Add);
+
+        // Round 1 checks the proposal, moves the knot's stray type and checks again; round 2 has nothing to move.
+        Assert.Matches(@"^round 1 ran the checker 2 time\(s\): \d+ ms, \d+ ms$", Assert.Single(log, l => l.StartsWith("round 1 ran", StringComparison.Ordinal)));
+        Assert.Matches(@"^round 2 ran the checker 1 time\(s\): \d+ ms$", Assert.Single(log, l => l.StartsWith("round 2 ran", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -331,7 +344,7 @@ public class MapGeneratorTests
         Assert.Contains("Bind the types of each of these sets to one leaf.\n\n- `A.X.Thing`, `A.Y.Other`\n", claude.Requests[0].Prompt, StringComparison.Ordinal);
         Assert.Equal((1, 0), (generated.Round, generated.Findings.Count));
         Assert.Equal(["A.X.**", TestData.Other], generated.Map.Nodes["app.x"].Bind);
-        Assert.Equal(["round 1 moved A.Y.Other to app.x, to keep a knot in one leaf"], log);
+        Assert.Equal(["round 1 moved A.Y.Other to app.x, to keep a knot in one leaf"], log.Where(l => !l.Contains(" ran the checker ", StringComparison.Ordinal)));
     }
 
     [Fact]
