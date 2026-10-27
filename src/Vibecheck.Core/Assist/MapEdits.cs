@@ -11,8 +11,9 @@ namespace Vibecheck.Assist;
 public static class MapEdits
 {
     /// <summary>
-    /// Returns a copy of a map with an answer's edits applied, in this order: removals, nodes, groups, then moves. An edit
-    /// that cannot be applied is skipped, and the reason is added to the problems.
+    /// Returns a copy of a map with an answer's edits applied, in this order: removals, nodes, groups, then moves. A move
+    /// whose type names a leaf and whose leaf names no node is applied with the two swapped. An edit that cannot be
+    /// applied is skipped, and the reason is added to the problems.
     /// </summary>
     /// <param name="map">The map to edit, which is not changed.</param>
     /// <param name="answer">The answer, in the shape of <c>map-edits.schema.json</c>.</param>
@@ -60,6 +61,9 @@ public static class MapEdits
         foreach (var m in Items(answer, "moves"))
         {
             var (type, leafId) = (m.GetProperty("type").GetString()!, m.GetProperty("leaf").GetString()!);
+            // A move whose type names a leaf and whose leaf names no node has its two fields swapped, so it is applied
+            // the other way round rather than lost. See issue #11.
+            if (copy.Nodes.TryGetValue(type, out var named) && named.IsLeaf && !copy.Nodes.ContainsKey(leafId)) (type, leafId) = (leafId, type);
             if (!Move(copy, type, leafId)) problems.Add($"the edit moves {type} to \"{leafId}\", which is not a leaf");
         }
 

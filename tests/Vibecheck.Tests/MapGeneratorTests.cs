@@ -239,6 +239,21 @@ public class MapGeneratorTests
     }
 
     [Fact]
+    public async Task AppliesAMoveWhoseTypeAndLeafAreSwapped()
+    {
+        // Issue #11: the revision names the leaf as the type and the type as the leaf.
+        var proposal = Complete.Replace("\"bind\": [\"Shared.**\"]", "\"bind\": [\"Shared.Result\"]", StringComparison.Ordinal);
+        var swapped = """{ "remove": [], "nodes": [], "groups": [], "moves": [ { "type": "shared", "leaf": "Shared.Error" } ] }""";
+        var log = new List<string>();
+
+        var generated = await MapGenerator.GenerateAsync(Skeleton(), TestData.Analysis(), new FakeClaude(proposal, swapped), log: log.Add);
+
+        Assert.Equal((2, 0), (generated.Round, generated.Findings.Count));
+        Assert.Equal(["Shared.Result", TestData.Error], generated.Map.Nodes["shared"].Bind);
+        Assert.DoesNotContain(log, l => l.Contains("which is not a leaf", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DropsAGroupThatEditsLeaveEmpty()
     {
         var map = MapGenerator.Evaluate(Skeleton(), JsonDocument.Parse(Complete).RootElement, TestData.Analysis()).Map!;
