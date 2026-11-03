@@ -221,7 +221,7 @@ public static class ExplainerPlanner
             var node = map.Nodes.GetValueOrDefault(id);
             var what = c is null ? "" : $"; {c.Added} files added, {c.Removed} removed and {c.Modified} modified";
             var purpose = node?.Purpose is { } p ? $", {p.TrimEnd('.')}" : "";
-            return Add(new CatalogEntry("block:" + id, new ExplainerTarget("block", id), $"{NarrativeWriter.NameOf(map, id)}{purpose}{what}") { Inside = [id] });
+            return Add(new CatalogEntry("block:" + id, new ExplainerTarget("block", id), $"\"{NarrativeWriter.NameOf(map, id)}\"{purpose}{what}") { Inside = [id] });
         }).ToList();
         var changedBlocks = blockIds.ToHashSet(StringComparer.Ordinal);
 
@@ -237,7 +237,7 @@ public static class ExplainerPlanner
                 location = l.Id;
                 var children = DrawnEdges.Children(cs, l.Id);
                 var where = l.Id == Identifiers.Root ? "the top level" : $"the inside of {NarrativeWriter.NameOf(map, l.Id)}";
-                levels.Add(Add(new CatalogEntry("level:" + l.Id, new ExplainerTarget("level", l.Id), $"{where}; its blocks: {BlockList(children, changedBlocks.Contains)}")
+                levels.Add(Add(new CatalogEntry("level:" + l.Id, new ExplainerTarget("level", l.Id), $"{where}; its blocks: {BlockList(map, children, changedBlocks.Contains)}")
                 {
                     Blocks = children, Inside = InsideOf(l.Id) is { } i ? [i] : [],
                 }));
@@ -387,7 +387,7 @@ public static class ExplainerPlanner
         var groups = view.Groups.Keys.Select(g => DrawnEdges.GroupKey(id, g)).ToList();
         var holds = view.Groups.ToDictionary(g => DrawnEdges.GroupKey(id, g.Key), g => g.Value.Leaves.Any(changedBlocks.Contains), StringComparer.Ordinal);
         var of = view.Level == Identifiers.Root ? "the top level" : NarrativeWriter.NameOf(cs.Map, view.Level);
-        return new CatalogEntry("level:view:" + id, new ExplainerTarget("level", "view:" + id), $"the view \"{view.Name}\" of {of}; its groups: {BlockList(groups, g => holds[g])}")
+        return new CatalogEntry("level:view:" + id, new ExplainerTarget("level", "view:" + id), $"the view \"{view.Name}\" of {of}; its groups: {BlockList(cs.Map, groups, g => holds[g])}")
         {
             Blocks = groups, Inside = LocationInside(cs.Map, "view:" + id),
         };
@@ -413,6 +413,14 @@ public static class ExplainerPlanner
         return level is null || level == Identifiers.Root ? [] : [level];
     }
 
-    private static string BlockList(IEnumerable<string> ids, Func<string, bool> changed) =>
-        string.Join(", ", ids.Select(id => $"`{id}`" + (changed(id) ? " (changed)" : "")));
+    /// <summary>
+    /// Returns the blocks of a level or view as the catalog lists them, each by its identifier with its name and whether
+    /// it changed in parentheses. The name is what the diagram's header shows, and what a slide's text calls the block.
+    /// </summary>
+    private static string BlockList(ArchitectureMap map, IEnumerable<string> ids, Func<string, bool> changed) =>
+        string.Join(", ", ids.Select(id =>
+        {
+            var notes = new[] { NarrativeWriter.NameOf(map, id) is var name && name != id ? name : null, changed(id) ? "changed" : null }.OfType<string>().ToList();
+            return $"`{id}`" + (notes.Count > 0 ? $" ({string.Join(", ", notes)})" : "");
+        }));
 }

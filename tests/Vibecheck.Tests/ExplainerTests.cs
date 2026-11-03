@@ -385,6 +385,17 @@ public class ExplainerTests
     }
 
     [Fact]
+    public void GivesEachBlockItsNameBesideItsIdentifierAndAsksForNamesInTheText()
+    {
+        // The scenario's blocks have the identifiers a, b and c and the names A, B and C, which the diagram's headers show.
+        var prompt = ExplainerWriter.Prompt(ExplainerPlanner.Plan(Scenario()), Context);
+
+        Assert.Contains("its blocks: `a` (A, changed), `b` (B, changed), `c` (C, changed)", prompt, StringComparison.Ordinal);
+        Assert.Contains("- `block:a`: \"A\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("call a block, group or external by its name", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AsksForEveryBlockTheTextNamesAndPointsAnUncoveredBlockAtTheLevelSlideThatShowsIt()
     {
         var catalog = ExplainerPlanner.Plan(Scenario());
